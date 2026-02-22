@@ -1,9 +1,10 @@
-package main
+package config
 
 import (
 	"errors"
 	"os"
-
+	
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/BurntSushi/toml"
 )
 
@@ -22,9 +23,9 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.SocketPath, _ = ExpandHomeDirectory(cfg.SocketPath)
+	cfg.SocketPath, _ = utils.ExpandHomeDirectory(cfg.SocketPath)
 	for i, path := range(cfg.KeyPaths) {
-		cfg.KeyPaths[i], _ = ExpandHomeDirectory(path)
+		cfg.KeyPaths[i], _ = utils.ExpandHomeDirectory(path)
 	}
 
 	if cfg.KeyPaths == nil {
