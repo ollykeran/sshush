@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Get tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          LDFLAGS="-X github.com/ollykeran/sshush/internal/version.Version=${{ steps.tag.outputs.version }}"
+          go build -ldflags "$LDFLAGS" -o sshush .
+          go build -ldflags "$LDFLAGS" -o sshushd ./cmd/sshushd
+
+      - name: Package
+        run: |
+          tar czf sshush-${{ steps.tag.outputs.version }}-linux-amd64.tar.gz sshush sshushd
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: sshush-${{ steps.tag.outputs.version }}-linux-amd64.tar.gz

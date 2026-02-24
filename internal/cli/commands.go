@@ -11,6 +11,7 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newListCommand())
 	root.AddCommand(newAddCommand())
 	root.AddCommand(newRemoveCommand())
+	root.AddCommand(newVersionCommand())
 	// root.AddCommand(newLockCommand())
 	// root.AddCommand(newUnlockCommand())
 }

@@ -1,12 +1,13 @@
 .PHONY: build test run clean build-sshushd
 .BINARY=sshush
 .BINARYD=sshushd
+LDFLAGS=-X github.com/ollykeran/sshush/internal/version.Version=dev
 
 build: build-sshushd
-	go build -o $(.BINARY) .
+	go build -ldflags '$(LDFLAGS)' -o $(.BINARY) .
 
 build-sshushd:
-	go build -o $(.BINARYD) ./cmd/sshushd
+	go build -ldflags '$(LDFLAGS)' -o $(.BINARYD) ./cmd/sshushd
 
 test:
 	go test ./... -v
