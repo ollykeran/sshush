@@ -1,14 +1,23 @@
-.PHONY: build test run clean
+.PHONY: build test run clean build-sshushd
 .BINARY=sshush
+.BINARYD=sshushd
 
-build:
-	go build -o $(.BINARY) main.go
+build: build-sshushd
+	go build -o $(.BINARY) .
 
-test: 
-	go test ./...
+build-sshushd:
+	go build -o $(.BINARYD) ./cmd/sshushd
+
+test:
+	go test ./... -v
 
 run:
-	go run main.go
+	go run .
 
-clean: 
-	rm -f $(.BINARY)
+clean:
+	rm -f $(.BINARY) $(.BINARYD)
+
+kill:
+	-pkill -f $(.BINARY)
+	-pkill -f $(.BINARYD)
+	-ps -w | grep $(.BINARY) | grep -v grep

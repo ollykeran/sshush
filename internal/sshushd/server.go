@@ -2,7 +2,9 @@ package sshushd
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"io"
+	"net"
 
 	"github.com/gliderlabs/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -14,7 +16,19 @@ type Server struct {
 	HostKeyPath string
 }
 
+func checkAlreadyRunning(socketPath string) bool {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 func (s *Server) ListenAndServe() error {
+	if checkAlreadyRunning(s.Addr) {
+		return fmt.Errorf("agent already running at %s", s.Addr)
+	}
 	opts := []ssh.Option{
 		ssh.PublicKeyAuth(s.publicKeyAuth),
 	}

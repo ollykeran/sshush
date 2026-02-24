@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,16 @@ func ResolveConfigPath(cmd *cobra.Command) (string, error) {
 	if _, err := os.Stat("./config.toml"); err == nil {
 		return "./config.toml", nil
 	}
-	return "", errors.New("config file not found: create " + defaultConfigPath + " or use --config")
+	return "", errors.New(style.Err("config file not found: ") + style.Pink("create "+defaultConfigPath+" or use --config"))
+}
+
+// PidFilePath returns the standard location for the sshushd pidfile.
+// Uses $XDG_RUNTIME_DIR/sshush.pid if available, otherwise ~/.config/sshush/sshush.pid.
+func PidFilePath() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir + "/sshush.pid"
+	}
+	return ExpandHomeDirectory("~/.config/sshush/sshush.pid")
 }
 
 func ExpandHomeDirectory(path string) string {
