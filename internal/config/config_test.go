@@ -10,8 +10,8 @@ import (
 
 func TestLoad(t *testing.T) {
 	cases := []struct {
-		name          string
-		wantKeyPaths  []string
+		name           string
+		wantKeyPaths   []string
 		wantSocketPath string
 	}{
 		{"default paths", []string{"/tmp/.ssh/id_rsa", "/tmp/.ssh/id_ed25519"}, "/tmp/.ssh/agent.sock"},
@@ -38,7 +38,7 @@ func TestLoad(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cfg, err := Load(tmpPath)
+			cfg, err := LoadConfig(tmpPath)
 			if err != nil {
 				t.Fatal(err)
 			}
