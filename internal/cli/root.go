@@ -26,7 +26,7 @@ type LoadOverrides struct {
 
 // LoadMergedConfig loads config from path and applies overrides. If the config file
 // is missing but the user supplied socket or key overrides, an empty config is used
-// so the command can still run (e.g. add with --key, using SSH_AUTH_SOCK for socket).
+// so the command can still run (e.g. using SSH_AUTH_SOCK for socket).
 func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config, error) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -47,8 +47,7 @@ func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config
 	return cfg, nil
 }
 
-// resolveSocketPath returns the agent socket path from config or SSH_AUTH_SOCK.
-// Use for add, list, remove when connecting to a running agent.
+// getSocketPath returns the agent socket path from config or SSH_AUTH_SOCK.
 func getSocketPath() (string, error) {
 	if env.Config != nil && env.Config.SocketPath != "" {
 		return env.Config.SocketPath, nil
@@ -56,44 +55,45 @@ func getSocketPath() (string, error) {
 	if p := os.Getenv("SSH_AUTH_SOCK"); p != "" {
 		return p, nil
 	}
-	return "", errors.New(style.Err("socket path required: ") + style.Pink("set SSH_AUTH_SOCK or use --socket or config"))
+	return "", style.NewOutput().
+		Error("socket path required").
+		Info("set SSH_AUTH_SOCK or use --socket or config").
+		AsError()
 }
 
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:          "sshush",
 		Short:        "SSH agent thats pretty",
-		RunE:         runServe,
-		SilenceUsage: true, // dont show on runtime errors
+		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-
-			// load config from file
 			configPath, _ := utils.ResolveConfigPath(cmd)
 			cfg, _ := config.LoadConfig(configPath)
 
-			// override with command line flags
 			if cmd.Flags().Changed("socket") {
 				cfg.SocketPath, _ = cmd.Flags().GetString("socket")
 			}
-			if cmd.Flags().Changed("key") {
-				cfg.KeyPaths, _ = cmd.Flags().GetStringArray("key")
-			}
 
-			// set for global use
 			env.Config = &cfg
 			return nil
 		},
 	}
-
-	// root.PersistentFlags().String("config", "", "config file path (default: $SSHUSH_CONFIG or ~/.config/sshush/config.toml)")
-	// root.PersistentFlags().StringVar(&socketPath, "socket", "", "override socket path from config")
-	// root.PersistentFlags().StringArrayVar(&keyPaths, "key", nil, "key file path to add (can be repeated)")
-
 	return root
 }
 
 func Execute() error {
 	root := NewRootCommand()
+	root.SilenceErrors = true // we handle all error display ourselves
 	registerCommands(root)
-	return root.Execute()
+	if err := root.Execute(); err != nil {
+		var se *style.StyledError
+		if errors.As(err, &se) {
+			se.PrintErr()
+		} else {
+			style.NewOutput().Error(err.Error()).PrintErr()
+		}
+		return err
+	}
+	return nil
 }

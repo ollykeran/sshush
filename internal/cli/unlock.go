@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"errors"
-
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
 )
@@ -16,5 +14,5 @@ func newUnlockCommand() *cobra.Command {
 }
 
 func runUnlock(cmd *cobra.Command, _ []string) error {
-	return errors.New(style.Err("unlock: not implemented"))
+	return style.NewOutput().Error("unlock: not implemented").AsError()
 }

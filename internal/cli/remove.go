@@ -1,36 +1,29 @@
 package cli
 
 import (
-	"errors"
+	"fmt"
 	"net"
-	"strings"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newRemoveCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "remove [fingerprint|comment...]",
-		Short: "Remove key(s) from the running agent by fingerprint or comment",
+	return &cobra.Command{
+		Use:   "remove [key-path|comment...]",
+		Short: "Remove key(s) from the running agent by file path or comment",
 		RunE:  runRemove,
 	}
-	cmd.Flags().StringSliceP("key", "k", nil, "Fingerprint(s) or comment(s) to remove (can be repeated)")
-	return cmd
 }
 
 func runRemove(cmd *cobra.Command, args []string) error {
-	cfg := env.Config
-	if cfg == nil {
-		return errors.New(style.Err("config not loaded"))
+	if env.Config == nil {
+		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	idents := args
-	if keys, _ := cmd.Flags().GetStringSlice("key"); len(keys) > 0 {
-		idents = keys
-	}
-	if len(idents) == 0 {
+	if len(args) == 0 {
 		cmd.Usage()
 		return nil
 	}
@@ -43,24 +36,37 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer conn.Close()
-	client := agent.NewClient(conn)
+	client := sshagent.NewClient(conn)
 	before, err := client.List()
 	if err != nil {
 		return err
 	}
-	want := make(map[string]bool)
-	for _, a := range idents {
-		want[strings.TrimSpace(a)] = true
+	wantFP := make(map[string]bool)
+	for _, arg := range args {
+		if pubKey, _, _, err := agent.ParseKeyFromPath(arg); err == nil {
+			wantFP[ssh.FingerprintSHA256(pubKey)] = true
+			continue
+		}
+		matched := false
+		for _, key := range before {
+			fp := ssh.FingerprintSHA256(key)
+			if key.Comment == arg || fp == arg {
+				wantFP[fp] = true
+				matched = true
+			}
+		}
+		if !matched {
+			return style.NewOutput().Error(fmt.Sprintf("no loaded key matches %q", arg)).AsError()
+		}
 	}
 	for _, key := range before {
-		fp := ssh.FingerprintSHA256(key)
-		if want[fp] || want[key.Comment] {
+		if wantFP[ssh.FingerprintSHA256(key)] {
 			if err := client.Remove(key); err != nil {
-				return err
+				return style.NewOutput().Error(fmt.Sprintf("remove %s: %v", key.Comment, err)).AsError()
 			}
 		}
 	}
 	after, _ := client.List()
-	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after), false)
+	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }

@@ -1,4 +1,7 @@
 sshush
 sshushd
 sshush.pid
-TODO.md
+*.md
+id_*
+*.toml
+.bash*

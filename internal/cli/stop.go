@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -27,7 +26,7 @@ func runStop(cmd *cobra.Command, _ []string) error {
 	if err := stopDaemon(pidFilePath); err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stderr, style.Green("sshushd stopped"))
+	style.NewOutput().Success("sshushd stopped").Print()
 	return nil
 }
 
@@ -36,20 +35,23 @@ func stopDaemon(pidFilePath string) error {
 	data, err := os.ReadFile(pidFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errors.New(style.Err("no pidfile at " + pidFilePath + " (daemon may not be running)"))
+			return style.NewOutput().
+				Error("no pidfile at " + pidFilePath).
+				Info("daemon may not be running").
+				AsError()
 		}
 		return err
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return fmt.Errorf("%s: %w", style.Err("invalid pidfile"), err)
+		return style.NewOutput().Error(fmt.Sprintf("invalid pidfile: %v", err)).AsError()
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("%s: %w", style.Err(fmt.Sprintf("find process %d", pid)), err)
+		return style.NewOutput().Error(fmt.Sprintf("find process %d: %v", pid, err)).AsError()
 	}
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("%s: %w", style.Err("send SIGTERM"), err)
+		return style.NewOutput().Error(fmt.Sprintf("send SIGTERM: %v", err)).AsError()
 	}
 	for i := 0; i < 50; i++ {
 		if process.Signal(syscall.Signal(0)) != nil {

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"net"
 
 	"github.com/ollykeran/sshush/internal/style"
@@ -18,9 +17,8 @@ func newListCommand() *cobra.Command {
 }
 
 func runList(cmd *cobra.Command, _ []string) error {
-	cfg := env.Config
-	if cfg == nil {
-		return errors.New(style.Err("config not loaded"))
+	if env.Config == nil {
+		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {

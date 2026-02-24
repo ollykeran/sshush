@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"errors"
 	"os"
 	"strings"
 
@@ -28,7 +27,10 @@ func ResolveConfigPath(cmd *cobra.Command) (string, error) {
 	if _, err := os.Stat("./config.toml"); err == nil {
 		return "./config.toml", nil
 	}
-	return "", errors.New(style.Err("config file not found: ") + style.Pink("create "+defaultConfigPath+" or use --config"))
+	return "", style.NewOutput().
+		Error("config file not found").
+		Info("create " + defaultConfigPath + " or use --config").
+		AsError()
 }
 
 // PidFilePath returns the standard location for the sshushd pidfile.

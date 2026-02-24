@@ -59,9 +59,9 @@ func runReload(cmd *cobra.Command, _ []string) error {
 		needsRestart = needsRestart || newCfg.SocketPath != conn.RemoteAddr().String()
 
 		if needsRestart {
-			printDiff(client, newCfg, true)
+			buildDiff(client, newCfg, true).Print()
 		} else {
-			printDiff(client, newCfg, false)
+			buildDiff(client, newCfg, false).Print()
 			applyDiff(client, newCfg)
 			return nil
 		}
@@ -70,35 +70,44 @@ func runReload(cmd *cobra.Command, _ []string) error {
 	// Socket changed or agent unreachable: stop the old daemon and start a new one.
 	if needsRestart {
 		_ = stopDaemon(pidFilePath) // best-effort; may already be gone
-		fmt.Fprintln(os.Stderr, style.Green("restarting sshushd with new config..."))
+		style.NewOutput().Info("restarting sshushd with new config...").Print()
 		return runStartDaemon(cmd)
 	}
 
 	return nil
 }
 
-func printDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool) {
+// buildDiff returns an Output containing the key diff, any parse warnings, and an
+// optional socket-changed notice. The returned Output is ready to Print().
+func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool) *style.Output {
 	liveKeys, err := client.List()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, style.Err(fmt.Sprintf("list agent keys: %v", err)))
-		return
+		return style.NewOutput().Error(fmt.Sprintf("list agent keys: %v", err))
 	}
 	before := agentKeysToEntries(liveKeys)
 
 	var after []diffEntry
+	var skipWarnings []string
 	for _, path := range newCfg.KeyPaths {
 		pubKey, comment, _, err := agent.ParseKeyFromPath(path)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, style.Err(fmt.Sprintf("  skip %s: %v", path, err)))
+			skipWarnings = append(skipWarnings, fmt.Sprintf("skip %s: %v", path, err))
 			continue
 		}
-		after = append(after, diffEntry{fp: ssh.FingerprintSHA256(pubKey), comment: comment})
+		after = append(after, diffEntry{fp: ssh.FingerprintSHA256(pubKey), comment: comment, keyType: pubKey.Type()})
 	}
 
-	printKeysDiff(before, after, true)
-	if socketChanged {
-		fmt.Println(style.Err("socket_path changed"))
+	// printKeysDiff returns a pointer - append further lines directly onto it.
+	out := style.NewOutput().Add(style.Green("Reloding keys from config file %s"))
+	out.Spacer()
+	out.Add(printKeysDiff(before, after).String())
+	for _, w := range skipWarnings {
+		out.Add(w)
 	}
+	if socketChanged {
+		out.Add("socket_path changed - restart required")
+	}
+	return out
 }
 
 func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
@@ -121,6 +130,8 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 		configByFP[fp] = keyInfo{fingerprint: fp, comment: comment, pubKey: pubKey, privKey: nil}
 	}
 
+	applyErrs := style.NewOutput()
+
 	// Re-parse to get private keys for adds.
 	for _, path := range newCfg.KeyPaths {
 		pubKey, comment, privKey, err := agent.ParseKeyFromPath(path)
@@ -130,7 +141,7 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 		fp := ssh.FingerprintSHA256(pubKey)
 		if _, exists := liveByFP[fp]; !exists {
 			if err := client.Add(sshagent.AddedKey{PrivateKey: privKey, Comment: comment}); err != nil {
-				fmt.Fprintln(os.Stderr, style.Err(fmt.Sprintf("  add %s: %v", comment, err)))
+				applyErrs.Error(fmt.Sprintf("add %s: %v", comment, err))
 			}
 		}
 	}
@@ -141,8 +152,12 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 				continue
 			}
 			if err := client.Remove(pubKey); err != nil {
-				fmt.Fprintln(os.Stderr, style.Err(fmt.Sprintf("  remove %s: %v", k.Comment, err)))
+				applyErrs.Error(fmt.Sprintf("remove %s: %v", k.Comment, err))
 			}
 		}
+	}
+
+	if applyErrs.Len() > 0 {
+		applyErrs.Print()
 	}
 }

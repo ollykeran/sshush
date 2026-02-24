@@ -35,4 +35,19 @@ func TestListKeysTo(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte("SHA256:")) {
 		t.Errorf("output should contain SHA256 fingerprint: %s", out)
 	}
+	if !bytes.Contains(buf.Bytes(), []byte("ssh-ed25519")) {
+		t.Errorf("output should contain key type: %s", out)
+	}
+}
+
+func TestListKeysTo_Empty(t *testing.T) {
+	keyring := agent.NewKeyring()
+	var buf bytes.Buffer
+	err := ListKeysTo(keyring, &buf)
+	if err != nil {
+		t.Fatalf("ListKeysTo: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("no keys loaded")) {
+		t.Errorf("expected 'no keys loaded' message, got: %s", buf.String())
+	}
 }

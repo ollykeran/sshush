@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 
@@ -42,10 +41,10 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	if cfg.KeyPaths == nil {
-		return Config{}, errors.New(style.Err("key_paths is required"))
+		return Config{}, style.NewOutput().Error("key_paths is required").AsError()
 	}
 	if cfg.SocketPath == "" {
-		return Config{}, errors.New(style.Err("socket_path is required"))
+		return Config{}, style.NewOutput().Error("socket_path is required").AsError()
 	}
 
 	return Config{

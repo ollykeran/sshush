@@ -22,7 +22,7 @@ type errStyled struct {
 func (e *errStyled) Error() string { return e.styled }
 func (e *errStyled) Unwrap() error { return e.err }
 
-func ListenAndServe(ctx context.Context, socketPath string, keyring agent.Agent) error {
+func ListenAndServe(ctx context.Context, socketPath string, keyring agent.ExtendedAgent) error {
 	os.MkdirAll(filepath.Dir(socketPath), 0700)
 	if conn, err := net.Dial("unix", socketPath); err == nil {
 		conn.Close()
