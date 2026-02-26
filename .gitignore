@@ -1,7 +1,8 @@
 /sshush
 /sshushd
 sshush.pid
-*.md
 id_*
+*.md
+!README.md
 *.toml
 .bash*

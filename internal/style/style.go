@@ -6,20 +6,17 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
-// renderer targets stderr so color detection works even when stdout is piped (e.g. eval $(sshush start)).
-var renderer = lipgloss.NewRenderer(os.Stderr)
-
 var (
-	green  = renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("#7EE787"))
-	pink   = renderer.NewStyle().Foreground(lipgloss.Color("#F472B6"))
-	purple = renderer.NewStyle().Foreground(lipgloss.Color("#631596"))
-	warn   = renderer.NewStyle().Foreground(lipgloss.Color("#FBBF24"))
-	err    = renderer.NewStyle().Foreground(lipgloss.Color("#F87171"))
-	box    = renderer.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+	green  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#89FC00"))
+	pink   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF36AB"))
+	purple = lipgloss.NewStyle().Foreground(lipgloss.Color("#642CA9"))
+	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2E94E"))
+	err    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E63462"))
+	box    = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#631596")).
 		Padding(0, 1)
 )
