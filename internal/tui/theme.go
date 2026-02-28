@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	"charm.land/lipgloss/v2"
-)
+import "charm.land/lipgloss/v2"
 
 var (
 	ColorGreen  = lipgloss.Color("#7EE787")
@@ -19,21 +15,29 @@ var (
 var (
 	TitleStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorGreen)
 
+	tabWidth = 10
+
 	ActiveTabStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorBright).
 			Background(ColorPurple).
-			Padding(0, 2)
+			Padding(0, 1).
+			Width(tabWidth).
+			Align(lipgloss.Center)
 
 	ActiveTabFocusedStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorBlack).
 				Background(ColorGreen).
-				Padding(0, 2)
+				Padding(0, 1).
+				Width(tabWidth).
+				Align(lipgloss.Center)
 
 	InactiveTabStyle = lipgloss.NewStyle().
 				Foreground(ColorPink).
-				Padding(0, 2)
+				Padding(0, 1).
+				Width(tabWidth).
+				Align(lipgloss.Center)
 
 	FocusedBorderStyle = lipgloss.NewStyle().
 				BorderStyle(lipgloss.RoundedBorder()).
@@ -67,7 +71,48 @@ var (
 	PinkStyle  = lipgloss.NewStyle().Foreground(ColorPink)
 	GreenStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorGreen)
 	WarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2E94E"))
+
+	OuterBorderColor = ColorPurple
 )
+
+func headerTabBorder() lipgloss.Border {
+	b := lipgloss.RoundedBorder()
+	b.Right = "├"
+	b.Left = "┤"
+	return b
+}
+
+var (
+	HeaderTabActive = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorBright).
+			Background(ColorPurple).
+			PaddingLeft(2).PaddingRight(2).
+			BorderStyle(headerTabBorder()).
+			BorderForeground(ColorPurple)
+
+	HeaderTabActiveFocused = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorBlack).
+				Background(ColorGreen).
+				PaddingLeft(2).PaddingRight(2).
+				BorderStyle(headerTabBorder()).
+				BorderForeground(ColorGreen)
+
+	HeaderTabInactive = lipgloss.NewStyle().
+				Foreground(ColorPink).
+				PaddingLeft(2).PaddingRight(2).
+				BorderStyle(headerTabBorder()).
+				BorderForeground(ColorPurple)
+)
+
+const Banner = "              ██                   ██    \n██▀▀▀▀ ██▀▀▀▀ ██▀▀██ ██  ██ ██▀▀▀▀ ██▀▀██\n▀▀▀▀██ ▀▀▀▀██ ██  ██ ██  ██ ▀▀▀▀██ ██  ██\n▀▀▀▀▀▀ ▀▀▀▀▀▀ ▀▀  ▀▀ ▀▀▀▀▀▀ ▀▀▀▀▀▀ ▀▀  ▀▀"
+
+var BannerStyle = lipgloss.NewStyle().
+	Foreground(ColorPink).
+	BorderStyle(lipgloss.RoundedBorder()).
+	BorderForeground(ColorPink).
+	Padding(0, 2)
 
 func SectionBox(title, content string, width int, focused bool) string {
 	t := SectionTitleStyle.Render(title)
@@ -83,40 +128,8 @@ func SectionBox(title, content string, width int, focused bool) string {
 	return t + "\n" + box
 }
 
-func RenderTabBar(tabs []string, activeIdx, width int, tabBarFocused bool) string {
-	var parts []string
-	for i, tab := range tabs {
-		switch {
-		case i == activeIdx && tabBarFocused:
-			parts = append(parts, ActiveTabFocusedStyle.Render(tab))
-		case i == activeIdx:
-			parts = append(parts, ActiveTabStyle.Render(tab))
-		default:
-			parts = append(parts, InactiveTabStyle.Render(tab))
-		}
-	}
-	bar := " " + lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	rule := DimStyle.Render(strings.Repeat("─", width))
-	return bar + "\n" + rule
-}
-
-func HelpHint(width int) string {
-	hint := DimStyle.Render("? help")
-	return lipgloss.NewStyle().Width(width).Align(lipgloss.Right).Render(hint)
-}
-
 func HelpRow(key, desc string) string {
 	k := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true).Width(14).Render(key)
 	d := PinkStyle.Render(desc)
 	return "  " + k + d
-}
-
-func HelpOverlay(lines []string, width, height int) string {
-	body := strings.Join(lines, "\n")
-	box := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPurple).
-		Padding(1, 2).
-		Render(body)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }

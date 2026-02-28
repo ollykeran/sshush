@@ -28,13 +28,24 @@ type LoadOverrides struct {
 // is missing but the user supplied socket or key overrides, an empty config is used
 // so the command can still run (e.g. using SSH_AUTH_SOCK for socket).
 func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config, error) {
+	if _, statErr := os.Stat(configPath); statErr != nil {
+		if overrides.SocketSet || overrides.KeyPathsSet {
+			cfg := config.Config{KeyPaths: []string{}}
+			if overrides.SocketSet {
+				cfg.SocketPath = overrides.SocketPath
+			}
+			if overrides.KeyPathsSet {
+				for _, p := range overrides.KeyPaths {
+					cfg.KeyPaths = append(cfg.KeyPaths, utils.ExpandHomeDirectory(p))
+				}
+			}
+			return cfg, nil
+		}
+		return config.Config{}, statErr
+	}
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		if overrides.SocketSet || overrides.KeyPathsSet {
-			cfg = config.Config{KeyPaths: []string{}}
-		} else {
-			return config.Config{}, err
-		}
+		return config.Config{}, err
 	}
 	if overrides.SocketSet {
 		cfg.SocketPath = overrides.SocketPath

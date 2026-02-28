@@ -22,3 +22,8 @@ kill:
 	-pkill -f $(.BINARY)
 	-pkill -f $(.BINARYD)
 	-ps -w | grep $(.BINARY) | grep -v grep
+
+tui:
+	$(MAKE) kill
+	$(MAKE) build
+	./sshush tui
