@@ -15,11 +15,14 @@ import (
 )
 
 func newReloadCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "reload",
 		Short: "Reload config and reconcile keys with the running agent",
+		Args:  argsNoneOrHelp,
 		RunE:  runReload,
 	}
+	cmd.Flags().StringP("config", "c", "", "path to config file")
+	return cmd
 }
 
 type keyInfo struct {
@@ -59,9 +62,9 @@ func runReload(cmd *cobra.Command, _ []string) error {
 		needsRestart = needsRestart || newCfg.SocketPath != conn.RemoteAddr().String()
 
 		if needsRestart {
-			buildDiff(client, newCfg, true).Print()
+			buildDiff(client, newCfg, true, configPath).Print()
 		} else {
-			buildDiff(client, newCfg, false).Print()
+			buildDiff(client, newCfg, false, configPath).Print()
 			applyDiff(client, newCfg)
 			return nil
 		}
@@ -79,7 +82,7 @@ func runReload(cmd *cobra.Command, _ []string) error {
 
 // buildDiff returns an Output containing the key diff, any parse warnings, and an
 // optional socket-changed notice. The returned Output is ready to Print().
-func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool) *style.Output {
+func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool, configPath string) *style.Output {
 	liveKeys, err := client.List()
 	if err != nil {
 		return style.NewOutput().Error(fmt.Sprintf("list agent keys: %v", err))
@@ -98,7 +101,7 @@ func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChange
 	}
 
 	// printKeysDiff returns a pointer - append further lines directly onto it.
-	out := style.NewOutput().Add(style.Green("Reloding keys from config file %s"))
+	out := style.NewOutput().Add(style.Green(fmt.Sprintf("Reloading keys from config file %s", configPath)))
 	out.Spacer()
 	out.Add(printKeysDiff(before, after).String())
 	for _, w := range skipWarnings {
