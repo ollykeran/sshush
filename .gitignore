@@ -1,5 +1,4 @@
-/sshush
-/sshushd
+build/
 sshush.pid
 id_*
 *.md
