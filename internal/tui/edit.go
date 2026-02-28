@@ -12,19 +12,20 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 type editKeyLoadedMsg struct {
-	keyType   string
-	comment   string
+	keyType     string
+	comment     string
 	fingerprint string
-	pubKeyStr string
-	rawKey    interface{}
-	filePath  string
-	err       error
+	pubKeyStr   string
+	rawKey      interface{}
+	filePath    string
+	err         error
 }
 
 type editSaveMsg struct {
@@ -45,15 +46,17 @@ const (
 )
 
 type EditScreen struct {
-	filePicker  StyledFilePicker
-	showPicker  bool
+	sk         *Skeleton
+	filePicker StyledFilePicker
+	showPicker bool
 
-	agentKeys   KeyTable
-	showAgent   bool
-	socketPath  string
+	agentKeys  KeyTable
+	showAgent  bool
+	socketPath string
 
-	commentIn   textinput.Model
-	saveBtn     ButtonRow
+	commentIn  textinput.Model
+	saveBtn    ButtonRow
+	zonePrefix string
 
 	loadedPath  string
 	keyType     string
@@ -61,33 +64,47 @@ type EditScreen struct {
 	pubKeyStr   string
 	rawKey      interface{}
 
-	focus       int
-	width       int
-	height      int
-	status      string
-	statusErr   bool
+	focus     int
+	width     int
+	height    int
+	status    string
+	statusErr bool
 }
 
-func NewEditScreen(socketPath string) *EditScreen {
+func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
+	prefix := zone.NewPrefix()
+
 	comment := textinput.New()
 	comment.Prompt = ""
 	comment.Placeholder = "key comment"
 
+	kt := NewKeyTable(80, 5)
+	kt.ZonePrefix = prefix + "agent-"
+
+	saveBtn := NewButtonRow("Save")
+	saveBtn.ZonePrefix = prefix + "save-"
+
 	return &EditScreen{
+		sk:         sk,
 		filePicker: NewStyledFilePicker(false),
-		agentKeys:  NewKeyTable(80, 5),
+		agentKeys:  kt,
 		socketPath: socketPath,
 		commentIn:  comment,
-		saveBtn:    NewButtonRow("Save"),
+		saveBtn:    saveBtn,
+		zonePrefix: prefix,
 		focus:      editFocusLoadFile,
 	}
+}
+
+func (s *EditScreen) HasActiveTextInput() bool {
+	return s.commentIn.Focused()
 }
 
 func (s *EditScreen) Init() tea.Cmd {
 	return nil
 }
 
-func (s *EditScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -142,6 +159,12 @@ func (s *EditScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.saveBtn.ClearPress()
 		return s, nil
 
+	case tea.MouseReleaseMsg:
+		if msg.Button != tea.MouseLeft || s.showPicker || s.showAgent {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
+
 	case tea.KeyPressMsg:
 		if s.showPicker {
 			return s.handleFilePicker(msg)
@@ -158,7 +181,39 @@ func (s *EditScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
+		s.focus = editFocusLoadFile
+		s.showPicker = true
+		return s, s.filePicker.Init()
+	}
+	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
+		s.focus = editFocusLoadAgent
+		return s, editFetchAgentKeysCmd(s.socketPath)
+	}
+	if s.rawKey != nil {
+		if inZoneBounds(s.zonePrefix+"comment", x, y) {
+			s.focus = editFocusComment
+			s.saveBtn.Focused = false
+			cmd := s.commentIn.Focus()
+			if pos := sectionBoxCursorPos(s.zonePrefix+"comment", x, y); pos >= 0 {
+				s.commentIn.SetCursor(pos)
+			}
+			return s, cmd
+		}
+		if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
+			s.commentIn.Blur()
+			s.focus = editFocusSave
+			s.saveBtn.Focused = true
+			s.saveBtn.Press()
+			comment := s.commentIn.Value()
+			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
+		}
+	}
+	return s, nil
+}
+
+func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return s, tea.Quit
@@ -192,7 +247,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *EditScreen) handleFilePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *EditScreen) handleFilePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		s.showPicker = false
 		return s, nil
@@ -205,7 +260,7 @@ func (s *EditScreen) handleFilePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *EditScreen) handleAgentTable(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *EditScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.showAgent = false
@@ -225,7 +280,7 @@ func (s *EditScreen) handleAgentTable(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *EditScreen) handleCommentInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *EditScreen) handleCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.commentIn.Blur()
@@ -270,19 +325,26 @@ func (s *EditScreen) advanceFocus(dir int) tea.Cmd {
 	return nil
 }
 
-func (s *EditScreen) View(width, height int, active bool) string {
+func (s *EditScreen) View() tea.View {
+	width := 80
+	height := 24
+	if s.sk != nil {
+		width = s.sk.GetTerminalWidth()
+		height = s.sk.GetTerminalHeight() - 12
+	}
+	active := s.sk.ScreenActive()
 	if s.showPicker {
 		title := SectionTitleStyle.Render("Select private key file")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View()))
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
 	}
 
 	if s.showAgent {
 		title := SectionTitleStyle.Render("Select key from agent")
 		box := s.agentKeys.FocusedBoxView(true)
 		hint := DimStyle.Render("  Note: To edit, you must load the key from its file")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+box+"\n"+hint)
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+box+"\n"+hint))
 	}
 
 	w := width
@@ -307,8 +369,8 @@ func (s *EditScreen) View(width, height int, active bool) string {
 		loadAgentLabel = "> Load from agent"
 	}
 	loadSection := lipgloss.JoinVertical(lipgloss.Left,
-		loadFileStyle.Render(loadFileLabel),
-		loadAgentStyle.Render(loadAgentLabel),
+		zone.Mark(s.zonePrefix+"load-file", loadFileStyle.Render(loadFileLabel)),
+		zone.Mark(s.zonePrefix+"load-agent", loadAgentStyle.Render(loadAgentLabel)),
 	)
 	sections = append(sections, loadSection)
 
@@ -326,7 +388,7 @@ func (s *EditScreen) View(width, height int, active bool) string {
 		sections = append(sections, SectionBox("Fingerprint",
 			PinkStyle.Render(s.fingerprint), infoW, false))
 
-		sections = append(sections, SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment))
+		sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
 
 		s.saveBtn.Focused = active && s.focus == editFocusSave
 		sections = append(sections, " "+s.saveBtn.View())
@@ -341,8 +403,8 @@ func (s *EditScreen) View(width, height int, active bool) string {
 	}
 
 	content := strings.Join(sections, "\n")
-	return lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
-		lipgloss.NewStyle().Padding(1, 2).Render(content))
+	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
+		lipgloss.NewStyle().Padding(1, 2).Render(content)))
 }
 
 func (s *EditScreen) HelpEntries() []string {
@@ -351,8 +413,11 @@ func (s *EditScreen) HelpEntries() []string {
 		HelpRow("down/j", "Next field"),
 		HelpRow("enter", "Activate/Edit"),
 		"",
-		HelpRow("q/esc", "Quit/Cancel"),
 	}
+}
+
+func (s *EditScreen) StatusTextRaw() (string, bool) {
+	return s.status, s.statusErr
 }
 
 func truncate(s string, maxLen int) string {

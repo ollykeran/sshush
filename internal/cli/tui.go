@@ -2,6 +2,7 @@ package cli
 
 import (
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/tui"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
@@ -16,13 +17,16 @@ func newTUICommand() *cobra.Command {
 }
 
 func runTUI(cmd *cobra.Command, _ []string) error {
+	zone.NewGlobal()
+	defer zone.Close()
+
 	socketPath, _ := getSocketPath()
 	configPath := ""
 	if p, err := utils.ResolveConfigPath(cmd); err == nil {
 		configPath = p
 	}
 
-	m := tui.NewRootModel(configPath, socketPath)
+	m := tui.NewTUI(configPath, socketPath)
 	_, err := tea.NewProgram(m).Run()
 	return err
 }

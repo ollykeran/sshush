@@ -8,14 +8,16 @@ import (
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 // ButtonRow is a horizontal row of navigable buttons with consistent styling.
 type ButtonRow struct {
-	Labels  []string
-	Active  int
-	Pressed int
-	Focused bool
+	Labels     []string
+	Active     int
+	Pressed    int
+	Focused    bool
+	ZonePrefix string
 }
 
 func NewButtonRow(labels ...string) ButtonRow {
@@ -59,14 +61,31 @@ func (b ButtonRow) View() string {
 		default:
 			style = UnfocusedButtonStyle
 		}
-		parts = append(parts, style.Render(label))
+		rendered := style.Render(label)
+		if b.ZonePrefix != "" {
+			rendered = zone.Mark(b.ZonePrefix+label, rendered)
+		}
+		parts = append(parts, rendered)
 	}
 	return strings.Join(parts, " ")
 }
 
+func (b ButtonRow) HandleMouse(x, y int) int {
+	if b.ZonePrefix == "" {
+		return -1
+	}
+	for i, label := range b.Labels {
+		if inZoneBounds(b.ZonePrefix+label, x, y) {
+			return i
+		}
+	}
+	return -1
+}
+
 // KeyTable wraps bubbles/table with sshush styling.
 type KeyTable struct {
-	Table table.Model
+	Table      table.Model
+	ZonePrefix string
 }
 
 const keyCellPadOverhead = 6
@@ -106,8 +125,32 @@ func (kt *KeyTable) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (kt KeyTable) View() string {
-	return kt.Table.View()
+	view := kt.Table.View()
+	if kt.ZonePrefix != "" {
+		view = zone.Mark(kt.ZonePrefix+"table", view)
+	}
+	return view
 }
+
+func (kt KeyTable) HandleMouse(x, y int) int {
+	if kt.ZonePrefix == "" {
+		return -1
+	}
+	z := zone.Get(kt.ZonePrefix + "table")
+	if z == nil {
+		return -1
+	}
+	if x < z.StartX || x > z.EndX || y < z.StartY || y > z.EndY {
+		return -1
+	}
+	row := y - z.StartY - 2
+	rows := kt.Table.Rows()
+	if row < 0 || row >= len(rows) {
+		return -1
+	}
+	return row
+}
+
 
 func (kt KeyTable) SelectedRow() table.Row {
 	return kt.Table.SelectedRow()
@@ -140,7 +183,7 @@ func keyTableColumns(w int) []table.Column {
 	if w < 36 {
 		w = 36
 	}
-	typeW := 11
+	typeW := 19
 	fpW := 51
 	commentW := w - typeW - fpW
 	if commentW < 20 {
