@@ -17,12 +17,15 @@ import (
 )
 
 func newStartCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the sshush agent daemon",
 		Long:  "Start the sshush agent daemon in the background.\nUsage: eval $(sshush start)",
+		Args:  argsNoneOrHelp,
 		RunE:  runStart,
 	}
+	cmd.Flags().StringP("config", "c", "", "path to config file")
+	return cmd
 }
 
 func runStart(cmd *cobra.Command, _ []string) error {

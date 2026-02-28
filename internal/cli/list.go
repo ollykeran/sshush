@@ -12,6 +12,7 @@ func newListCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List keys in the running agent",
+		Args:  argsNoneOrHelp,
 		RunE:  runList,
 	}
 }

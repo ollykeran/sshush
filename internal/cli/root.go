@@ -16,6 +16,19 @@ var env struct {
 	Config *config.Config
 }
 
+var errHelpShown = errors.New("")
+
+// argsNoneOrHelp rejects positional args like cobra.NoArgs, but treats
+// "help" as a request to print help (matching cobra's root-level behaviour).
+func argsNoneOrHelp(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 && args[0] == "help" {
+		cmd.Help()
+		cmd.SilenceUsage = true
+		return errHelpShown
+	}
+	return cobra.NoArgs(cmd, args)
+}
+
 // LoadOverrides holds CLI flag values and whether each was set (so we only override when set).
 type LoadOverrides struct {
 	SocketPath  string
@@ -68,7 +81,7 @@ func getSocketPath() (string, error) {
 	}
 	return "", style.NewOutput().
 		Error("socket path required").
-		Info("set SSH_AUTH_SOCK or use --socket or config").
+		Info("set SSH_AUTH_SOCK or use --socket or --config").
 		AsError()
 }
 
@@ -90,6 +103,10 @@ func NewRootCommand() *cobra.Command {
 			return nil
 		},
 	}
+
+	root.Flags().StringP("config", "c", "", "path to config file")
+	root.Flags().StringP("socket", "s", "", "path to agent socket")
+
 	return root
 }
 
@@ -98,6 +115,9 @@ func Execute() error {
 	root.SilenceErrors = true // we handle all error display ourselves
 	registerCommands(root)
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, errHelpShown) {
+			return nil
+		}
 		var se *style.StyledError
 		if errors.As(err, &se) {
 			se.PrintErr()
