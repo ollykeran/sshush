@@ -183,7 +183,7 @@ func keyTableColumns(w int) []table.Column {
 	if w < 36 {
 		w = 36
 	}
-	typeW := 11
+	typeW := 19
 	fpW := 51
 	commentW := w - typeW - fpW
 	if commentW < 20 {

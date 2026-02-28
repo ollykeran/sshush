@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"net"
 	"os"
 	"os/exec"
@@ -59,27 +60,27 @@ const (
 )
 
 type AgentScreen struct {
-	keyTable     KeyTable
-	buttons      ButtonRow
-	zonePrefix   string
-	configPath   string
-	socketPath   string
-	status       string
-	statusErr    bool
+	keyTable      KeyTable
+	buttons       ButtonRow
+	zonePrefix    string
+	configPath    string
+	socketPath    string
+	status        string
+	statusErr     bool
 	daemonRunning bool
-	width        int
-	height       int
+	width         int
+	height        int
 
-	foundKeys      []string
-	foundSelected  int
-	loadedFPs      map[string]bool
+	foundKeys     []string
+	foundSelected int
+	loadedFPs     map[string]bool
 
-	filePicker   StyledFilePicker
-	showPicker   bool
+	filePicker StyledFilePicker
+	showPicker bool
 
-	passInput    textinput.Model
-	showPass     bool
-	passAction   string // "lock" or "unlock"
+	passInput  textinput.Model
+	showPass   bool
+	passAction string // "lock" or "unlock"
 
 	focus int
 }
@@ -109,7 +110,7 @@ func NewAgentScreen(configPath, socketPath string) *AgentScreen {
 		loadedFPs:  make(map[string]bool),
 		filePicker: NewStyledFilePicker(false),
 		passInput:  pi,
-		focus:      agentFocusButtons,
+		focus:      agentFocusTable,
 	}
 }
 
@@ -205,7 +206,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.status = "agent locked"
 			s.statusErr = false
 		}
-		s.focus = agentFocusButtons
+		s.focus = agentFocusTable
 		return s, fetchAgentKeysCmd(s.socketPath, true)
 
 	case agentUnlockResultMsg:
@@ -218,7 +219,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			s.status = "agent unlocked"
 			s.statusErr = false
 		}
-		s.focus = agentFocusButtons
+		s.focus = agentFocusTable
 		return s, fetchAgentKeysCmd(s.socketPath, true)
 
 	case tea.MouseReleaseMsg:
@@ -251,11 +252,8 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 
 	case "up", "k":
 		switch s.focus {
-		case agentFocusButtons:
-			return s, navToTabBarCmd()
 		case agentFocusTable:
-			s.focus = agentFocusButtons
-			s.buttons.Focused = true
+			return s, navToTabBarCmd()
 		case agentFocusFound:
 			if s.foundSelected > 0 {
 				s.foundSelected--
@@ -267,45 +265,21 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 
 	case "down", "j":
 		switch s.focus {
-		case agentFocusButtons:
-			s.buttons.Focused = false
-			s.focus = agentFocusTable
 		case agentFocusTable:
 			visible := s.visibleFoundKeys()
 			if len(visible) > 0 {
 				s.focus = agentFocusFound
 				s.foundSelected = 0
-			} else {
-				s.focus = agentFocusButtons
-				s.buttons.Focused = true
 			}
 		case agentFocusFound:
 			if s.foundSelected < len(s.visibleFoundKeys())-1 {
 				s.foundSelected++
-			} else {
-				s.focus = agentFocusButtons
-				s.buttons.Focused = true
 			}
 		}
 		return s, nil
 
-	case "left", "h":
-		if s.focus == agentFocusButtons {
-			s.buttons.Left()
-		}
-		return s, nil
-
-	case "right", "l":
-		if s.focus == agentFocusButtons {
-			s.buttons.Right()
-		}
-		return s, nil
-
 	case "enter":
-		switch s.focus {
-		case agentFocusButtons:
-			return s.pressButton(s.buttons.Active)
-		case agentFocusFound:
+		if s.focus == agentFocusFound {
 			return s.addFoundKey()
 		}
 		return s, nil
@@ -356,15 +330,8 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 func (s *AgentScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
-	if btn := s.buttons.HandleMouse(x, y); btn >= 0 {
-		s.focus = agentFocusButtons
-		s.buttons.Focused = true
-		return s.pressButton(btn)
-	}
-
 	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
 		s.focus = agentFocusTable
-		s.buttons.Focused = false
 		return s, nil
 	}
 
@@ -385,7 +352,7 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "esc":
 		s.showPass = false
 		s.passInput.Blur()
-		s.focus = agentFocusButtons
+		s.focus = agentFocusTable
 		return s, nil
 	case "enter":
 		passphrase := s.passInput.Value()
@@ -402,14 +369,14 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 func (s *AgentScreen) handleFilePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if msg.String() == "esc" {
 		s.showPicker = false
-		s.focus = agentFocusButtons
+		s.focus = agentFocusTable
 		return s, nil
 	}
 
 	cmd := s.filePicker.Update(msg)
 	if didSelect, path := s.filePicker.DidSelectFile(msg); didSelect {
 		s.showPicker = false
-		s.focus = agentFocusButtons
+		s.focus = agentFocusTable
 		return s, addKeyToAgentCmd(s.socketPath, path)
 	}
 	return s, cmd
@@ -487,12 +454,9 @@ func (s *AgentScreen) View(width, height int, active bool) string {
 		w = 80
 	}
 
-	statusBar := s.renderStatusBar(w, active)
 	keyBox := s.keyTable.FocusedBoxView(active && s.focus == agentFocusTable)
 
 	var sections []string
-	sections = append(sections, statusBar)
-	sections = append(sections, "")
 	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
 
 	visible := s.visibleFoundKeys()
@@ -506,40 +470,45 @@ func (s *AgentScreen) View(width, height int, active bool) string {
 	return content
 }
 
-func (s *AgentScreen) renderStatusBar(w int, active bool) string {
-	title := TitleStyle.Render("sshushd")
-	sep := DimStyle.Render(" | ")
-
-	var state string
-	if s.daemonRunning {
-		state = GreenStyle.Render("running")
-	} else {
-		state = ErrorStyle.Render("stopped")
+func (s *AgentScreen) BannerColor() color.Color {
+	if s.statusErr {
+		return ColorErr
 	}
+	if s.daemonRunning {
+		return ColorGreen
+	}
+	return ColorPink
+}
 
+func (s *AgentScreen) StatusText() string {
 	statusStyle := PinkStyle
 	if s.statusErr {
 		statusStyle = ErrorStyle
 	}
-	status := statusStyle.Render(s.status)
+	return statusStyle.Render(s.status)
+}
 
-	left := " " + title + sep + state + sep + status
-	savedFocused := s.buttons.Focused
-	if !active {
-		s.buttons.Focused = false
+func (s *AgentScreen) ControlButtonsView(focused bool) string {
+	var parts []string
+	for i, label := range s.buttons.Labels {
+		var style lipgloss.Style
+		switch {
+		case s.buttons.Pressed == i:
+			style = ActiveTabFocusedStyle
+		case s.buttons.Active == i && focused:
+			style = ActiveTabFocusedStyle
+		case s.buttons.Active == i:
+			style = ActiveTabStyle
+		default:
+			style = InactiveTabStyle
+		}
+		rendered := style.Render(label)
+		if s.buttons.ZonePrefix != "" {
+			rendered = zone.Mark(s.buttons.ZonePrefix+label, rendered)
+		}
+		parts = append(parts, rendered)
 	}
-	buttons := s.buttons.View()
-	s.buttons.Focused = savedFocused
-	right := buttons
-
-	leftW := lipgloss.Width(left)
-	rightW := lipgloss.Width(right)
-	gap := w - leftW - rightW
-	if gap < 1 {
-		gap = 1
-	}
-
-	return left + strings.Repeat(" ", gap) + right
+	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
 func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
@@ -584,11 +553,11 @@ func (s *AgentScreen) HelpEntries() []string {
 		"",
 		HelpRow("a", "Add key"),
 		HelpRow("d", "Remove key"),
-		HelpRow("L", "Lock agent"),
-		HelpRow("U", "Unlock agent"),
+		HelpRow("l", "Lock agent"),
+		HelpRow("u", "Unlock agent"),
 		"",
-		HelpRow("left/h", "Previous button"),
-		HelpRow("right/l", "Next button"),
+		HelpRow("left/h", "Navigate left"),
+		HelpRow("right/l", "Navigate right"),
 		HelpRow("up/k", "Move up"),
 		HelpRow("down/j", "Move down"),
 		HelpRow("enter", "Activate"),
@@ -653,7 +622,7 @@ func stopDaemonCmd() tea.Cmd {
 	return func() tea.Msg {
 		pidFilePath := utils.PidFilePath()
 		if _, err := os.Stat(pidFilePath); os.IsNotExist(err) {
-			return agentStatusMsg{text: "not running", isErr: true}
+			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
 		if err := stopDaemon(pidFilePath); err != nil {
 			return agentStatusMsg{text: "stop failed", isErr: true}
@@ -783,23 +752,21 @@ func discoverKeysCmd(configPath string) tea.Cmd {
 			}
 		}
 
-		home, err := os.UserHomeDir()
-		if err == nil {
-			sshDir := filepath.Join(home, ".ssh")
-			matches, _ := filepath.Glob(filepath.Join(sshDir, "id_*"))
-			for _, m := range matches {
-				if strings.HasSuffix(m, ".pub") {
-					continue
-				}
-				addPath(m)
-			}
+		var searchDirs []string
+		if home, err := os.UserHomeDir(); err == nil {
+			searchDirs = append(searchDirs, filepath.Join(home, ".ssh"))
+		}
+		if cwd, err := os.Getwd(); err == nil {
+			searchDirs = append(searchDirs, cwd)
+		}
 
-			entries, _ := os.ReadDir(sshDir)
+		for _, dir := range searchDirs {
+			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
 				if e.IsDir() || strings.HasSuffix(e.Name(), ".pub") {
 					continue
 				}
-				path := filepath.Join(sshDir, e.Name())
+				path := filepath.Join(dir, e.Name())
 				if seen[path] {
 					continue
 				}

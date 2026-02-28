@@ -44,13 +44,13 @@ type CreateScreen struct {
 	filenameIn textinput.Model
 	saveBtn    ButtonRow
 
-	zonePrefix     string
-	lastKeyType    string
-	fileEdited     bool
-	confirmSave    bool
-	focus          int
-	width          int
-	height         int
+	zonePrefix  string
+	lastKeyType string
+	fileEdited  bool
+	confirmSave bool
+	focus       int
+	width       int
+	height      int
 
 	genResult *keyGenDoneMsg
 	status    string
