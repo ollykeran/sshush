@@ -1,0 +1,11 @@
+name: sshush
+arch: amd64
+platform: linux
+version: ${VERSION:-dev}
+maintainer: ollykeran
+description: Go SSH Agent and utilities
+contents:
+  - src: build/sshush
+    dst: /usr/bin/sshush
+  - src: build/sshushd
+    dst: /usr/bin/sshushd

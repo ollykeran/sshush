@@ -16,28 +16,38 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26"
+
+      - uses: extractions/setup-just@v3
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: test 
+        run: just test
 
       - name: Get tag
         id: tag
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build
+      - name: Build and package
         env:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: "0"
-        run: |
-          LDFLAGS="-X github.com/ollykeran/sshush/internal/version.Version=${{ steps.tag.outputs.version }}"
-          go build -ldflags "$LDFLAGS" -o sshush .
-          go build -ldflags "$LDFLAGS" -o sshushd ./cmd/sshushd
-
-      - name: Package
-        run: |
-          tar czf sshush-${{ steps.tag.outputs.version }}-linux-amd64.tar.gz sshush sshushd
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: >-
+          just
+          ldflags="-X github.com/ollykeran/sshush/internal/version.Version=v${{ steps.tag.outputs.version }}"
+          package
 
       - name: Release
+        if: ${{ !env.ACT }}
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: sshush-${{ steps.tag.outputs.version }}-linux-amd64.tar.gz
+          files: |
+            build/*.tar.gz
+            build/*.deb
+            build/*.rpm
+            build/*.pkg.tar.zst
