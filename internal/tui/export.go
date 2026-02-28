@@ -50,30 +50,31 @@ const (
 )
 
 type ExportScreen struct {
-	filePicker  StyledFilePicker
-	showPicker  bool
-	pickerMode  string // "load" or "save"
+	sk         *Skeleton
+	filePicker StyledFilePicker
+	showPicker bool
+	pickerMode string // "load" or "save"
 
-	agentKeys    KeyTable
-	showAgent    bool
-	socketPath   string
-	zonePrefix   string
+	agentKeys  KeyTable
+	showAgent  bool
+	socketPath string
+	zonePrefix string
 
-	pubKeyStr    string
-	keyType      string
-	sourcePath   string
+	pubKeyStr  string
+	keyType    string
+	sourcePath string
 
 	saveFilename textinput.Model
 	showSaveIn   bool
 
-	focus        int
-	width        int
-	height       int
-	status       string
-	statusErr    bool
+	focus     int
+	width     int
+	height    int
+	status    string
+	statusErr bool
 }
 
-func NewExportScreen(socketPath string) *ExportScreen {
+func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	prefix := zone.NewPrefix()
 
 	saveIn := textinput.New()
@@ -84,6 +85,7 @@ func NewExportScreen(socketPath string) *ExportScreen {
 	kt.ZonePrefix = prefix + "agent-"
 
 	return &ExportScreen{
+		sk:           sk,
 		filePicker:   NewStyledFilePicker(false),
 		agentKeys:    kt,
 		socketPath:   socketPath,
@@ -93,11 +95,15 @@ func NewExportScreen(socketPath string) *ExportScreen {
 	}
 }
 
+func (s *ExportScreen) HasActiveTextInput() bool {
+	return s.saveFilename.Focused()
+}
+
 func (s *ExportScreen) Init() tea.Cmd {
 	return nil
 }
 
-func (s *ExportScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -178,7 +184,7 @@ func (s *ExportScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *ExportScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
+func (s *ExportScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
 		s.focus = exportFocusLoadFile
 		s.showPicker = true
@@ -203,7 +209,7 @@ func (s *ExportScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return s, tea.Quit
@@ -233,7 +239,7 @@ func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *ExportScreen) handlePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *ExportScreen) handlePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		s.showPicker = false
 		return s, nil
@@ -246,7 +252,7 @@ func (s *ExportScreen) handlePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.showAgent = false
@@ -271,7 +277,7 @@ func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *ExportScreen) handleSaveInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *ExportScreen) handleSaveInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.showSaveIn = false
@@ -338,17 +344,24 @@ func (s *ExportScreen) updateDefaultSaveFilename() {
 	}
 }
 
-func (s *ExportScreen) View(width, height int, active bool) string {
+func (s *ExportScreen) View() tea.View {
+	width := 80
+	height := 24
+	if s.sk != nil {
+		width = s.sk.GetTerminalWidth()
+		height = s.sk.GetTerminalHeight() - 12
+	}
+	active := s.sk.ScreenActive()
 	if s.showPicker {
 		title := SectionTitleStyle.Render("Select key file")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View()))
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
 	}
 
 	if s.showAgent {
 		title := SectionTitleStyle.Render("Select key from agent")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+s.agentKeys.FocusedBoxView(true))
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+s.agentKeys.FocusedBoxView(true)))
 	}
 
 	w := width
@@ -423,8 +436,8 @@ func (s *ExportScreen) View(width, height int, active bool) string {
 	}
 
 	content := strings.Join(sections, "\n")
-	return lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
-		lipgloss.NewStyle().Padding(1, 2).Render(content))
+	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
+		lipgloss.NewStyle().Padding(1, 2).Render(content)))
 }
 
 func (s *ExportScreen) HelpEntries() []string {
@@ -433,8 +446,11 @@ func (s *ExportScreen) HelpEntries() []string {
 		HelpRow("down/j", "Next field"),
 		HelpRow("enter", "Activate"),
 		"",
-		HelpRow("q/esc", "Quit/Cancel"),
 	}
+}
+
+func (s *ExportScreen) StatusTextRaw() (string, bool) {
+	return s.status, s.statusErr
 }
 
 // Commands

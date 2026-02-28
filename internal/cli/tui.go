@@ -26,7 +26,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		configPath = p
 	}
 
-	m := tui.NewRootModel(configPath, socketPath)
+	m := tui.NewTUI(configPath, socketPath)
 	_, err := tea.NewProgram(m).Run()
 	return err
 }

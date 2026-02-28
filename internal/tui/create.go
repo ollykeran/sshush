@@ -37,6 +37,7 @@ var (
 )
 
 type CreateScreen struct {
+	sk         *Skeleton
 	typeRow    ButtonRow
 	optionRow  ButtonRow
 	commentIn  textinput.Model
@@ -57,7 +58,7 @@ type CreateScreen struct {
 	statusErr bool
 }
 
-func NewCreateScreen() *CreateScreen {
+func NewCreateScreen(sk *Skeleton) *CreateScreen {
 	prefix := zone.NewPrefix()
 
 	comment := textinput.New()
@@ -83,6 +84,7 @@ func NewCreateScreen() *CreateScreen {
 	saveBtn.ZonePrefix = prefix + "save-"
 
 	return &CreateScreen{
+		sk:          sk,
 		typeRow:     typeRow,
 		optionRow:   optionRow,
 		commentIn:   comment,
@@ -95,11 +97,15 @@ func NewCreateScreen() *CreateScreen {
 	}
 }
 
+func (s *CreateScreen) HasActiveTextInput() bool {
+	return s.commentIn.Focused() || s.dirInput.Focused() || s.filenameIn.Focused()
+}
+
 func (s *CreateScreen) Init() tea.Cmd {
 	return nil
 }
 
-func (s *CreateScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -143,7 +149,7 @@ func (s *CreateScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *CreateScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
+func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if btn := s.typeRow.HandleMouse(x, y); btn >= 0 {
 		s.blurInputs()
 		s.focus = createFocusType
@@ -152,7 +158,6 @@ func (s *CreateScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
 		s.updateButtonFocus()
 		return s, nil
 	}
-
 	if s.currentKeyType() != "ed25519" {
 		if btn := s.optionRow.HandleMouse(x, y); btn >= 0 {
 			s.blurInputs()
@@ -162,37 +167,46 @@ func (s *CreateScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
 			return s, nil
 		}
 	}
-
 	if inZoneBounds(s.zonePrefix+"comment", x, y) {
 		s.blurInputs()
 		s.focus = createFocusComment
 		s.updateButtonFocus()
-		return s, s.commentIn.Focus()
+		cmd := s.commentIn.Focus()
+		if pos := sectionBoxCursorPos(s.zonePrefix+"comment", x, y); pos >= 0 {
+			s.commentIn.SetCursor(pos)
+		}
+		return s, cmd
 	}
 	if inZoneBounds(s.zonePrefix+"dir", x, y) {
 		s.blurInputs()
 		s.focus = createFocusDir
 		s.updateButtonFocus()
-		return s, s.dirInput.Focus()
+		cmd := s.dirInput.Focus()
+		if pos := sectionBoxCursorPos(s.zonePrefix+"dir", x, y); pos >= 0 {
+			s.dirInput.SetCursor(pos)
+		}
+		return s, cmd
 	}
 	if inZoneBounds(s.zonePrefix+"filename", x, y) {
 		s.blurInputs()
 		s.focus = createFocusFilename
 		s.updateButtonFocus()
-		return s, s.filenameIn.Focus()
+		cmd := s.filenameIn.Focus()
+		if pos := sectionBoxCursorPos(s.zonePrefix+"filename", x, y); pos >= 0 {
+			s.filenameIn.SetCursor(pos)
+		}
+		return s, cmd
 	}
-
 	if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
 		s.blurInputs()
 		s.focus = createFocusSave
 		s.updateButtonFocus()
 		return s.doSave()
 	}
-
 	return s, nil
 }
 
-func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !(msg.String() == "enter" && s.focus == createFocusSave) {
 		s.confirmSave = false
 	}
@@ -242,7 +256,7 @@ func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *CreateScreen) handleCommentInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *CreateScreen) handleCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.commentIn.Blur()
@@ -259,7 +273,7 @@ func (s *CreateScreen) handleCommentInput(msg tea.KeyPressMsg) (Screen, tea.Cmd)
 	return s, cmd
 }
 
-func (s *CreateScreen) handleDirInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *CreateScreen) handleDirInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.dirInput.Blur()
@@ -276,7 +290,7 @@ func (s *CreateScreen) handleDirInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *CreateScreen) handleFilenameInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *CreateScreen) handleFilenameInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.filenameIn.Blur()
@@ -294,7 +308,7 @@ func (s *CreateScreen) handleFilenameInput(msg tea.KeyPressMsg) (Screen, tea.Cmd
 	return s, cmd
 }
 
-func (s *CreateScreen) focusNext() (Screen, tea.Cmd) {
+func (s *CreateScreen) focusNext() (tea.Model, tea.Cmd) {
 	s.blurInputs()
 	if s.currentKeyType() == "ed25519" && s.focus == createFocusType {
 		s.focus = createFocusComment
@@ -309,7 +323,7 @@ func (s *CreateScreen) focusNext() (Screen, tea.Cmd) {
 	return s, s.focusInput()
 }
 
-func (s *CreateScreen) focusPrev() (Screen, tea.Cmd) {
+func (s *CreateScreen) focusPrev() (tea.Model, tea.Cmd) {
 	s.blurInputs()
 	if s.currentKeyType() == "ed25519" && s.focus == createFocusComment {
 		s.focus = createFocusType
@@ -393,7 +407,7 @@ func (s *CreateScreen) syncKeyTypeChange() {
 	}
 }
 
-func (s *CreateScreen) doSave() (Screen, tea.Cmd) {
+func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
 	dir := s.dirInput.Value()
 	filename := s.filenameIn.Value()
 	if filename == "" {
@@ -424,7 +438,14 @@ func (s *CreateScreen) doSave() (Screen, tea.Cmd) {
 	return s, tea.Batch(generateKeyCmd(keyType, bits, comment, dir, filename), ButtonFlashCmd())
 }
 
-func (s *CreateScreen) View(width, height int, active bool) string {
+func (s *CreateScreen) View() tea.View {
+	width := 80
+	height := 24
+	if s.sk != nil {
+		width = s.sk.GetTerminalWidth()
+		height = s.sk.GetTerminalHeight() - 12
+	}
+	active := s.sk.ScreenActive()
 	w := width
 	if w < 1 {
 		w = 80
@@ -441,10 +462,10 @@ func (s *CreateScreen) View(width, height int, active bool) string {
 
 	if w >= 100 {
 		content := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
-		return lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content)
+		return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content))
 	}
 	content := left + "\n" + right
-	return lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content)
+	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content))
 }
 
 func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
@@ -515,8 +536,11 @@ func (s *CreateScreen) HelpEntries() []string {
 		HelpRow("right/l", "Next option"),
 		HelpRow("enter", "Activate/Edit"),
 		"",
-		HelpRow("q/esc", "Quit/Cancel"),
 	}
+}
+
+func (s *CreateScreen) StatusTextRaw() (string, bool) {
+	return s.status, s.statusErr
 }
 
 func defaultComment() string {

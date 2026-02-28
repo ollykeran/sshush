@@ -60,6 +60,7 @@ const (
 )
 
 type AgentScreen struct {
+	sk            *Skeleton
 	keyTable      KeyTable
 	buttons       ButtonRow
 	zonePrefix    string
@@ -85,7 +86,7 @@ type AgentScreen struct {
 	focus int
 }
 
-func NewAgentScreen(configPath, socketPath string) *AgentScreen {
+func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	prefix := zone.NewPrefix()
 
 	pi := textinput.New()
@@ -101,6 +102,7 @@ func NewAgentScreen(configPath, socketPath string) *AgentScreen {
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
+		sk:         sk,
 		keyTable:   kt,
 		buttons:    btns,
 		zonePrefix: prefix,
@@ -122,7 +124,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 	)
 }
 
-func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
+func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -140,6 +142,13 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 
 	case agentDaemonStateMsg:
 		s.daemonRunning = msg.running
+		if s.sk != nil {
+			state := "stopped"
+			if msg.running {
+				state = "running"
+			}
+			s.sk.UpdateWidgetValue("daemon-status", state)
+		}
 		return s, nil
 
 	case ButtonFlashDoneMsg:
@@ -184,6 +193,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case agentStatusMsg:
 		s.status = msg.text
 		s.statusErr = msg.isErr
+		if s.sk != nil {
+			s.sk.UpdateWidgetValue("daemon-status", msg.text)
+		}
 		if !msg.isErr {
 			return s, tea.Batch(
 				fetchAgentKeysCmd(s.socketPath, false),
@@ -245,7 +257,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return s, tea.Quit
@@ -329,25 +341,7 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *AgentScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
-	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
-		s.focus = agentFocusTable
-		return s, nil
-	}
-
-	visible := s.visibleFoundKeys()
-	for i := range visible {
-		if inZoneBounds(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), x, y) {
-			s.focus = agentFocusFound
-			s.foundSelected = i
-			return s.addFoundKey()
-		}
-	}
-
-	return s, nil
-}
-
-func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		s.showPass = false
@@ -366,7 +360,24 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *AgentScreen) handleFilePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
+		s.focus = agentFocusTable
+		s.keyTable.Table.SetCursor(row)
+		return s, nil
+	}
+	visible := s.visibleFoundKeys()
+	for i := range visible {
+		if inZoneBounds(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), x, y) {
+			s.focus = agentFocusFound
+			s.foundSelected = i
+			return s.addFoundKey()
+		}
+	}
+	return s, nil
+}
+
+func (s *AgentScreen) handleFilePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "esc" {
 		s.showPicker = false
 		s.focus = agentFocusTable
@@ -382,7 +393,7 @@ func (s *AgentScreen) handleFilePicker(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *AgentScreen) pressButton(btn int) (Screen, tea.Cmd) {
+func (s *AgentScreen) pressButton(btn int) (tea.Model, tea.Cmd) {
 	s.buttons.Active = btn
 	s.buttons.Press()
 	s.statusErr = false
@@ -402,7 +413,7 @@ func (s *AgentScreen) pressButton(btn int) (Screen, tea.Cmd) {
 	return s, tea.Batch(action, ButtonFlashCmd())
 }
 
-func (s *AgentScreen) removeSelectedKey() (Screen, tea.Cmd) {
+func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
 	row := s.keyTable.SelectedRow()
 	if row == nil {
 		return s, nil
@@ -411,7 +422,7 @@ func (s *AgentScreen) removeSelectedKey() (Screen, tea.Cmd) {
 	return s, removeKeyFromAgentCmd(s.socketPath, fp)
 }
 
-func (s *AgentScreen) addFoundKey() (Screen, tea.Cmd) {
+func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 	visible := s.visibleFoundKeys()
 	if s.foundSelected >= len(visible) {
 		return s, nil
@@ -436,17 +447,24 @@ func (s *AgentScreen) visibleFoundKeys() []string {
 	return visible
 }
 
-func (s *AgentScreen) View(width, height int, active bool) string {
+func (s *AgentScreen) View() tea.View {
+	width := 80
+	height := 24
+	if s.sk != nil {
+		width = s.sk.GetTerminalWidth()
+		height = s.sk.GetTerminalHeight() - 12
+	}
+	active := s.sk.ScreenActive()
 	if s.showPicker {
 		title := SectionTitleStyle.Render("Select key file")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View()))
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
 	}
 
 	if s.showPass {
 		title := SectionTitleStyle.Render("Enter " + s.passAction + " passphrase")
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.passInput.View()))
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			title+"\n"+FocusedBorderStyle.Render(s.passInput.View())))
 	}
 
 	w := width
@@ -467,7 +485,7 @@ func (s *AgentScreen) View(width, height int, active bool) string {
 	}
 
 	content := strings.Join(sections, "\n")
-	return content
+	return tea.NewView(content)
 }
 
 func (s *AgentScreen) BannerColor() color.Color {
@@ -488,19 +506,23 @@ func (s *AgentScreen) StatusText() string {
 	return statusStyle.Render(s.status)
 }
 
+func (s *AgentScreen) StatusTextRaw() (string, bool) {
+	return s.status, s.statusErr
+}
+
 func (s *AgentScreen) ControlButtonsView(focused bool) string {
 	var parts []string
 	for i, label := range s.buttons.Labels {
 		var style lipgloss.Style
 		switch {
 		case s.buttons.Pressed == i:
-			style = ActiveTabFocusedStyle
+			style = HeaderTabActiveFocused
 		case s.buttons.Active == i && focused:
-			style = ActiveTabFocusedStyle
+			style = HeaderTabActiveFocused
 		case s.buttons.Active == i:
-			style = ActiveTabStyle
+			style = HeaderTabActive
 		default:
-			style = InactiveTabStyle
+			style = HeaderTabInactive
 		}
 		rendered := style.Render(label)
 		if s.buttons.ZonePrefix != "" {
@@ -562,7 +584,7 @@ func (s *AgentScreen) HelpEntries() []string {
 		HelpRow("down/j", "Move down"),
 		HelpRow("enter", "Activate"),
 		"",
-		HelpRow("q/esc", "Quit"),
+		HelpRow("q/esc/ctrl+c", "Quit"),
 	}
 }
 
