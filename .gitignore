@@ -6,3 +6,4 @@ id_*
 *.toml
 .bash*
 openspec/
+.actrc

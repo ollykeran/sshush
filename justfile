@@ -46,10 +46,44 @@ rpm: build
     VERSION={{ version }} nfpm pkg --packager rpm --target {{ build_dir }}/sshush-{{ version }}-amd64.rpm
 
 source: build
-    VERSION={{ version }} nfpm pkg --packager srpm --target {{ build_dir }}/sshush-{{ version }}.tar.gz
+    VERSION={{ version }} nfpm pkg --packager srpm --target {{ build_dir }}/sshush-{{ version }}.src.rpm
 
 archlinux: build
     VERSION={{ version }} nfpm pkg --packager archlinux --target {{ build_dir }}/sshush-{{ version }}-amd64.pkg.tar.zst
+
+# Validate build artifacts exist and have correct format
+check-artifacts ver="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ build_dir }}"
+    pass=0; fail=0
+    check() {
+        local file="$1" expected_type="$2"
+        if [ ! -f "$file" ]; then
+            echo "MISS  $file"
+            fail=$((fail + 1)); return
+        fi
+        actual=$(file -b "$file")
+        if echo "$actual" | grep -qi "$expected_type"; then
+            echo "OK    $file  ($actual)"
+            pass=$((pass + 1))
+        else
+            echo "FAIL  $file  (expected $expected_type, got $actual)"
+            fail=$((fail + 1))
+        fi
+    }
+    echo "Checking artifacts for version {{ ver }}..."
+    echo
+    check "$dir/sshush"                                "ELF"
+    check "$dir/sshushd"                               "ELF"
+    check "$dir/sshush-{{ ver }}-linux-amd64.tar.gz"   "gzip"
+    check "$dir/sshush-{{ ver }}-amd64.deb"            "Debian"
+    check "$dir/sshush-{{ ver }}-amd64.rpm"            "RPM"
+    check "$dir/sshush-{{ ver }}.src.rpm"              "RPM"
+    check "$dir/sshush-{{ ver }}-amd64.pkg.tar.zst"    "Zstandard"
+    echo
+    echo "$pass passed, $fail failed"
+    [ "$fail" -eq 0 ]
 
 # Create a GitHub release (creates tag, triggers CI to build packages)
 release ver:
@@ -60,9 +94,13 @@ act-list:
     act -l push -e .github/events/push-tag.json -W .github/workflows/release.yml
 
 # Run the release workflow locally (via act); Release step is skipped
-act-release:
+act-release ver:
+    #!/usr/bin/env bash
+    echo '{"ref": "refs/tags/v{{ ver }}"}' > .github/events/push-tag.json
     act push -e .github/events/push-tag.json -W .github/workflows/release.yml
 
 # Dry-run the release workflow locally (via act)
-act-release-dry:
+act-release-dry ver:
+    #!/usr/bin/env bash
+    echo '{"ref": "refs/tags/v{{ ver }}"}' > .github/events/push-tag.json
     act -n push -e .github/events/push-tag.json -W .github/workflows/release.yml
