@@ -4,7 +4,16 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone"
 )
+
+func inZoneBounds(id string, x, y int) bool {
+	z := zone.Get(id)
+	if z == nil {
+		return false
+	}
+	return x >= z.StartX && x <= z.EndX && y >= z.StartY && y <= z.EndY
+}
 
 type Screen interface {
 	Init() tea.Cmd
@@ -137,6 +146,20 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = true
 			return m, nil
 		}
+
+	case tea.MouseReleaseMsg:
+		if m.showHelp || msg.Button != tea.MouseLeft {
+			return m, nil
+		}
+		for i, name := range tabNames {
+			if inZoneBounds("tab-"+name, msg.X, msg.Y) {
+				m.tabBarActive = false
+				return m.switchTab(i)
+			}
+		}
+		var cmd tea.Cmd
+		m.screens[m.activeTab], cmd = m.screens[m.activeTab].Update(msg)
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -171,8 +194,9 @@ func (m RootModel) View() tea.View {
 		}
 		entries = append(entries, common...)
 		content := HelpOverlay(entries, w, h)
-		v := tea.NewView(content)
+		v := tea.NewView(zone.Scan(content))
 		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
 		return v
 	}
 
@@ -186,7 +210,8 @@ func (m RootModel) View() tea.View {
 	helpHint := HelpHint(w)
 	content := tabBar + "\n" + screenContent + "\n" + helpHint
 
-	v := tea.NewView(content)
+	v := tea.NewView(zone.Scan(content))
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }

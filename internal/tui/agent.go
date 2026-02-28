@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/openssh"
@@ -60,6 +61,7 @@ const (
 type AgentScreen struct {
 	keyTable     KeyTable
 	buttons      ButtonRow
+	zonePrefix   string
 	configPath   string
 	socketPath   string
 	status       string
@@ -83,6 +85,8 @@ type AgentScreen struct {
 }
 
 func NewAgentScreen(configPath, socketPath string) *AgentScreen {
+	prefix := zone.NewPrefix()
+
 	pi := textinput.New()
 	pi.Placeholder = "passphrase"
 	pi.EchoMode = textinput.EchoPassword
@@ -90,10 +94,15 @@ func NewAgentScreen(configPath, socketPath string) *AgentScreen {
 
 	btns := NewButtonRow("Start", "Stop", "Reload")
 	btns.Focused = true
+	btns.ZonePrefix = prefix + "ctrl-"
+
+	kt := NewKeyTable(80, 8)
+	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
-		keyTable:   NewKeyTable(80, 8),
+		keyTable:   kt,
 		buttons:    btns,
+		zonePrefix: prefix,
 		configPath: configPath,
 		socketPath: socketPath,
 		status:     "loading...",
@@ -211,6 +220,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		s.focus = agentFocusButtons
 		return s, fetchAgentKeysCmd(s.socketPath, true)
+
+	case tea.MouseReleaseMsg:
+		if msg.Button != tea.MouseLeft || s.showPicker || s.showPass {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.KeyPressMsg:
 		if s.showPass {
@@ -337,6 +352,31 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		cmd := s.keyTable.Update(msg)
 		return s, cmd
 	}
+	return s, nil
+}
+
+func (s *AgentScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
+	if btn := s.buttons.HandleMouse(x, y); btn >= 0 {
+		s.focus = agentFocusButtons
+		s.buttons.Focused = true
+		return s.pressButton(btn)
+	}
+
+	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
+		s.focus = agentFocusTable
+		s.buttons.Focused = false
+		return s, nil
+	}
+
+	visible := s.visibleFoundKeys()
+	for i := range visible {
+		if inZoneBounds(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), x, y) {
+			s.focus = agentFocusFound
+			s.foundSelected = i
+			return s.addFoundKey()
+		}
+	}
+
 	return s, nil
 }
 
@@ -511,12 +551,14 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 	}
 	for i := 0; i < maxShow; i++ {
 		style := PinkStyle
-		prefix := "  "
+		linePrefix := "  "
 		if active && s.focus == agentFocusFound && i == s.foundSelected {
 			style = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
-			prefix = "> "
+			linePrefix = "> "
 		}
-		lines = append(lines, style.Render(prefix+visible[i]))
+		rendered := style.Render(linePrefix + visible[i])
+		rendered = zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), rendered)
+		lines = append(lines, rendered)
 	}
 	if len(visible) > maxShow {
 		lines = append(lines, DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))

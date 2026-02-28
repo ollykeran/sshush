@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 var (
@@ -86,14 +87,16 @@ func SectionBox(title, content string, width int, focused bool) string {
 func RenderTabBar(tabs []string, activeIdx, width int, tabBarFocused bool) string {
 	var parts []string
 	for i, tab := range tabs {
+		var rendered string
 		switch {
 		case i == activeIdx && tabBarFocused:
-			parts = append(parts, ActiveTabFocusedStyle.Render(tab))
+			rendered = ActiveTabFocusedStyle.Render(tab)
 		case i == activeIdx:
-			parts = append(parts, ActiveTabStyle.Render(tab))
+			rendered = ActiveTabStyle.Render(tab)
 		default:
-			parts = append(parts, InactiveTabStyle.Render(tab))
+			rendered = InactiveTabStyle.Render(tab)
 		}
+		parts = append(parts, zone.Mark("tab-"+tab, rendered))
 	}
 	bar := " " + lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	rule := DimStyle.Render(strings.Repeat("─", width))

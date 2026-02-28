@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -54,6 +55,7 @@ type EditScreen struct {
 
 	commentIn   textinput.Model
 	saveBtn     ButtonRow
+	zonePrefix  string
 
 	loadedPath  string
 	keyType     string
@@ -69,16 +71,25 @@ type EditScreen struct {
 }
 
 func NewEditScreen(socketPath string) *EditScreen {
+	prefix := zone.NewPrefix()
+
 	comment := textinput.New()
 	comment.Prompt = ""
 	comment.Placeholder = "key comment"
 
+	kt := NewKeyTable(80, 5)
+	kt.ZonePrefix = prefix + "agent-"
+
+	saveBtn := NewButtonRow("Save")
+	saveBtn.ZonePrefix = prefix + "save-"
+
 	return &EditScreen{
 		filePicker: NewStyledFilePicker(false),
-		agentKeys:  NewKeyTable(80, 5),
+		agentKeys:  kt,
 		socketPath: socketPath,
 		commentIn:  comment,
-		saveBtn:    NewButtonRow("Save"),
+		saveBtn:    saveBtn,
+		zonePrefix: prefix,
 		focus:      editFocusLoadFile,
 	}
 }
@@ -142,6 +153,12 @@ func (s *EditScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.saveBtn.ClearPress()
 		return s, nil
 
+	case tea.MouseReleaseMsg:
+		if msg.Button != tea.MouseLeft || s.showPicker || s.showAgent {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
+
 	case tea.KeyPressMsg:
 		if s.showPicker {
 			return s.handleFilePicker(msg)
@@ -155,6 +172,34 @@ func (s *EditScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return s.handleKeys(msg)
 	}
 
+	return s, nil
+}
+
+func (s *EditScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
+	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
+		s.focus = editFocusLoadFile
+		s.showPicker = true
+		return s, s.filePicker.Init()
+	}
+	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
+		s.focus = editFocusLoadAgent
+		return s, editFetchAgentKeysCmd(s.socketPath)
+	}
+	if s.rawKey != nil {
+		if inZoneBounds(s.zonePrefix+"comment", x, y) {
+			s.focus = editFocusComment
+			s.saveBtn.Focused = false
+			return s, s.commentIn.Focus()
+		}
+		if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
+			s.commentIn.Blur()
+			s.focus = editFocusSave
+			s.saveBtn.Focused = true
+			s.saveBtn.Press()
+			comment := s.commentIn.Value()
+			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
+		}
+	}
 	return s, nil
 }
 
@@ -307,8 +352,8 @@ func (s *EditScreen) View(width, height int, active bool) string {
 		loadAgentLabel = "> Load from agent"
 	}
 	loadSection := lipgloss.JoinVertical(lipgloss.Left,
-		loadFileStyle.Render(loadFileLabel),
-		loadAgentStyle.Render(loadAgentLabel),
+		zone.Mark(s.zonePrefix+"load-file", loadFileStyle.Render(loadFileLabel)),
+		zone.Mark(s.zonePrefix+"load-agent", loadAgentStyle.Render(loadAgentLabel)),
 	)
 	sections = append(sections, loadSection)
 
@@ -326,7 +371,7 @@ func (s *EditScreen) View(width, height int, active bool) string {
 		sections = append(sections, SectionBox("Fingerprint",
 			PinkStyle.Render(s.fingerprint), infoW, false))
 
-		sections = append(sections, SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment))
+		sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
 
 		s.saveBtn.Focused = active && s.focus == editFocusSave
 		sections = append(sections, " "+s.saveBtn.View())

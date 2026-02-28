@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -43,6 +44,7 @@ type CreateScreen struct {
 	filenameIn textinput.Model
 	saveBtn    ButtonRow
 
+	zonePrefix     string
 	lastKeyType    string
 	fileEdited     bool
 	confirmSave    bool
@@ -56,6 +58,8 @@ type CreateScreen struct {
 }
 
 func NewCreateScreen() *CreateScreen {
+	prefix := zone.NewPrefix()
+
 	comment := textinput.New()
 	comment.Prompt = ""
 	comment.SetValue(defaultComment())
@@ -71,13 +75,21 @@ func NewCreateScreen() *CreateScreen {
 	dirIn.Prompt = ""
 	dirIn.SetValue(dir)
 
+	typeRow := NewButtonRow(keyTypes...)
+	typeRow.ZonePrefix = prefix + "type-"
+	optionRow := NewButtonRow(rsaOptions...)
+	optionRow.ZonePrefix = prefix + "opt-"
+	saveBtn := NewButtonRow("Save")
+	saveBtn.ZonePrefix = prefix + "save-"
+
 	return &CreateScreen{
-		typeRow:     NewButtonRow(keyTypes...),
-		optionRow:   NewButtonRow(rsaOptions...),
+		typeRow:     typeRow,
+		optionRow:   optionRow,
 		commentIn:   comment,
 		dirInput:    dirIn,
 		filenameIn:  filename,
-		saveBtn:     NewButtonRow("Save"),
+		saveBtn:     saveBtn,
+		zonePrefix:  prefix,
 		lastKeyType: "ed25519",
 		focus:       createFocusType,
 	}
@@ -110,6 +122,12 @@ func (s *CreateScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		s.saveBtn.ClearPress()
 		return s, nil
 
+	case tea.MouseReleaseMsg:
+		if msg.Button != tea.MouseLeft {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
+
 	case tea.KeyPressMsg:
 		if s.focus == createFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
@@ -122,6 +140,55 @@ func (s *CreateScreen) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		return s.handleKeys(msg)
 	}
+	return s, nil
+}
+
+func (s *CreateScreen) handleMouse(x, y int) (Screen, tea.Cmd) {
+	if btn := s.typeRow.HandleMouse(x, y); btn >= 0 {
+		s.blurInputs()
+		s.focus = createFocusType
+		s.typeRow.Active = btn
+		s.syncKeyTypeChange()
+		s.updateButtonFocus()
+		return s, nil
+	}
+
+	if s.currentKeyType() != "ed25519" {
+		if btn := s.optionRow.HandleMouse(x, y); btn >= 0 {
+			s.blurInputs()
+			s.focus = createFocusOptions
+			s.optionRow.Active = btn
+			s.updateButtonFocus()
+			return s, nil
+		}
+	}
+
+	if inZoneBounds(s.zonePrefix+"comment", x, y) {
+		s.blurInputs()
+		s.focus = createFocusComment
+		s.updateButtonFocus()
+		return s, s.commentIn.Focus()
+	}
+	if inZoneBounds(s.zonePrefix+"dir", x, y) {
+		s.blurInputs()
+		s.focus = createFocusDir
+		s.updateButtonFocus()
+		return s, s.dirInput.Focus()
+	}
+	if inZoneBounds(s.zonePrefix+"filename", x, y) {
+		s.blurInputs()
+		s.focus = createFocusFilename
+		s.updateButtonFocus()
+		return s, s.filenameIn.Focus()
+	}
+
+	if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
+		s.blurInputs()
+		s.focus = createFocusSave
+		s.updateButtonFocus()
+		return s.doSave()
+	}
+
 	return s, nil
 }
 
@@ -319,8 +386,10 @@ func (s *CreateScreen) syncKeyTypeChange() {
 	switch kt {
 	case "rsa":
 		s.optionRow = NewButtonRow(rsaOptions...)
+		s.optionRow.ZonePrefix = s.zonePrefix + "opt-"
 	case "ecdsa":
 		s.optionRow = NewButtonRow(ecdsaOptions...)
+		s.optionRow.ZonePrefix = s.zonePrefix + "opt-"
 	}
 }
 
@@ -400,11 +469,11 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 		sections = append(sections, SectionBox("Options", s.optionRow.View(), w, focused(createFocusOptions)))
 	}
 
-	sections = append(sections, SectionBox("Comment", s.commentIn.View(), w, focused(createFocusComment)))
+	sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), w, focused(createFocusComment))))
 
-	sections = append(sections, SectionBox("Directory", s.dirInput.View(), w, focused(createFocusDir)))
+	sections = append(sections, zone.Mark(s.zonePrefix+"dir", SectionBox("Directory", s.dirInput.View(), w, focused(createFocusDir))))
 
-	sections = append(sections, SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename)))
+	sections = append(sections, zone.Mark(s.zonePrefix+"filename", SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename))))
 
 	fullPath := filepath.Join(s.dirInput.Value(), s.filenameIn.Value())
 	if _, err := os.Stat(fullPath); err == nil {
