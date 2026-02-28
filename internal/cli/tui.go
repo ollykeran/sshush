@@ -12,6 +12,7 @@ func newTUICommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Start the sshush TUI",
+		Args:  argsNoneOrHelp,
 		RunE:  runTUI,
 	}
 }

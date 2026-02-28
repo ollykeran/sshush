@@ -17,6 +17,7 @@ func newStopCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
 		Short: "Stop the sshush agent daemon",
+		Args:  argsNoneOrHelp,
 		RunE:  runStop,
 	}
 }
