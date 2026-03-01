@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
@@ -34,6 +33,10 @@ func runStart(cmd *cobra.Command, _ []string) error {
 // On success the export line goes to stdout (for eval) and all other output goes to stderr.
 // Used by both start and serve commands.
 func runStartDaemon(cmd *cobra.Command) error {
+	if env.Config == nil {
+		return style.NewOutput().Error("config not loaded").AsError()
+	}
+
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return err
@@ -42,10 +45,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.LoadConfig(absConfigPath)
-	if err != nil {
-		return err
-	}
+	cfg := *env.Config
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		absSocket, _ := filepath.Abs(cfg.SocketPath)
 		if !isTTY(os.Stdout) {

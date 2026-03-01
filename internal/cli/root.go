@@ -84,12 +84,22 @@ func NewRootCommand() *cobra.Command {
 		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			config.EnsureDefaultConfig(utils.ExpandHomeDirectory("~/.config/sshush/config.toml"))
-			configPath, _ := runtime.ResolveConfigPath(cmd)
-			cfg, _ := config.LoadConfig(configPath)
+			configPath, err := runtime.ResolveConfigPath(cmd)
+			if err != nil {
+				return err
+			}
 
+			overrides := LoadOverrides{}
 			if cmd.Flags().Changed("socket") {
-				cfg.SocketPath, _ = cmd.Flags().GetString("socket")
+				if v, err := cmd.Flags().GetString("socket"); err == nil {
+					overrides.SocketPath = v
+					overrides.SocketSet = true
+				}
+			}
+
+			cfg, err := LoadMergedConfig(configPath, overrides)
+			if err != nil {
+				return err
 			}
 
 			env.Config = &cfg
