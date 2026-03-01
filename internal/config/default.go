@@ -137,7 +137,6 @@ func init() {
 	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
 	content, err := os.ReadFile(bashrcPath)
 	if err == nil {
-		fmt.Print(string(content))
 		if !strings.Contains(string(content), "eval $(sshush)") {
 			AddEvalToShell()
 		}

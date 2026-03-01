@@ -7,3 +7,5 @@ id_*
 .bash*
 openspec/
 .actrc
+ok/
+.vscode/
