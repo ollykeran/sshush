@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -50,4 +51,55 @@ func TestLoad(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("missing file returns error", func(t *testing.T) {
+		tmp, err := os.CreateTemp("", "missing-config-*.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := tmp.Name()
+		tmp.Close()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := LoadConfig(path); err == nil {
+			t.Fatal("expected error for missing config file")
+		}
+	})
+
+	t.Run("tilde paths are expanded", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory available")
+		}
+		content := Config{
+			KeyPaths:   []string{"~/foo/id_ed25519"},
+			SocketPath: "~/.ssh/sshush.sock",
+		}
+		tmp, err := os.CreateTemp("", "tilde-config-*.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+
+		if err := toml.NewEncoder(tmp).Encode(content); err != nil {
+			t.Fatal(err)
+		}
+		if err := tmp.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadConfig(tmpPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.SocketPath; got != filepath.Join(home, ".ssh/sshush.sock") {
+			t.Errorf("SocketPath: got %q, want %q", got, filepath.Join(home, ".ssh/sshush.sock"))
+		}
+		if len(cfg.KeyPaths) != 1 || cfg.KeyPaths[0] != filepath.Join(home, "foo/id_ed25519") {
+			t.Errorf("KeyPaths: got %v, want [%q]", cfg.KeyPaths, filepath.Join(home, "foo/id_ed25519"))
+		}
+	})
 }
