@@ -38,7 +38,7 @@ func runReload(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	newCfg, err := config.LoadConfig(configPath)
+	newCfg, err := LoadMergedConfig(configPath, LoadOverrides{})
 	if err != nil {
 		return err
 	}
