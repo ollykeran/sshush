@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/config"
@@ -12,23 +13,28 @@ import (
 
 const defaultConfigPath = "~/.config/sshush/config.toml"
 
-const defaultSocketPath = "$XDG_RUNTIME_DIR/sshush.sock"
+const defaultSocketFileName = "sshush.sock"
 const defaultPidFileName = "sshush.pid"
 
 // ResolveConfigPath returns a full path to a config file.
 func ResolveConfigPath(cmd *cobra.Command) (string, error) {
 	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
 
+	// Config loads in this order
+	// config flag
 	if cmd.Flags().Changed("config") {
 		p, _ := cmd.Flags().GetString("config")
 		return utils.ExpandHomeDirectory(p), nil
 	}
-	if p := os.Getenv("SSHUSH_CONFIG"); p != "" {
-		return utils.ExpandHomeDirectory(p), nil
-	}
+	// ~/.config/sshush/config.toml
 	if _, err := os.Stat(expanded); err == nil {
 		return expanded, nil
 	}
+	// SSHUSH
+	if p := os.Getenv("SSHUSH_CONFIG"); p != "" {
+		return utils.ExpandHomeDirectory(p), nil
+	}
+	// ./config.toml
 	if _, err := os.Stat("./config.toml"); err == nil {
 		return "./config.toml", nil
 	}
@@ -58,22 +64,21 @@ func getXDGRuntimeDir() string {
 func PidFilePath() string {
 	runtimeDir := getXDGRuntimeDir()
 	if runtimeDir != "" {
-		return runtimeDir + defaultPidFileName
+		return filepath.Join(runtimeDir, defaultPidFileName)
 	}
 	return utils.ExpandHomeDirectory("~/.config/sshush/sshush.pid")
 }
 
 // ResolveSocketPath returns socket path from config first, then SSH_AUTH_SOCK.
 func ResolveSocketPath(cfg *config.Config) (string, error) {
-	if cfg != nil && cfg.SocketPath != "" {
+	if cfg != nil && strings.TrimSpace(cfg.SocketPath) != "" {
 		return cfg.SocketPath, nil
 	}
-	if p := os.Getenv("SSH_AUTH_SOCK"); p != "" {
+	if p := strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK")); p != "" {
 		return p, nil
 	}
 	if runtimeDir := getXDGRuntimeDir(); runtimeDir != "" {
-		cfg.SocketPath = runtimeDir + defaultSocketPath
-		return cfg.SocketPath, nil
+		return filepath.Join(runtimeDir, defaultSocketFileName), nil
 	}
 	return "", style.NewOutput().
 		Error("socket path required").

@@ -20,18 +20,18 @@ func newCreateCommand() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
-		Use:   "create <rsa|ecdsa|ed25519>",
-		Short: "Create a new SSH keypair",
-		Args:  cobra.ExactArgs(1),
+		Use:     "create <rsa|ecdsa|ed25519> <bits> -o <output-path>",
+		Example: "sshush create rsa 2048 -o ~/.ssh/id_rsa",
+		Short:   "Create a new SSH keypair",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCreate(args[0], bits, comment, outputPath, force)
 		},
 	}
 
-	cmd.Flags().IntVarP(&bits, "bits", "b", 0, "key bits (rsa: 2048/3072/4096, ecdsa: 256/384/521)")
-	cmd.Flags().StringVarP(&comment, "comment", "C", keys.DefaultComment(), "comment for the key")
-	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "private key output path (default ~/.ssh/id_<keytype>)")
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite output file if it exists")
+	cmd.Flags().IntVarP(&bits, "bits", "b", 4096, "key bits (rsa: 2048/3072/4096, ecdsa: 256/384/521)")
+	cmd.Flags().StringVarP(&comment, "comment", "C", keys.DefaultComment(), "Comment for the key pair")
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Private key output path (default ~/.ssh/id_<keytype>)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite output file, if it exists")
 
 	return cmd
 }
