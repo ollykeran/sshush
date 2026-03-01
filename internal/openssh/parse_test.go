@@ -10,7 +10,7 @@ import (
 	"encoding/pem"
 	"testing"
 
-	"golang.org/x/crypto/ssh"
+	ssh "golang.org/x/crypto/ssh"
 )
 
 func marshalOpenSSHWithComment(key interface{}, comment string) []byte {

@@ -13,13 +13,13 @@ build-sshushd: deps
     go build -ldflags '{{ ldflags }}' -o {{ binaryd }} ./cmd/sshushd
 
 build: build-sshushd
-    go build -ldflags '{{ ldflags }}' -o {{ binary }} .
+    go build -ldflags '{{ ldflags }}' -o {{ binary }} ./cmd/sshush
 
 test:
     go test ./... -v
 
 run:
-    go run .
+    go run ./cmd/sshush
 
 clean:
     rm -rf {{ build_dir }}

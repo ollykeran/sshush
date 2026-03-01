@@ -147,7 +147,7 @@ func (s *Skeleton) navMoveLeft() (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 		s.navFocus = navFocusTabs
-		return s, s.switchTab(len(s.pages)-1)
+		return s, s.switchTab(len(s.pages) - 1)
 	default:
 		s.navFocus = navFocusTabs
 		if s.activeTab > 0 {

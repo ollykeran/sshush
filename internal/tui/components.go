@@ -6,8 +6,8 @@ import (
 
 	"charm.land/bubbles/v2/filepicker"
 	"charm.land/bubbles/v2/table"
-	"charm.land/lipgloss/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 )
 
@@ -150,7 +150,6 @@ func (kt KeyTable) HandleMouse(x, y int) int {
 	}
 	return row
 }
-
 
 func (kt KeyTable) SelectedRow() table.Row {
 	return kt.Table.SelectedRow()

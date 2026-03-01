@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
+	ssh "golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func mustMarshalKey(t *testing.T, comment string) []byte {
@@ -33,7 +33,7 @@ func TestAddKeyFromPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	if err := AddKeyFromPath(keyring, path); err != nil {
 		t.Fatalf("AddKeyFromPath: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestAddKeyFromPath(t *testing.T) {
 }
 
 func TestAddKeyFromPath_missingFile(t *testing.T) {
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	err := AddKeyFromPath(keyring, filepath.Join(t.TempDir(), "nonexistent"))
 	if err == nil {
 		t.Fatal("want error for missing file")
@@ -67,7 +67,7 @@ func TestLoadKeys_skipsBadPaths(t *testing.T) {
 	badPath := filepath.Join(dir, "missing")
 
 	var errOut bytes.Buffer
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	err := LoadKeys(keyring, []string{badPath, validPath}, &errOut)
 	if err != nil {
 		t.Fatalf("LoadKeys: %v", err)

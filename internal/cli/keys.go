@@ -43,6 +43,11 @@ func ListKeysTo(keyring sshagent.Agent, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	return ListKeysSnapshotTo(keys, w)
+}
+
+// ListKeysSnapshotTo writes a pre-fetched key list to w.
+func ListKeysSnapshotTo(keys []*sshagent.Key, w io.Writer) error {
 	if len(keys) == 0 {
 		style.NewOutput().Warn("no keys loaded").PrintTo(w)
 		return nil

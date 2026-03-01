@@ -4,16 +4,14 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh/agent"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newStartCommand() *cobra.Command {
@@ -36,7 +34,7 @@ func runStart(cmd *cobra.Command, _ []string) error {
 // On success the export line goes to stdout (for eval) and all other output goes to stderr.
 // Used by both start and serve commands.
 func runStartDaemon(cmd *cobra.Command) error {
-	configPath, err := utils.ResolveConfigPath(cmd)
+	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return err
 	}
@@ -59,7 +57,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 		if err == nil {
 			defer conn.Close()
 			out.Spacer()
-			AppendKeysTo(agent.NewClient(conn), out)
+			AppendKeysTo(sshagent.NewClient(conn), out)
 		}
 		out.PrintErr()
 		return nil
@@ -78,7 +76,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 		out.Error("no keys will be loaded")
 	}
 
-	pidFilePath := utils.PidFilePath()
+	pidFilePath := runtime.PidFilePath()
 	if _, err := os.Stat(pidFilePath); err == nil {
 		return style.NewOutput().
 			Error("sshushd already running (pidfile " + pidFilePath + " exists)").
@@ -86,30 +84,8 @@ func runStartDaemon(cmd *cobra.Command) error {
 			AsError()
 	}
 
-	sshushdPath, err := findSshushdBinary()
-	if err != nil {
-		return err
-	}
-	child := exec.Command(sshushdPath)
-	child.Env = append(os.Environ(), "SSHUSH_CONFIG="+absConfigPath)
-	child.Stdin = nil
-	child.Stdout = nil
-	child.Stderr = nil
-	if err := child.Start(); err != nil {
-		return style.NewOutput().Error("start sshushd: " + err.Error()).AsError()
-	}
-	if sshushd.WaitForSocket(cfg.SocketPath, 50, 10*time.Millisecond) {
-		return startSuccess(out, cfg.SocketPath)
-	}
-	done := make(chan struct{})
-	go func() {
-		child.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return style.NewOutput().Error("sshushd exited before socket was ready").AsError()
-	case <-time.After(100 * time.Millisecond):
+	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
+		return style.NewOutput().Error(err.Error()).AsError()
 	}
 	return startSuccess(out, cfg.SocketPath)
 }
@@ -132,7 +108,7 @@ func startSuccess(out *style.Output, socketPath string) error {
 	if err == nil {
 		defer conn.Close()
 		out.Spacer()
-		AppendKeysTo(agent.NewClient(conn), out)
+		AppendKeysTo(sshagent.NewClient(conn), out)
 	}
 
 	out.PrintErr()
@@ -145,23 +121,4 @@ func isTTY(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-func findSshushdBinary() (string, error) {
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Dir(execPath)
-	sshushdPath := filepath.Join(dir, "sshushd")
-	if _, err := os.Stat(sshushdPath); err == nil {
-		return sshushdPath, nil
-	}
-	path, err := exec.LookPath("sshushd")
-	if err == nil {
-		return path, nil
-	}
-	return "", style.NewOutput().
-		Error("sshushd binary not found (looked in " + dir + " and PATH)").
-		AsError()
 }

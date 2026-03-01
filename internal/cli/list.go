@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"net"
+	"os"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 func newListCommand() *cobra.Command {
@@ -25,11 +25,9 @@ func runList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	conn, err := net.Dial("unix", socketPath)
+	keys, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	client := agent.NewClient(conn)
-	return ListKeys(client)
+	return ListKeysSnapshotTo(keys, os.Stdout)
 }

@@ -2,13 +2,11 @@ package cli
 
 import (
 	"fmt"
-	"net"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newRemoveCommand() *cobra.Command {
@@ -31,13 +29,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
-	before, err := client.List()
+	before, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
 		return err
 	}
@@ -61,12 +53,12 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 	for _, key := range before {
 		if wantFP[ssh.FingerprintSHA256(key)] {
-			if err := client.Remove(key); err != nil {
+			if _, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, ssh.FingerprintSHA256(key)); err != nil {
 				return style.NewOutput().Error(fmt.Sprintf("remove %s: %v", key.Comment, err)).AsError()
 			}
 		}
 	}
-	after, _ := client.List()
+	after, _ := agent.ListKeysFromSocket(socketPath)
 	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }
