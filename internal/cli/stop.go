@@ -4,9 +4,9 @@ import (
 	"errors"
 	"os"
 
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +20,7 @@ func newStopCommand() *cobra.Command {
 }
 
 func runStop(cmd *cobra.Command, _ []string) error {
-	pidFilePath := utils.PidFilePath()
+	pidFilePath := runtime.PidFilePath()
 	if err := sshushd.StopDaemon(pidFilePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return style.NewOutput().

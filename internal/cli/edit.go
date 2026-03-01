@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/keys"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
@@ -21,19 +22,25 @@ func newEditCommand() *cobra.Command {
 	var outputFlag string
 
 	cmd := &cobra.Command{
-		Use:   "edit <private-key-filepath>",
-		Short: "Edit an SSH private key comment",
-		Args:  cobra.ExactArgs(1),
+		Use:     "edit <private-key-filepath>",
+		Long:    "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
+		Example: "sshush edit ~/.ssh/id_ed25519 --comment 'user@host' --copy --output ~/.ssh/id_ed25519.new",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				cmd.Help()
+				cmd.SilenceUsage = true
+				return style.NewOutput().Error("exactly one private key filepath is required").AsError()
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEdit(args[0], editorFlag, commentFlag, copyFlag, outputFlag)
 		},
 	}
-
 	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vi)")
 	cmd.Flags().StringVarP(&commentFlag, "comment", "C", "", "new key comment (skip editor)")
-	cmd.Flags().BoolVar(&copyFlag, "copy", false, "write edited key to a new file")
+	cmd.Flags().BoolVar(&copyFlag, "copy", false, "write edited key to a new file (requires --output)")
 	cmd.Flags().StringVarP(&outputFlag, "output", "o", "", "destination path when using --copy")
-
 	return cmd
 }
 
@@ -60,7 +67,7 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 
 	comment := commentFlag
 	if strings.TrimSpace(comment) == "" {
-		comment, err = editCommentWithEditor(parsed.Comment, resolveEditor(editorFlag))
+		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
 			return style.NewOutput().Error(err.Error()).AsError()
 		}
@@ -107,13 +114,7 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 }
 
 func resolveEditor(editorFlag string) string {
-	if strings.TrimSpace(editorFlag) != "" {
-		return strings.TrimSpace(editorFlag)
-	}
-	if strings.TrimSpace(os.Getenv("EDITOR")) != "" {
-		return strings.TrimSpace(os.Getenv("EDITOR"))
-	}
-	return "vi"
+	return runtime.ResolveEditor(editorFlag)
 }
 
 func editCommentWithEditor(currentComment, editor string) (string, error) {

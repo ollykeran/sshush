@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
@@ -73,16 +74,7 @@ func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config
 
 // getSocketPath returns the agent socket path from config or SSH_AUTH_SOCK.
 func getSocketPath() (string, error) {
-	if env.Config != nil && env.Config.SocketPath != "" {
-		return env.Config.SocketPath, nil
-	}
-	if p := os.Getenv("SSH_AUTH_SOCK"); p != "" {
-		return p, nil
-	}
-	return "", style.NewOutput().
-		Error("socket path required").
-		Info("set SSH_AUTH_SOCK or use --socket or --config").
-		AsError()
+	return runtime.ResolveSocketPath(env.Config)
 }
 
 func NewRootCommand() *cobra.Command {
@@ -93,7 +85,7 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			config.EnsureDefaultConfig(utils.ExpandHomeDirectory("~/.config/sshush/config.toml"))
-			configPath, _ := utils.ResolveConfigPath(cmd)
+			configPath, _ := runtime.ResolveConfigPath(cmd)
 			cfg, _ := config.LoadConfig(configPath)
 
 			if cmd.Flags().Changed("socket") {
