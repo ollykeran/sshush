@@ -23,6 +23,23 @@ func setDefaults(cfg *Config) {
 	cfg.KeyPaths = paths
 }
 
+// EnsureDefaultConfig creates ~/.config/sshush/ and writes an example
+// config.toml if neither the directory nor the file exist yet.
+func EnsureDefaultConfig(path string) {
+	const exampleConfig = `# Example config.toml
+socket_path = "~/.ssh/sshush.sock"
+key_paths = ["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]
+`
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	os.WriteFile(path, []byte(exampleConfig), 0o644)
+}
+
 func LoadConfig(path string) (Config, error) {
 	cfg := Config{}
 	setDefaults(&cfg)

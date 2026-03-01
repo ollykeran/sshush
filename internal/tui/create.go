@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -11,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
-	"golang.org/x/crypto/ssh"
+	"github.com/ollykeran/sshush/internal/keys"
 )
 
 type keyGenDoneMsg struct {
@@ -63,7 +62,7 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 
 	comment := textinput.New()
 	comment.Prompt = ""
-	comment.SetValue(defaultComment())
+	comment.SetValue(keys.DefaultComment())
 
 	filename := textinput.New()
 	filename.Prompt = ""
@@ -432,7 +431,7 @@ func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
 	bits := s.currentBits()
 	comment := s.commentIn.Value()
 	if comment == "" {
-		comment = defaultComment()
+		comment = keys.DefaultComment()
 	}
 
 	return s, tea.Batch(generateKeyCmd(keyType, bits, comment, dir, filename), ButtonFlashCmd())
@@ -543,43 +542,20 @@ func (s *CreateScreen) StatusTextRaw() (string, bool) {
 	return s.status, s.statusErr
 }
 
-func defaultComment() string {
-	u, err := user.Current()
-	name := "user"
-	if err == nil {
-		name = u.Username
-	}
-	host, err := os.Hostname()
-	if err != nil {
-		host = "localhost"
-	}
-	return name + "@" + host
-}
-
 func generateKeyCmd(keyType string, bits int, comment, dir, filename string) tea.Cmd {
 	return func() tea.Msg {
-		privPEM, pubAuth, err := GenerateKey(keyType, bits, comment)
+		privPEM, pubAuth, err := keys.Generate(keyType, bits, comment)
 		if err != nil {
 			return keyGenDoneMsg{err: err}
 		}
 		privPath := filepath.Join(dir, filename)
 		pubPath := privPath + ".pub"
 
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return keyGenDoneMsg{err: fmt.Errorf("mkdir: %w", err)}
-		}
-		if err := os.WriteFile(privPath, privPEM, 0600); err != nil {
-			return keyGenDoneMsg{err: fmt.Errorf("write private key: %w", err)}
-		}
-		if err := os.WriteFile(pubPath, pubAuth, 0644); err != nil {
-			return keyGenDoneMsg{err: fmt.Errorf("write public key: %w", err)}
+		if err := keys.SavePair(dir, filename, privPEM, pubAuth); err != nil {
+			return keyGenDoneMsg{err: fmt.Errorf("save keypair: %w", err)}
 		}
 
-		pubKey, _, err := parsePublicKeyFromPEM(privPEM)
-		pubKeyStr := string(pubAuth)
-		if err == nil {
-			pubKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pubKey))) + " " + comment
-		}
+		pubKeyStr := strings.TrimSpace(string(pubAuth))
 
 		return keyGenDoneMsg{
 			pubKeyStr: pubKeyStr,
@@ -587,16 +563,4 @@ func generateKeyCmd(keyType string, bits int, comment, dir, filename string) tea
 			pubPath:   pubPath,
 		}
 	}
-}
-
-func parsePublicKeyFromPEM(privPEM []byte) (ssh.PublicKey, interface{}, error) {
-	key, err := ssh.ParseRawPrivateKey(privPEM)
-	if err != nil {
-		return nil, nil, err
-	}
-	signer, err := ssh.NewSignerFromKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return signer.PublicKey(), key, nil
 }

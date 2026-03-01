@@ -92,6 +92,7 @@ func NewRootCommand() *cobra.Command {
 		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			config.EnsureDefaultConfig(utils.ExpandHomeDirectory("~/.config/sshush/config.toml"))
 			configPath, _ := utils.ResolveConfigPath(cmd)
 			cfg, _ := config.LoadConfig(configPath)
 

@@ -1,2 +1,4 @@
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
 --container-architecture linux/amd64
+--bind
+--container-options -u 1000:1000
