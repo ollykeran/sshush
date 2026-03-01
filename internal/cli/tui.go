@@ -3,8 +3,8 @@ package cli
 import (
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/tui"
-	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +23,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	socketPath, _ := getSocketPath()
 	configPath := ""
-	if p, err := utils.ResolveConfigPath(cmd); err == nil {
+	if p, err := runtime.ResolveConfigPath(cmd); err == nil {
 		configPath = p
 	}
 

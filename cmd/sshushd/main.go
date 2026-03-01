@@ -4,18 +4,13 @@ import (
 	"os"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/utils"
 )
 
-const defaultConfigPath = "~/.config/sshush/config.toml"
-
 func main() {
-	configPath := os.Getenv("SSHUSH_CONFIG")
-	if configPath == "" {
-		configPath = utils.ExpandHomeDirectory(defaultConfigPath)
-	}
+	configPath := runtime.ResolveDaemonConfigPath()
 	config.EnsureDefaultConfig(configPath)
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -26,7 +21,7 @@ func main() {
 		style.NewOutput().Error("sshushd: agent already running at " + cfg.SocketPath).PrintErr()
 		os.Exit(1)
 	}
-	pidFilePath := utils.PidFilePath()
+	pidFilePath := runtime.PidFilePath()
 	if err := sshushd.RunDaemonOnly(cfg.SocketPath, cfg.KeyPaths, pidFilePath); err != nil {
 		style.NewOutput().Error("sshushd: " + err.Error()).PrintErr()
 		os.Exit(1)

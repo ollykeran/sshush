@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -34,7 +34,7 @@ func runStart(cmd *cobra.Command, _ []string) error {
 // On success the export line goes to stdout (for eval) and all other output goes to stderr.
 // Used by both start and serve commands.
 func runStartDaemon(cmd *cobra.Command) error {
-	configPath, err := utils.ResolveConfigPath(cmd)
+	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 		out.Error("no keys will be loaded")
 	}
 
-	pidFilePath := utils.PidFilePath()
+	pidFilePath := runtime.PidFilePath()
 	if _, err := os.Stat(pidFilePath); err == nil {
 		return style.NewOutput().
 			Error("sshushd already running (pidfile " + pidFilePath + " exists)").

@@ -13,8 +13,8 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
-	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -618,7 +618,7 @@ func startDaemonCmd(configPath, socketPath string) tea.Cmd {
 
 func stopDaemonCmd() tea.Cmd {
 	return func() tea.Msg {
-		pidFilePath := utils.PidFilePath()
+		pidFilePath := runtime.PidFilePath()
 		if _, err := os.Stat(pidFilePath); os.IsNotExist(err) {
 			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
@@ -631,7 +631,7 @@ func stopDaemonCmd() tea.Cmd {
 
 func reloadDaemonCmd(configPath, socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		pidFilePath := utils.PidFilePath()
+		pidFilePath := runtime.PidFilePath()
 		if err := sshushd.ReloadDaemon(configPath, socketPath, pidFilePath); err != nil {
 			return agentStatusMsg{text: err.Error(), isErr: true}
 		}

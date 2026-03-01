@@ -7,9 +7,9 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -34,7 +34,7 @@ type keyInfo struct {
 }
 
 func runReload(cmd *cobra.Command, _ []string) error {
-	configPath, err := utils.ResolveConfigPath(cmd)
+	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return err
 	}
@@ -43,7 +43,7 @@ func runReload(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	pidFilePath := utils.PidFilePath()
+	pidFilePath := runtime.PidFilePath()
 
 	// Try connecting to the socket from the new config.
 	conn, err := net.Dial("unix", newCfg.SocketPath)
