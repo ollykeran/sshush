@@ -3,12 +3,9 @@ package tui
 import (
 	"fmt"
 	"image/color"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
@@ -16,11 +13,9 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
-	"github.com/ollykeran/sshush/internal/config"
-	"github.com/ollykeran/sshush/internal/openssh"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
-	"github.com/ollykeran/sshush/internal/utils"
-	"golang.org/x/crypto/ssh"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -595,14 +590,9 @@ func fetchAgentKeysCmd(socketPath string, refresh bool) tea.Cmd {
 		if socketPath == "" {
 			return agentKeysMsg{err: fmt.Errorf("no socket path configured")}
 		}
-		conn, err := net.Dial("unix", socketPath)
+		keys, err := agent.ListKeysFromSocket(socketPath)
 		if err != nil {
 			return agentKeysMsg{err: fmt.Errorf("agent not running")}
-		}
-		defer conn.Close()
-		keys, err := sshagent.NewClient(conn).List()
-		if err != nil {
-			return agentKeysMsg{err: err}
 		}
 		return agentKeysMsg{keys: keys, refresh: refresh}
 	}
@@ -616,25 +606,11 @@ func checkDaemonCmd(socketPath string) tea.Cmd {
 
 func startDaemonCmd(configPath, socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		if sshushd.CheckAlreadyRunning(socketPath) {
-			return agentStatusMsg{text: "already running"}
-		}
-		sshushdPath, err := findSshushdBinary()
-		if err != nil {
-			return agentStatusMsg{text: "sshushd binary not found", isErr: true}
-		}
-		child := exec.Command(sshushdPath)
-		if configPath != "" {
-			child.Env = append(os.Environ(), "SSHUSH_CONFIG="+configPath)
-		}
-		child.Stdin = nil
-		child.Stdout = nil
-		child.Stderr = nil
-		if err := child.Start(); err != nil {
-			return agentStatusMsg{text: "start failed: " + err.Error(), isErr: true}
-		}
-		if !sshushd.WaitForSocket(socketPath, 50, 10*time.Millisecond) {
-			return agentStatusMsg{text: "started but socket not ready", isErr: true}
+		if err := sshushd.StartDaemon(configPath, socketPath); err != nil {
+			if err.Error() == "already running" {
+				return agentStatusMsg{text: "already running"}
+			}
+			return agentStatusMsg{text: err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "started"}
 	}
@@ -642,11 +618,11 @@ func startDaemonCmd(configPath, socketPath string) tea.Cmd {
 
 func stopDaemonCmd() tea.Cmd {
 	return func() tea.Msg {
-		pidFilePath := utils.PidFilePath()
+		pidFilePath := runtime.PidFilePath()
 		if _, err := os.Stat(pidFilePath); os.IsNotExist(err) {
 			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
-		if err := stopDaemon(pidFilePath); err != nil {
+		if err := sshushd.StopDaemon(pidFilePath); err != nil {
 			return agentStatusMsg{text: "stop failed", isErr: true}
 		}
 		return agentStatusMsg{text: "stopped"}
@@ -655,26 +631,9 @@ func stopDaemonCmd() tea.Cmd {
 
 func reloadDaemonCmd(configPath, socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		pidFilePath := utils.PidFilePath()
-		_ = stopDaemon(pidFilePath)
-		time.Sleep(100 * time.Millisecond)
-
-		sshushdPath, err := findSshushdBinary()
-		if err != nil {
-			return agentStatusMsg{text: "sshushd binary not found", isErr: true}
-		}
-		child := exec.Command(sshushdPath)
-		if configPath != "" {
-			child.Env = append(os.Environ(), "SSHUSH_CONFIG="+configPath)
-		}
-		child.Stdin = nil
-		child.Stdout = nil
-		child.Stderr = nil
-		if err := child.Start(); err != nil {
-			return agentStatusMsg{text: "reload failed: " + err.Error(), isErr: true}
-		}
-		if !sshushd.WaitForSocket(socketPath, 50, 10*time.Millisecond) {
-			return agentStatusMsg{text: "reload: socket not ready", isErr: true}
+		pidFilePath := runtime.PidFilePath()
+		if err := sshushd.ReloadDaemon(configPath, socketPath, pidFilePath); err != nil {
+			return agentStatusMsg{text: err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "reloaded"}
 	}
@@ -682,37 +641,20 @@ func reloadDaemonCmd(configPath, socketPath string) tea.Cmd {
 
 func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		conn, err := net.Dial("unix", socketPath)
+		removed, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, fingerprint)
 		if err != nil {
 			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		keys, err := client.List()
-		if err != nil {
-			return agentStatusMsg{text: err.Error(), isErr: true}
+		if !removed {
+			return agentStatusMsg{text: "key not found", isErr: true}
 		}
-		for _, k := range keys {
-			if ssh.FingerprintSHA256(k) == fingerprint {
-				if err := client.Remove(k); err != nil {
-					return agentStatusMsg{text: "remove failed: " + err.Error(), isErr: true}
-				}
-				return agentStatusMsg{text: "key removed"}
-			}
-		}
-		return agentStatusMsg{text: "key not found", isErr: true}
+		return agentStatusMsg{text: "key removed"}
 	}
 }
 
 func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 	return func() tea.Msg {
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return agentStatusMsg{text: "agent not running", isErr: true}
-		}
-		defer conn.Close()
-		keyring := sshagent.NewClient(conn)
-		if err := agent.AddKeyFromPath(keyring, path); err != nil {
+		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key added: " + filepath.Base(path)}
@@ -721,122 +663,18 @@ func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 
 func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return agentLockResultMsg{err: fmt.Errorf("agent not running")}
-		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		err = client.Lock([]byte(passphrase))
-		return agentLockResultMsg{err: err}
+		return agentLockResultMsg{err: agent.LockSocket(socketPath, []byte(passphrase))}
 	}
 }
 
 func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return agentUnlockResultMsg{err: fmt.Errorf("agent not running")}
-		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		err = client.Unlock([]byte(passphrase))
-		return agentUnlockResultMsg{err: err}
+		return agentUnlockResultMsg{err: agent.UnlockSocket(socketPath, []byte(passphrase))}
 	}
 }
 
 func discoverKeysCmd(configPath string) tea.Cmd {
 	return func() tea.Msg {
-		seen := make(map[string]bool)
-		var paths []string
-
-		addPath := func(p string) {
-			abs, err := filepath.Abs(p)
-			if err != nil {
-				abs = p
-			}
-			if seen[abs] {
-				return
-			}
-			if _, err := os.Stat(abs); err != nil {
-				return
-			}
-			seen[abs] = true
-			paths = append(paths, abs)
-		}
-
-		if configPath != "" {
-			cfg, err := config.LoadConfig(configPath)
-			if err == nil {
-				for _, p := range cfg.KeyPaths {
-					addPath(p)
-				}
-			}
-		}
-
-		var searchDirs []string
-		if home, err := os.UserHomeDir(); err == nil {
-			searchDirs = append(searchDirs, filepath.Join(home, ".ssh"))
-		}
-		if cwd, err := os.Getwd(); err == nil {
-			searchDirs = append(searchDirs, cwd)
-		}
-
-		for _, dir := range searchDirs {
-			entries, _ := os.ReadDir(dir)
-			for _, e := range entries {
-				if e.IsDir() || strings.HasSuffix(e.Name(), ".pub") {
-					continue
-				}
-				path := filepath.Join(dir, e.Name())
-				if seen[path] {
-					continue
-				}
-				data, err := os.ReadFile(path)
-				if err != nil || len(data) == 0 {
-					continue
-				}
-				if _, err := openssh.ParsePrivateKeyBlob(data); err == nil {
-					addPath(path)
-				}
-			}
-		}
-
-		return foundKeysMsg{paths: paths}
+		return foundKeysMsg{paths: agent.DiscoverKeyPaths(configPath)}
 	}
-}
-
-// Shared helpers used by daemon commands. These duplicate the cli package's
-// helpers to avoid an import cycle. They're small enough that duplication is
-// preferable to a shared package.
-
-func findSshushdBinary() (string, error) {
-	self, err := os.Executable()
-	if err == nil {
-		candidate := filepath.Join(filepath.Dir(self), "sshushd")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-	return exec.LookPath("sshushd")
-}
-
-func stopDaemon(pidFilePath string) error {
-	data, err := os.ReadFile(pidFilePath)
-	if err != nil {
-		return err
-	}
-	var pid int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil {
-		return err
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	if err := proc.Signal(os.Interrupt); err != nil {
-		return err
-	}
-	_ = os.Remove(pidFilePath)
-	return nil
 }

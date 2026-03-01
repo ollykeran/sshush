@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/style"
-	"golang.org/x/crypto/ssh/agent"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 var ErrAlreadyRunning = errors.New("agent already running on socket")
@@ -22,7 +22,7 @@ type errStyled struct {
 func (e *errStyled) Error() string { return e.styled }
 func (e *errStyled) Unwrap() error { return e.err }
 
-func ListenAndServe(ctx context.Context, socketPath string, keyring agent.ExtendedAgent) error {
+func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent) error {
 	os.MkdirAll(filepath.Dir(socketPath), 0700)
 	if conn, err := net.Dial("unix", socketPath); err == nil {
 		conn.Close()
@@ -47,6 +47,6 @@ func ListenAndServe(ctx context.Context, socketPath string, keyring agent.Extend
 		if err != nil {
 			return err
 		}
-		go agent.ServeAgent(keyring, conn)
+		go sshagent.ServeAgent(keyring, conn)
 	}
 }
