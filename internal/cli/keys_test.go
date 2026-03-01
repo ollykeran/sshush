@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"golang.org/x/crypto/ssh/agent"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestListKeysTo(t *testing.T) {
@@ -14,8 +14,8 @@ func TestListKeysTo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyring := agent.NewKeyring()
-	err = keyring.Add(agent.AddedKey{PrivateKey: priv, Comment: "test-comment"})
+	keyring := sshagent.NewKeyring()
+	err = keyring.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "test-comment"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestListKeysTo(t *testing.T) {
 }
 
 func TestListKeysTo_Empty(t *testing.T) {
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	var buf bytes.Buffer
 	err := ListKeysTo(keyring, &buf)
 	if err != nil {

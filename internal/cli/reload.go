@@ -7,10 +7,11 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/ssh"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -72,7 +73,7 @@ func runReload(cmd *cobra.Command, _ []string) error {
 
 	// Socket changed or agent unreachable: stop the old daemon and start a new one.
 	if needsRestart {
-		_ = stopDaemon(pidFilePath) // best-effort; may already be gone
+		_ = sshushd.StopDaemon(pidFilePath) // best-effort; may already be gone
 		style.NewOutput().Info("restarting sshushd with new config...").Print()
 		return runStartDaemon(cmd)
 	}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
-	"github.com/ollykeran/sshush/internal/openssh"
-	"golang.org/x/crypto/ssh"
+	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/keys"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -457,29 +457,16 @@ func (s *ExportScreen) StatusTextRaw() (string, bool) {
 
 func exportLoadKeyCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		data, err := os.ReadFile(path)
+		parsed, _, signer, err := keys.LoadKeyMaterial(path)
 		if err != nil {
+			if strings.Contains(err.Error(), "encrypted keys not supported") {
+				return exportKeyLoadedMsg{err: fmt.Errorf("not an unencrypted OpenSSH key")}
+			}
 			return exportKeyLoadedMsg{err: err}
 		}
-
-		parsed, err := openssh.ParsePrivateKeyBlob(data)
-		if err != nil {
-			return exportKeyLoadedMsg{err: fmt.Errorf("not an unencrypted OpenSSH key")}
-		}
-
-		rawKey, err := ssh.ParseRawPrivateKey(data)
-		if err != nil {
-			return exportKeyLoadedMsg{err: err}
-		}
-		signer, err := ssh.NewSignerFromKey(rawKey)
-		if err != nil {
-			return exportKeyLoadedMsg{err: err}
-		}
-
-		pubKeyStr := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " " + parsed.Comment
 
 		return exportKeyLoadedMsg{
-			pubKeyStr:  pubKeyStr,
+			pubKeyStr:  strings.TrimSpace(keys.FormatPublicKey(signer, parsed.Comment)),
 			keyType:    parsed.KeyType,
 			sourcePath: path,
 		}
@@ -491,14 +478,9 @@ func exportFetchAgentKeysCmd(socketPath string) tea.Cmd {
 		if socketPath == "" {
 			return exportAgentKeysMsg{err: fmt.Errorf("no socket path")}
 		}
-		conn, err := net.Dial("unix", socketPath)
+		keys, err := agent.ListKeysFromSocket(socketPath)
 		if err != nil {
 			return exportAgentKeysMsg{err: fmt.Errorf("agent not running")}
-		}
-		defer conn.Close()
-		keys, err := sshagent.NewClient(conn).List()
-		if err != nil {
-			return exportAgentKeysMsg{err: err}
 		}
 		return exportAgentKeysMsg{keys: keys}
 	}

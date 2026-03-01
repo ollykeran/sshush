@@ -2,12 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"net"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newAddCommand() *cobra.Command {
@@ -34,26 +32,23 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	conn, err := net.Dial("unix", socketPath)
+	before, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
-	before, _ := client.List()
 	for _, arg := range paths {
-		if err := agent.AddKeyFromPath(client, arg); err == nil {
+		if err := agent.AddKeyToSocketFromPath(socketPath, arg); err == nil {
 			continue
 		}
 		resolved, resolveErr := resolveKeyPathByComment(arg)
 		if resolveErr != nil {
 			return resolveErr
 		}
-		if err := agent.AddKeyFromPath(client, resolved); err != nil {
+		if err := agent.AddKeyToSocketFromPath(socketPath, resolved); err != nil {
 			return err
 		}
 	}
-	after, _ := client.List()
+	after, _ := agent.ListKeysFromSocket(socketPath)
 	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }

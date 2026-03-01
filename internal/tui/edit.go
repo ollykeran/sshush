@@ -1,10 +1,7 @@
 package tui
 
 import (
-	"encoding/pem"
 	"fmt"
-	"net"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,8 +10,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
-	"github.com/ollykeran/sshush/internal/openssh"
-	"golang.org/x/crypto/ssh"
+	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/keys"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -431,34 +429,21 @@ func truncate(s string, maxLen int) string {
 
 func editLoadKeyCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		data, err := os.ReadFile(path)
+		parsed, rawKey, signer, err := keys.LoadKeyMaterial(path)
 		if err != nil {
+			if strings.Contains(err.Error(), "encrypted keys not supported") {
+				return editKeyLoadedMsg{err: fmt.Errorf("not an unencrypted OpenSSH key")}
+			}
 			return editKeyLoadedMsg{err: err}
 		}
 
-		parsed, err := openssh.ParsePrivateKeyBlob(data)
-		if err != nil {
-			return editKeyLoadedMsg{err: fmt.Errorf("not an unencrypted OpenSSH key")}
-		}
-
-		rawKey, err := ssh.ParseRawPrivateKey(data)
-		if err != nil {
-			return editKeyLoadedMsg{err: err}
-		}
-
-		signer, err := ssh.NewSignerFromKey(rawKey)
-		if err != nil {
-			return editKeyLoadedMsg{err: err}
-		}
-
-		pubKeyStr := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 		fp := ssh.FingerprintSHA256(signer.PublicKey())
 
 		return editKeyLoadedMsg{
 			keyType:     parsed.KeyType,
 			comment:     parsed.Comment,
 			fingerprint: fp,
-			pubKeyStr:   pubKeyStr + " " + parsed.Comment,
+			pubKeyStr:   strings.TrimSpace(keys.FormatPublicKey(signer, parsed.Comment)),
 			rawKey:      rawKey,
 			filePath:    path,
 		}
@@ -467,28 +452,8 @@ func editLoadKeyCmd(path string) tea.Cmd {
 
 func editSaveKeyCmd(rawKey interface{}, comment, filePath string) tea.Cmd {
 	return func() tea.Msg {
-		signer, err := ssh.NewSignerFromKey(rawKey)
-		if err != nil {
+		if err := keys.SaveWithComment(rawKey, comment, filePath); err != nil {
 			return editSaveMsg{err: err}
-		}
-
-		block, err := ssh.MarshalPrivateKey(rawKey, comment)
-		if err != nil {
-			return editSaveMsg{err: fmt.Errorf("marshal key: %w", err)}
-		}
-
-		privPEM := pem.EncodeToMemory(block)
-		if err := os.WriteFile(filePath, privPEM, 0600); err != nil {
-			return editSaveMsg{err: err}
-		}
-
-		pubPath := filePath + ".pub"
-		if _, err := os.Stat(pubPath); err == nil {
-			pubAuth := ssh.MarshalAuthorizedKey(signer.PublicKey())
-			pubLine := strings.TrimSpace(string(pubAuth)) + " " + comment + "\n"
-			if err := os.WriteFile(pubPath, []byte(pubLine), 0644); err != nil {
-				return editSaveMsg{err: fmt.Errorf("update .pub: %w", err)}
-			}
 		}
 
 		return editSaveMsg{}
@@ -500,14 +465,9 @@ func editFetchAgentKeysCmd(socketPath string) tea.Cmd {
 		if socketPath == "" {
 			return editAgentKeysMsg{err: fmt.Errorf("no socket path")}
 		}
-		conn, err := net.Dial("unix", socketPath)
+		keys, err := agent.ListKeysFromSocket(socketPath)
 		if err != nil {
 			return editAgentKeysMsg{err: fmt.Errorf("agent not running")}
-		}
-		defer conn.Close()
-		keys, err := sshagent.NewClient(conn).List()
-		if err != nil {
-			return editAgentKeysMsg{err: err}
 		}
 		return editAgentKeysMsg{keys: keys}
 	}

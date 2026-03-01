@@ -16,6 +16,7 @@ func main() {
 	if configPath == "" {
 		configPath = utils.ExpandHomeDirectory(defaultConfigPath)
 	}
+	config.EnsureDefaultConfig(configPath)
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		style.NewOutput().Error("sshushd: load config: " + err.Error()).PrintErr()

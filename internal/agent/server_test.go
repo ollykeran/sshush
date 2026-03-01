@@ -10,19 +10,19 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/ssh/agent"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestListenAndServe_ListKeys(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := filepath.Join(dir, "agent.sock")
 
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = keyring.Add(agent.AddedKey{PrivateKey: priv, Comment: "test"})
+	err = keyring.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestListenAndServe_ListKeys(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = ListenAndServe(ctx, socketPath, keyring.(agent.ExtendedAgent))
+		_ = ListenAndServe(ctx, socketPath, keyring.(sshagent.ExtendedAgent))
 	}()
 
 	// Wait for server to listen
@@ -48,7 +48,7 @@ func TestListenAndServe_ListKeys(t *testing.T) {
 	}
 	defer conn.Close()
 
-	client := agent.NewClient(conn)
+	client := sshagent.NewClient(conn)
 	keys, err := client.List()
 	if err != nil {
 		t.Fatalf("list keys: %v", err)
@@ -69,12 +69,12 @@ func TestListenAndServe_Sign(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := filepath.Join(dir, "agent.sock")
 
-	keyring := agent.NewKeyring()
+	keyring := sshagent.NewKeyring()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = keyring.Add(agent.AddedKey{PrivateKey: priv, Comment: "sign-test"})
+	err = keyring.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "sign-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestListenAndServe_Sign(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_ = ListenAndServe(ctx, socketPath, keyring.(agent.ExtendedAgent))
+		_ = ListenAndServe(ctx, socketPath, keyring.(sshagent.ExtendedAgent))
 	}()
 
 	var conn net.Conn
@@ -99,7 +99,7 @@ func TestListenAndServe_Sign(t *testing.T) {
 	}
 	defer conn.Close()
 
-	client := agent.NewClient(conn)
+	client := sshagent.NewClient(conn)
 	keys, err := client.List()
 	if err != nil {
 		t.Fatalf("list keys: %v", err)
