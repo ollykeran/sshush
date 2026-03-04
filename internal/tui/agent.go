@@ -15,6 +15,7 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
+	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -115,7 +116,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 	return tea.Batch(
 		fetchAgentKeysCmd(s.socketPath, false),
 		checkDaemonCmd(s.socketPath),
-		discoverKeysCmd(s.configPath),
+		discoverKeysCmd(),
 	)
 }
 
@@ -673,8 +674,8 @@ func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	}
 }
 
-func discoverKeysCmd(configPath string) tea.Cmd {
+func discoverKeysCmd() tea.Cmd {
 	return func() tea.Msg {
-		return foundKeysMsg{paths: agent.DiscoverKeyPaths(configPath)}
+		return foundKeysMsg{paths: utils.DiscoverKeyPaths([]string{}, true, true, false)}
 	}
 }
