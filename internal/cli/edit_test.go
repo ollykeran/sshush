@@ -10,6 +10,7 @@ import (
 )
 
 func TestRunEdit_commentFlag(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "old-comment")
 
@@ -23,6 +24,7 @@ func TestRunEdit_commentFlag(t *testing.T) {
 }
 
 func TestRunEdit_copyToNewPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "original")
 	copyPath := filepath.Join(dir, "copy_key")
@@ -44,6 +46,7 @@ func TestRunEdit_copyToNewPath(t *testing.T) {
 }
 
 func TestRunEdit_copyWithoutOutput(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "test")
 
@@ -54,6 +57,7 @@ func TestRunEdit_copyWithoutOutput(t *testing.T) {
 }
 
 func TestRunEdit_outputWithoutCopy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "test")
 
@@ -64,6 +68,7 @@ func TestRunEdit_outputWithoutCopy(t *testing.T) {
 }
 
 func TestRunEdit_missingFile(t *testing.T) {
+	t.Parallel()
 	err := runEdit(filepath.Join(t.TempDir(), "nonexistent"), "", "x", false, "")
 	if err == nil {
 		t.Fatal("expected error for missing key file")
@@ -71,6 +76,7 @@ func TestRunEdit_missingFile(t *testing.T) {
 }
 
 func TestRunEdit_notOpenSSHKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad_key")
 	os.WriteFile(badPath, []byte("not a key"), 0o600)
@@ -82,6 +88,7 @@ func TestRunEdit_notOpenSSHKey(t *testing.T) {
 }
 
 func TestRunEdit_emptyComment(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "has-comment")
 	// Use a fake editor that writes whitespace-only content
@@ -94,6 +101,7 @@ func TestRunEdit_emptyComment(t *testing.T) {
 }
 
 func TestRunEdit_pubFileUpdated(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "before")
 
@@ -106,6 +114,7 @@ func TestRunEdit_pubFileUpdated(t *testing.T) {
 }
 
 func TestRunEdit_noPubFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "only-priv")
 	os.Remove(privPath + ".pub")
@@ -124,6 +133,7 @@ func TestRunEdit_noPubFile(t *testing.T) {
 // --- editor tests ---
 
 func TestEditCommentWithEditor_success(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	editorPath := writeFakeEditor(t, dir, "editor.sh", "edited-by-script")
 
@@ -137,6 +147,7 @@ func TestEditCommentWithEditor_success(t *testing.T) {
 }
 
 func TestEditCommentWithEditor_editorFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	editorPath := writeFailingEditor(t, dir, "bad-editor.sh")
 
@@ -168,6 +179,7 @@ func TestResolveEditor_defaultVi(t *testing.T) {
 }
 
 func TestRunEdit_editorFlow(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "old-comment")
 	editorPath := writeFakeEditor(t, dir, "editor.sh", "editor-comment")
@@ -182,6 +194,7 @@ func TestRunEdit_editorFlow(t *testing.T) {
 }
 
 func TestRunEdit_editorFailsReportsError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "old-comment")
 	editorPath := writeFailingEditor(t, dir, "bad-editor.sh")

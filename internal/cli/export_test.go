@@ -8,6 +8,7 @@ import (
 )
 
 func TestRunExport_stdout(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "export-test")
 
@@ -32,6 +33,7 @@ func TestRunExport_stdout(t *testing.T) {
 }
 
 func TestRunExport_toFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "file-export")
 	outPath := filepath.Join(dir, "exported.pub")
@@ -58,6 +60,7 @@ func TestRunExport_toFile(t *testing.T) {
 }
 
 func TestRunExport_missingFile(t *testing.T) {
+	t.Parallel()
 	err := runExport(filepath.Join(t.TempDir(), "nonexistent"), "")
 	if err == nil {
 		t.Fatal("expected error for missing key file")
@@ -65,6 +68,7 @@ func TestRunExport_missingFile(t *testing.T) {
 }
 
 func TestRunExport_notOpenSSHKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	badPath := filepath.Join(dir, "bad_key")
 	os.WriteFile(badPath, []byte("not a real key"), 0o600)

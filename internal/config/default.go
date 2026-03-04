@@ -34,7 +34,10 @@ func findDefaultKeys() []string {
 		paths = append(paths, abs)
 	}
 
-	files, _ := os.ReadDir(sshPath)
+	files, err := os.ReadDir(sshPath)
+	if err != nil {
+		return nil
+	}
 	for _, f := range files {
 		if f.IsDir() || strings.HasSuffix(f.Name(), ".pub") {
 			continue
@@ -125,20 +128,19 @@ func AddEvalToShell() error {
 	return nil
 }
 
-func init() {
+// SetupConfig ensures default config exists and eval is added to bashrc if needed.
+// Call from root PersistentPreRunE or main before loading config.
+func SetupConfig() {
 	const defaultConfigPath = "~/.config/sshush/config.toml"
 	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
 
-	_, err := os.Stat(expanded)
-	if os.IsNotExist(err) {
-		CreateDefaultConfig()
+	if _, err := os.Stat(expanded); os.IsNotExist(err) {
+		_ = CreateDefaultConfig()
 	}
 
 	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
 	content, err := os.ReadFile(bashrcPath)
-	if err == nil {
-		if !strings.Contains(string(content), "eval $(sshush)") {
-			AddEvalToShell()
-		}
+	if err == nil && !strings.Contains(string(content), "eval $(sshush)") {
+		_ = AddEvalToShell()
 	}
 }

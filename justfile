@@ -16,7 +16,7 @@ build: build-sshushd
     go build -ldflags '{{ ldflags }}' -o {{ binary }} ./cmd/sshush
 
 test:
-    go test ./... -v
+    go test ./... -v -race
 
 run:
     go run ./cmd/sshush

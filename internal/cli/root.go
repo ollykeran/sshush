@@ -84,6 +84,7 @@ func NewRootCommand() *cobra.Command {
 		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			config.SetupConfig()
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
 				return err
