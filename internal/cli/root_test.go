@@ -11,6 +11,7 @@ import (
 )
 
 func TestLoadMergedConfig_noOverrides(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	writeConfig(t, path, config.Config{
@@ -31,6 +32,7 @@ func TestLoadMergedConfig_noOverrides(t *testing.T) {
 }
 
 func TestLoadMergedConfig_socketOverride(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	writeConfig(t, path, config.Config{
@@ -51,6 +53,7 @@ func TestLoadMergedConfig_socketOverride(t *testing.T) {
 }
 
 func TestLoadMergedConfig_keyAppend(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	writeConfig(t, path, config.Config{
@@ -72,6 +75,7 @@ func TestLoadMergedConfig_keyAppend(t *testing.T) {
 }
 
 func TestLoadMergedConfig_missingFileNoOverrides_returnsError(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nonexistent.toml")
 	_, err := LoadMergedConfig(path, LoadOverrides{})
 	if err == nil {
@@ -80,6 +84,7 @@ func TestLoadMergedConfig_missingFileNoOverrides_returnsError(t *testing.T) {
 }
 
 func TestLoadMergedConfig_missingFileWithKeyOverride_usesEmptyConfig(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nonexistent.toml")
 	cfg, err := LoadMergedConfig(path, LoadOverrides{
 		KeyPaths:    []string{"/tmp/key1"},

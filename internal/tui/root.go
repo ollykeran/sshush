@@ -9,10 +9,9 @@ import (
 type ButtonFlashDoneMsg struct{}
 
 func ButtonFlashCmd() tea.Cmd {
-	return func() tea.Msg {
-		time.Sleep(200 * time.Millisecond)
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return ButtonFlashDoneMsg{}
-	}
+	})
 }
 
 type NavToTabBarMsg struct{}
