@@ -45,9 +45,8 @@ const (
 
 // EditScreen is the edit tab for changing key comments (load from file or agent).
 type EditScreen struct {
-	sk         *Skeleton
-	filePicker StyledFilePicker
-	showPicker bool
+	sk           *Skeleton
+	fileSelector *FileSelector
 
 	agentKeys  KeyTable
 	showAgent  bool
@@ -85,9 +84,9 @@ func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 	saveBtn.ZonePrefix = prefix + "save-"
 
 	return &EditScreen{
-		sk:         sk,
-		filePicker: NewStyledFilePicker(false),
-		agentKeys:  kt,
+		sk:           sk,
+		fileSelector: NewFileSelector(ModeLoadFile, "Select private key file"),
+		agentKeys:    kt,
 		socketPath: socketPath,
 		commentIn:  comment,
 		saveBtn:    saveBtn,
@@ -100,17 +99,38 @@ func (s *EditScreen) HasActiveTextInput() bool {
 	return s.commentIn.Focused()
 }
 
+func (s *EditScreen) HasModal() bool {
+	return s.fileSelector.Visible() || s.showAgent
+}
+
 func (s *EditScreen) Init() tea.Cmd {
 	return nil
 }
 
 func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if s.fileSelector.Visible() {
+		switch msg.(type) {
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, editKeyLoadedMsg, editSaveMsg, editAgentKeysMsg, ButtonFlashDoneMsg:
+			// Handle these below
+		default:
+			return s, s.fileSelector.Update(msg)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
 		s.agentKeys.SetSize(s.width, 5)
-		s.filePicker.SetHeight(s.height / 3)
+		s.fileSelector.SetHeight(max(s.height-12, 8))
+		return s, nil
+
+	case FileSelectedMsg:
+		s.fileSelector.Hide()
+		return s, editLoadKeyCmd(msg.Path)
+
+	case FilePickerCancelledMsg:
+		s.fileSelector.Hide()
 		return s, nil
 
 	case editKeyLoadedMsg:
@@ -160,14 +180,14 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.showPicker || s.showAgent {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showAgent {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.KeyPressMsg:
-		if s.showPicker {
-			return s.handleFilePicker(msg)
+		if s.fileSelector.Visible() {
+			return s, s.fileSelector.Update(msg)
 		}
 		if s.showAgent && s.focus == editFocusAgentTable {
 			return s.handleAgentTable(msg)
@@ -184,8 +204,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
 		s.focus = editFocusLoadFile
-		s.showPicker = true
-		return s, s.filePicker.Init()
+		return s, s.fileSelector.Show()
 	}
 	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
 		s.focus = editFocusLoadAgent
@@ -227,8 +246,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch s.focus {
 		case editFocusLoadFile:
-			s.showPicker = true
-			return s, s.filePicker.Init()
+			return s, s.fileSelector.Show()
 		case editFocusLoadAgent:
 			return s, editFetchAgentKeysCmd(s.socketPath)
 		case editFocusComment:
@@ -245,19 +263,6 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return s, nil
-}
-
-func (s *EditScreen) handleFilePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
-		s.showPicker = false
-		return s, nil
-	}
-	cmd := s.filePicker.Update(msg)
-	if didSelect, path := s.filePicker.DidSelectFile(msg); didSelect {
-		s.showPicker = false
-		return s, editLoadKeyCmd(path)
-	}
-	return s, cmd
 }
 
 func (s *EditScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -333,10 +338,13 @@ func (s *EditScreen) View() tea.View {
 		height = s.sk.GetTerminalHeight() - 12
 	}
 	active := s.sk.ScreenActive()
-	if s.showPicker {
-		title := SectionTitleStyle.Render("Select private key file")
-		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
+	if s.fileSelector.Visible() {
+		innerW := width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
+			s.fileSelector.View(width, height)))
 	}
 
 	if s.showAgent {
