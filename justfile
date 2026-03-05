@@ -1,8 +1,8 @@
 build_dir := "build"
 binary := build_dir / "sshush"
 binaryd := build_dir / "sshushd"
-ldflags := "-X github.com/ollykeran/sshush/internal/version.Version=dev"
 version := env("VERSION", "dev")
+ldflags := "-X github.com/ollykeran/sshush/internal/version.Version=" + version
 
 deps:
     go mod tidy
@@ -10,13 +10,20 @@ deps:
 
 build-sshushd: deps
     mkdir -p {{ build_dir }}
-    go build -ldflags '{{ ldflags }}' -o {{ binaryd }} ./cmd/sshushd
+    go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binaryd }} ./cmd/sshushd
 
 build: build-sshushd
-    go build -ldflags '{{ ldflags }}' -o {{ binary }} ./cmd/sshush
+    go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary }} ./cmd/sshush
 
 test:
     go test ./... -v -race
+
+# Serve godoc at http://localhost:6060 (module-aware, use -http not -http=:6060)
+doc:
+    go doc -http
+
+doc-check:
+    go build ./... && go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config
 
 run:
     go run ./cmd/sshush

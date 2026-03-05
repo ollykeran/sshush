@@ -85,5 +85,8 @@ func (o *Output) AsError() error { return &StyledError{o} }
 // It prevents cobra from printing a plain "Error: ..." line.
 type StyledError struct{ out *Output }
 
+// Error implements the error interface.
 func (e *StyledError) Error() string { return e.out.String() }
-func (e *StyledError) PrintErr()     { e.out.PrintErr() }
+
+// PrintErr prints the styled output to stderr.
+func (e *StyledError) PrintErr() { e.out.PrintErr() }

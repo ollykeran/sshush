@@ -49,6 +49,7 @@ const (
 	exportFocusSavePicker
 )
 
+// ExportScreen is the export tab for viewing, copying, and saving public keys.
 type ExportScreen struct {
 	sk         *Skeleton
 	filePicker StyledFilePicker
@@ -74,6 +75,7 @@ type ExportScreen struct {
 	statusErr bool
 }
 
+// NewExportScreen creates an ExportScreen with the given skeleton and agent socket path.
 func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	prefix := zone.NewPrefix()
 

@@ -1,9 +1,6 @@
 build/
 sshush.pid
 id_*
-*.md
-!README.md
-!TUI.md
 *.toml
 .bash*
 openspec/
@@ -11,3 +8,4 @@ openspec/
 ok/
 .vscode/
 .cursor/
+.github/

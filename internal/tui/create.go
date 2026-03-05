@@ -35,6 +35,7 @@ var (
 	ecdsaOptions = []string{"256", "384", "521"}
 )
 
+// CreateScreen is the create tab for generating new SSH keypairs.
 type CreateScreen struct {
 	sk         *Skeleton
 	typeRow    ButtonRow
@@ -57,6 +58,7 @@ type CreateScreen struct {
 	statusErr bool
 }
 
+// NewCreateScreen creates a CreateScreen with default type, comment, and output path.
 func NewCreateScreen(sk *Skeleton) *CreateScreen {
 	prefix := zone.NewPrefix()
 

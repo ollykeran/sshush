@@ -43,6 +43,7 @@ const (
 	editFocusSave
 )
 
+// EditScreen is the edit tab for changing key comments (load from file or agent).
 type EditScreen struct {
 	sk         *Skeleton
 	filePicker StyledFilePicker
@@ -69,6 +70,7 @@ type EditScreen struct {
 	statusErr bool
 }
 
+// NewEditScreen creates an EditScreen with the given skeleton and agent socket path.
 func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 	prefix := zone.NewPrefix()
 

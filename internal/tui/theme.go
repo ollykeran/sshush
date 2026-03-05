@@ -114,6 +114,7 @@ var BannerStyle = lipgloss.NewStyle().
 	BorderForeground(ColorPink).
 	Padding(0, 2)
 
+// SectionBox renders a titled box with optional focus styling for TUI sections.
 func SectionBox(title, content string, width int, focused bool) string {
 	t := SectionTitleStyle.Render(title)
 	innerW := width - 4
@@ -128,6 +129,7 @@ func SectionBox(title, content string, width int, focused bool) string {
 	return t + "\n" + box
 }
 
+// HelpRow formats a help line with key and description for the help overlay.
 func HelpRow(key, desc string) string {
 	k := lipgloss.NewStyle().Foreground(ColorGreen).Bold(true).Width(14).Render(key)
 	d := PinkStyle.Render(desc)

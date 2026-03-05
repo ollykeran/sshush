@@ -14,6 +14,7 @@ const openssh_auth_magic = "openssh-key-v1\x00"
 // ErrNotOpenSSHKey is returned by ParsePrivateKeyBlob when the data is not an unencrypted OpenSSH private key.
 var ErrNotOpenSSHKey = errors.New("openssh: not an unencrypted OpenSSH private key")
 
+// ParsedKey holds parsed OpenSSH key metadata.
 type ParsedKey struct {
 	KeyType    string
 	Comment    string
@@ -21,6 +22,7 @@ type ParsedKey struct {
 	PrivateKey []byte // PEM-encoded private key
 }
 
+// ParsePrivateKeyBlob parses unencrypted OpenSSH private key data.
 func ParsePrivateKeyBlob(data []byte) (*ParsedKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "OPENSSH PRIVATE KEY" {

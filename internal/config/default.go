@@ -111,6 +111,7 @@ func CreateDefaultConfig() error {
 	return nil
 }
 
+// AddEvalToShell appends "eval $(sshush)" to ~/.bashrc. Fails if ~/.bashrc does not exist.
 func AddEvalToShell() error {
 	const line = "eval $(sshush)\n"
 	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")

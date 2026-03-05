@@ -55,6 +55,7 @@ const (
 	agentFocusPassphrase
 )
 
+// AgentScreen is the agent tab: keys table, Start/Stop/Reload buttons, add/remove keys, lock/unlock.
 type AgentScreen struct {
 	sk            *Skeleton
 	keyTable      KeyTable
@@ -82,6 +83,7 @@ type AgentScreen struct {
 	focus int
 }
 
+// NewAgentScreen creates an AgentScreen with the given skeleton, config path, and socket path.
 func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	prefix := zone.NewPrefix()
 

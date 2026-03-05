@@ -35,6 +35,9 @@ func ContractHomeDirectory(path string) string {
 	return path
 }
 
+// DiscoverKeyPaths finds valid private key files in searchDirs.
+// If cwd is true, adds current directory. If ssh is true, adds ~/.ssh.
+// If recursive is true, walks subdirectories.
 func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) []string {
 	seen := make(map[string]bool)
 	var paths []string
