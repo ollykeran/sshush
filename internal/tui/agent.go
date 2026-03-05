@@ -51,7 +51,6 @@ const (
 	agentFocusButtons = iota
 	agentFocusTable
 	agentFocusFound
-	agentFocusFilePicker
 	agentFocusPassphrase
 )
 
@@ -73,8 +72,7 @@ type AgentScreen struct {
 	foundSelected int
 	loadedFPs     map[string]bool
 
-	filePicker StyledFilePicker
-	showPicker bool
+	fileSelector *FileSelector
 
 	passInput  textinput.Model
 	showPass   bool
@@ -105,13 +103,17 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 		buttons:    btns,
 		zonePrefix: prefix,
 		configPath: configPath,
-		socketPath: socketPath,
-		status:     "loading...",
-		loadedFPs:  make(map[string]bool),
-		filePicker: NewStyledFilePicker(false),
-		passInput:  pi,
+		socketPath:   socketPath,
+		status:       "loading...",
+		loadedFPs:    make(map[string]bool),
+		fileSelector: NewFileSelector(ModeLoadFile, "Select key file"),
+		passInput:    pi,
 		focus:      agentFocusTable,
 	}
+}
+
+func (s *AgentScreen) HasModal() bool {
+	return s.fileSelector.Visible() || s.showPass
 }
 
 func (s *AgentScreen) Init() tea.Cmd {
@@ -123,6 +125,15 @@ func (s *AgentScreen) Init() tea.Cmd {
 }
 
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if s.fileSelector.Visible() {
+		switch msg.(type) {
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+			// Handle these below
+		default:
+			return s, s.fileSelector.Update(msg)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -135,7 +146,17 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tableH = 3
 		}
 		s.keyTable.SetSize(s.width, tableH)
-		s.filePicker.SetHeight(tableH)
+		s.fileSelector.SetHeight(max(s.height-12, 8))
+		return s, nil
+
+	case FileSelectedMsg:
+		s.fileSelector.Hide()
+		s.focus = agentFocusTable
+		return s, addKeyToAgentCmd(s.socketPath, msg.Path)
+
+	case FilePickerCancelledMsg:
+		s.fileSelector.Hide()
+		s.focus = agentFocusTable
 		return s, nil
 
 	case agentDaemonStateMsg:
@@ -233,7 +254,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, fetchAgentKeysCmd(s.socketPath, true)
 
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.showPicker || s.showPass {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
@@ -242,8 +263,8 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.showPass {
 			return s.handlePassInput(msg)
 		}
-		if s.showPicker {
-			return s.handleFilePicker(msg)
+		if s.fileSelector.Visible() {
+			return s, s.fileSelector.Update(msg)
 		}
 		return s.handleKeys(msg)
 	}
@@ -305,9 +326,7 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if s.focus == agentFocusFound {
 			return s.addFoundKey()
 		}
-		s.showPicker = true
-		s.focus = agentFocusFilePicker
-		return s, s.filePicker.Init()
+		return s, s.fileSelector.Show()
 
 	case "d":
 		if s.focus == agentFocusTable {
@@ -375,22 +394,6 @@ func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	return s, nil
 }
 
-func (s *AgentScreen) handleFilePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
-		s.showPicker = false
-		s.focus = agentFocusTable
-		return s, nil
-	}
-
-	cmd := s.filePicker.Update(msg)
-	if didSelect, path := s.filePicker.DidSelectFile(msg); didSelect {
-		s.showPicker = false
-		s.focus = agentFocusTable
-		return s, addKeyToAgentCmd(s.socketPath, path)
-	}
-	return s, cmd
-}
-
 func (s *AgentScreen) pressButton(btn int) (tea.Model, tea.Cmd) {
 	s.buttons.Active = btn
 	s.buttons.Press()
@@ -453,10 +456,13 @@ func (s *AgentScreen) View() tea.View {
 		height = s.sk.GetTerminalHeight() - 12
 	}
 	active := s.sk.ScreenActive()
-	if s.showPicker {
-		title := SectionTitleStyle.Render("Select key file")
-		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
+	if s.fileSelector.Visible() {
+		innerW := width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
+			s.fileSelector.View(width, height)))
 	}
 
 	if s.showPass {

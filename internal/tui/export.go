@@ -46,15 +46,12 @@ const (
 	exportFocusPubKey
 	exportFocusCopy
 	exportFocusSaveFile
-	exportFocusSavePicker
 )
 
 // ExportScreen is the export tab for viewing, copying, and saving public keys.
 type ExportScreen struct {
-	sk         *Skeleton
-	filePicker StyledFilePicker
-	showPicker bool
-	pickerMode string // "load" or "save"
+	sk           *Skeleton
+	fileSelector *FileSelector
 
 	agentKeys  KeyTable
 	showAgent  bool
@@ -88,7 +85,7 @@ func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 
 	return &ExportScreen{
 		sk:           sk,
-		filePicker:   NewStyledFilePicker(false),
+		fileSelector: NewFileSelector(ModeLoadFile, "Select key file"),
 		agentKeys:    kt,
 		socketPath:   socketPath,
 		zonePrefix:   prefix,
@@ -101,17 +98,38 @@ func (s *ExportScreen) HasActiveTextInput() bool {
 	return s.saveFilename.Focused()
 }
 
+func (s *ExportScreen) HasModal() bool {
+	return s.fileSelector.Visible() || s.showAgent || s.showSaveIn
+}
+
 func (s *ExportScreen) Init() tea.Cmd {
 	return nil
 }
 
 func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if s.fileSelector.Visible() {
+		switch msg.(type) {
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, exportKeyLoadedMsg, exportAgentKeysMsg, exportCopyMsg, exportSaveMsg:
+			// Handle these below
+		default:
+			return s, s.fileSelector.Update(msg)
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
 		s.agentKeys.SetSize(s.width, 5)
-		s.filePicker.SetHeight(s.height / 3)
+		s.fileSelector.SetHeight(max(s.height-12, 8))
+		return s, nil
+
+	case FileSelectedMsg:
+		s.fileSelector.Hide()
+		return s, exportLoadKeyCmd(msg.Path)
+
+	case FilePickerCancelledMsg:
+		s.fileSelector.Hide()
 		return s, nil
 
 	case exportKeyLoadedMsg:
@@ -166,14 +184,14 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.showPicker || s.showAgent || s.showSaveIn {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showAgent || s.showSaveIn {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.KeyPressMsg:
-		if s.showPicker {
-			return s.handlePicker(msg)
+		if s.fileSelector.Visible() {
+			return s, s.fileSelector.Update(msg)
 		}
 		if s.showAgent && s.focus == exportFocusAgentTable {
 			return s.handleAgentTable(msg)
@@ -189,9 +207,7 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s *ExportScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
 		s.focus = exportFocusLoadFile
-		s.showPicker = true
-		s.pickerMode = "load"
-		return s, s.filePicker.Init()
+		return s, s.fileSelector.Show()
 	}
 	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
 		s.focus = exportFocusLoadAgent
@@ -226,9 +242,7 @@ func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch s.focus {
 		case exportFocusLoadFile:
-			s.showPicker = true
-			s.pickerMode = "load"
-			return s, s.filePicker.Init()
+			return s, s.fileSelector.Show()
 		case exportFocusLoadAgent:
 			return s, exportFetchAgentKeysCmd(s.socketPath)
 		case exportFocusCopy:
@@ -239,19 +253,6 @@ func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return s, nil
-}
-
-func (s *ExportScreen) handlePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == "esc" {
-		s.showPicker = false
-		return s, nil
-	}
-	cmd := s.filePicker.Update(msg)
-	if didSelect, path := s.filePicker.DidSelectFile(msg); didSelect {
-		s.showPicker = false
-		return s, exportLoadKeyCmd(path)
-	}
-	return s, cmd
 }
 
 func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -313,18 +314,12 @@ func (s *ExportScreen) advanceFocus(dir int) tea.Cmd {
 	if next > max {
 		next = max
 	}
-	// Skip agent table and save picker focus when not showing
+	// Skip agent table focus when not showing
 	if next == exportFocusAgentTable && !s.showAgent {
 		next += dir
 		if next < exportFocusLoadFile {
 			return navToTabBarCmd()
 		}
-		if next > max {
-			next = max
-		}
-	}
-	if next == exportFocusSavePicker {
-		next += dir
 		if next > max {
 			next = max
 		}
@@ -354,10 +349,13 @@ func (s *ExportScreen) View() tea.View {
 		height = s.sk.GetTerminalHeight() - 12
 	}
 	active := s.sk.ScreenActive()
-	if s.showPicker {
-		title := SectionTitleStyle.Render("Select key file")
-		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.filePicker.View())))
+	if s.fileSelector.Visible() {
+		innerW := width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
+			s.fileSelector.View(width, height)))
 	}
 
 	if s.showAgent {
