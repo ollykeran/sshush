@@ -1,44 +1,87 @@
 # sshush
 
-An SSH agent with a styled CLI + TUI. (Drop-in replacement for `ssh-agent`) 
+An SSH agent with a styled CLI and TUI. Drop-in replacement for `ssh-agent`. Manages keys via a Unix socket, compatible with OpenSSH (`ssh`, `ssh-add`, etc.).
 
-Manages keys via a Unix socket, compatible with OpenSSH commands (`ssh`, `ssh-add`, etc.).
-
-## Usage
-
-```sh
-sshush start                      # start daemon
-sshush stop                       # stop daemon
-sshush list                       # list loaded keys
-sshush add <path>                 # add a key
-sshush remove <fingerprint>       # remove a key
-sshush tui                        # wip
-```
-
-Config: `~/.config/sshush/config.toml` (or `$SSHUSH_CONFIG`)
-
-```toml
-socket_path = "~/.ssh/sshush.sock"
-key_paths   = ["~/.ssh/id_ed25519","~/.ssh/id_rsa"]
-```
-
-Add this to your `.bashrc` or `.bash_profile` 
+## Quick Start
 
 ```sh
 eval $(sshush)
 ```
 
-## Build
+That starts the daemon (if needed), loads keys from config, and exports `SSH_AUTH_SOCK`. Add it to `.bashrc` or `.bash_profile` for persistent setup. See [Setup Guide](docs/setup.md) for details.
 
-Go v.1.26
+## Features
+
+- **Agent**: Start, stop, list keys, add, remove. Uses a Unix socket; works with OpenSSH.
+- **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
+- **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
+- **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `socket_path`, the daemon restarts.
+- **Config auto-setup**: On first run, if no config exists, sshush creates `~/.config/sshush/config.toml` with discovered keys and default socket path.
+
+## Commands
+
+
+| Sub Command      | Description                               | Example                                   |
+| ---------------- | ----------------------------------------- | ----------------------------------------- |
+| (none) / `start` | Start daemon, export `SSH_AUTH_SOCK`      | `eval $(sshush)`                          |
+| `stop`           | Stop the daemon                           | `sshush stop`                             |
+| `list`           | List keys in the agent                    | `sshush list`                             |
+| `add`            | Add key(s) to the agent                   | `sshush add ~/.ssh/id_ed25519`            |
+| `remove`         | Remove key(s) by path or comment          | `sshush remove id_ed25519`                |
+| `reload`         | Reconcile agent to config file            | `sshush reload`                           |
+| `create`         | Generate a new keypair                    | `sshush create rsa 2048 -o ~/.ssh/id_rsa` |
+| `edit`           | Edit key comment                          | `sshush edit ~/.ssh/id_ed25519`           |
+| `export`         | Export public key                         | `sshush export ~/.ssh/id_ed25519`         |
+| `find`           | Find private keys (defaults: cwd, ~/.ssh) | `sshush find` or `sshush find /path`      |
+| `tui`            | Start the TUI                             | `sshush tui`                              |
+| `completion`     | Shell completion script                   | `sshush completion bash`                  |
+| `version`        | Print version                             | `sshush version`                          |
+
+
+Config: `~/.config/sshush/config.toml` (override with `-c`). See [Config Reference](docs/config.md).
+
+## Installation
+
+### From releases
+
+Download from [GitHub Releases](https://github.com/ollykeran/sshush/releases):
+
+| Package | Install |
+|---------|---------|
+| **Debian/Ubuntu** (`.deb`) | `sudo dpkg -i sshush-*-amd64.deb` |
+| **RHEL/Fedora** (`.rpm`) | `sudo rpm -i sshush-*-amd64.rpm` |
+| **Arch Linux** (`.pkg.tar.zst`) | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
+| **Binary tarball** | Extract `sshush` and `sshushd` from the `.tar.gz`, place in `PATH` |
+
+### From source
+
 ```sh
-make build
+go install github.com/ollykeran/sshush/cmd/sshush@latest
+go install github.com/ollykeran/sshush/cmd/sshushd@latest
 ```
 
-Produces `sshush` (CLI) and `sshushd` (daemon). Both must be in `PATH` or in the same directory.
+Both binaries must be in `PATH`.
 
-## Status (WIP) 
+## Docs
 
-Core agent (start/stop/list/add/remove) works. 
+- [Setup Guide](docs/setup.md) – eval, config creation, bashrc
+- [Config Reference](docs/config.md) – options, reload behavior
+- [TUI Architecture](docs/tui.md) – TUI structure and internals
+- [Architecture](docs/architecture.md) – package layout
+- [Godoc Guide](docs/godoc-guide.md) – adding godoc comments
+- [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API documentation
 
-`lock`/`unlock` not implemented.
+### Developer docs
+
+- [Contributing](CONTRIBUTING.md) – how to contribute
+- [Internal Boundary Report](docs/internal-boundary-report.md) – package call graph (auto-generated)
+
+## Build
+
+Go 1.26+:
+
+```sh
+just build
+```
+
+Produces `sshush` (CLI) and `sshushd` (daemon) in `build/`. Both must be in `PATH` or the same directory.

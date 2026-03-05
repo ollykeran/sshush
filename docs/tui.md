@@ -2,7 +2,24 @@
 
 This document describes the sshush TUI architecture: model hierarchy, message flow, component mapping, and Init/Update/View responsibilities.
 
+See also: [Config](config.md) | [Setup](setup.md)
+
 ## Model Hierarchy
+
+```mermaid
+flowchart TD
+  Skeleton[Skeleton root]
+  Agent[AgentScreen]
+  Create[CreateScreen]
+  Edit[EditScreen]
+  Export[ExportScreen]
+  Skeleton --> Agent
+  Skeleton --> Create
+  Skeleton --> Edit
+  Skeleton --> Export
+```
+
+Text view:
 
 ```
 Skeleton (root)
