@@ -20,6 +20,7 @@ type ButtonRow struct {
 	ZonePrefix string
 }
 
+// NewButtonRow creates a ButtonRow with the given labels.
 func NewButtonRow(labels ...string) ButtonRow {
 	return ButtonRow{
 		Labels:  labels,
@@ -90,6 +91,7 @@ type KeyTable struct {
 
 const keyCellPadOverhead = 6
 
+// NewKeyTable creates a KeyTable with type, fingerprint, and comment columns.
 func NewKeyTable(width, height int) KeyTable {
 	innerW := keyBoxInnerWidth(width)
 	rowW := innerW + keyCellPadOverhead
@@ -225,6 +227,7 @@ type StyledFilePicker struct {
 	Visible bool
 }
 
+// NewStyledFilePicker creates a file picker with sshush styles; dirOnly restricts selection to directories.
 func NewStyledFilePicker(dirOnly bool) StyledFilePicker {
 	fp := filepicker.New()
 	home, err := os.UserHomeDir()

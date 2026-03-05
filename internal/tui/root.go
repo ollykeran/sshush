@@ -6,14 +6,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// ButtonFlashDoneMsg is sent when a button press flash animation completes.
 type ButtonFlashDoneMsg struct{}
 
+// ButtonFlashCmd returns a tea.Cmd that sends ButtonFlashDoneMsg after 200ms.
 func ButtonFlashCmd() tea.Cmd {
 	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
 		return ButtonFlashDoneMsg{}
 	})
 }
 
+// NavToTabBarMsg moves focus back to the tab bar.
 type NavToTabBarMsg struct{}
 
 func navToTabBarCmd() tea.Cmd {
@@ -22,6 +25,7 @@ func navToTabBarCmd() tea.Cmd {
 	}
 }
 
+// NewTUI builds the TUI skeleton with agent, create, edit, and export tabs.
 func NewTUI(configPath, socketPath string) *Skeleton {
 	s := NewSkeleton()
 	s.KeyMap.SwitchTabLeft = []string{"left", "h"}

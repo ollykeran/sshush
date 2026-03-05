@@ -2,12 +2,15 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	stdruntime "runtime"
 
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -77,6 +80,7 @@ func getSocketPath() (string, error) {
 	return runtime.ResolveSocketPath(env.Config)
 }
 
+// NewRootCommand returns the root cobra command for sshush with flags and PersistentPreRunE wired.
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:          "sshush",
@@ -84,6 +88,10 @@ func NewRootCommand() *cobra.Command {
 		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("version") {
+				fmt.Printf("sshush %s (%s)\n", version.Version, stdruntime.Version())
+				os.Exit(0)
+			}
 			config.SetupConfig()
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
@@ -110,10 +118,12 @@ func NewRootCommand() *cobra.Command {
 
 	root.Flags().StringP("config", "c", "", "path to config file")
 	root.Flags().StringP("socket", "s", "", "path to agent socket")
+	root.PersistentFlags().BoolP("version", "v", false, "print version and exit")
 
 	return root
 }
 
+// Execute runs the root command and handles error display; StyledError is printed via PrintErr.
 func Execute() error {
 	root := NewRootCommand()
 	root.SilenceErrors = true // we handle all error display ourselves

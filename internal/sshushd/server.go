@@ -10,6 +10,7 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+// Server is the SSH server that runs in sshushd; it uses an agent keyring for authentication.
 type Server struct {
 	Addr        string
 	Keyring     sshagent.Agent

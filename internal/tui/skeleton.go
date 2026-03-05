@@ -21,11 +21,13 @@ type skeletonWidget struct {
 	value string
 }
 
+// SkeletonKeyMap holds key bindings for switching between tabs.
 type SkeletonKeyMap struct {
 	SwitchTabLeft  []string
 	SwitchTabRight []string
 }
 
+// Skeleton is the main TUI layout: header with tabs and control buttons, content area, and footer.
 type Skeleton struct {
 	pages     []skeletonPage
 	widgets   []skeletonWidget
@@ -51,6 +53,7 @@ const (
 	minTermHeight = 30
 )
 
+// NewSkeleton returns a new Skeleton with default keymap and nav focus.
 func NewSkeleton() *Skeleton {
 	return &Skeleton{
 		navFocus: navFocusTools,

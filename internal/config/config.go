@@ -8,17 +8,20 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 )
 
+// Config holds socket path and key paths from the TOML config file.
 type Config struct {
-	KeyPaths   []string `toml:"key_paths"`
-	SocketPath string   `toml:"socket_path"`
+	KeyPaths   []string `toml:"key_paths"`   // Paths to private keys to load into the agent.
+	SocketPath string   `toml:"socket_path"` // Unix socket path for the agent.
 }
 
+// EnsureSSHDirectory creates ~/.ssh with mode 0700 if it does not exist.
 func EnsureSSHDirectory() {
 	if err := os.MkdirAll(utils.ExpandHomeDirectory("~/.ssh"), 0o0700); err != nil {
 		return
 	}
 }
 
+// LoadConfig reads and parses a TOML config file. Paths are expanded (~).
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
