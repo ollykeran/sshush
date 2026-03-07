@@ -35,6 +35,6 @@ func NewTUI(configPath, socketPath string) *Skeleton {
 	s.AddPage("create", "Create", NewCreateScreen(s))
 	s.AddPage("edit", "Edit", NewEditScreen(s, socketPath))
 	s.AddPage("export", "Export", NewExportScreen(s, socketPath))
-	s.AddWidget("daemon-status", "stopped")
+	s.AddWidget("sshushd", "stopped")
 	return s
 }

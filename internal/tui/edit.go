@@ -5,15 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
-	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/keys"
+	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 type editKeyLoadedMsg struct {
@@ -30,37 +28,30 @@ type editSaveMsg struct {
 	err error
 }
 
-type editAgentKeysMsg struct {
-	keys []*sshagent.Key
-	err  error
-}
-
 const (
-	editFocusLoadFile = iota
-	editFocusLoadAgent
-	editFocusAgentTable
+	editFocusSelectFile = iota
 	editFocusComment
 	editFocusSave
 )
 
-// EditScreen is the edit tab for changing key comments (load from file or agent).
+// EditScreen is the edit tab for changing key comments.
 type EditScreen struct {
 	sk           *Skeleton
 	fileSelector *FileSelector
-
-	agentKeys  KeyTable
-	showAgent  bool
-	socketPath string
 
 	commentIn  textinput.Model
 	saveBtn    ButtonRow
 	zonePrefix string
 
-	loadedPath  string
-	keyType     string
-	fingerprint string
-	pubKeyStr   string
-	rawKey      interface{}
+	loadedPath      string
+	originalComment string
+	keyType         string
+	fingerprint     string
+	pubKeyStr       string
+	rawKey          interface{}
+
+	// saveDiffRendered is set after a successful save; shows the comment change.
+	saveDiffRendered string
 
 	focus     int
 	width     int
@@ -77,21 +68,16 @@ func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 	comment.Prompt = ""
 	comment.Placeholder = "key comment"
 
-	kt := NewKeyTable(80, 5)
-	kt.ZonePrefix = prefix + "agent-"
-
-	saveBtn := NewButtonRow("Save")
+	saveBtn := NewButtonRow("Save", "Reset", "Back")
 	saveBtn.ZonePrefix = prefix + "save-"
 
 	return &EditScreen{
 		sk:           sk,
 		fileSelector: NewFileSelector(ModeLoadFile, "Select private key file"),
-		agentKeys:    kt,
-		socketPath: socketPath,
-		commentIn:  comment,
-		saveBtn:    saveBtn,
-		zonePrefix: prefix,
-		focus:      editFocusLoadFile,
+		commentIn:    comment,
+		saveBtn:      saveBtn,
+		zonePrefix:   prefix,
+		focus:        editFocusSelectFile,
 	}
 }
 
@@ -100,17 +86,20 @@ func (s *EditScreen) HasActiveTextInput() bool {
 }
 
 func (s *EditScreen) HasModal() bool {
-	return s.fileSelector.Visible() || s.showAgent
+	return s.fileSelector.Visible()
 }
 
 func (s *EditScreen) Init() tea.Cmd {
+	// Don't show file selector here: Init runs at startup when Agent is active.
+	// Picker's async messages would be routed to activeTab (Agent), not Edit.
+	// We show it on first WindowSizeMsg when Edit becomes active (see Update).
 	return nil
 }
 
 func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, editKeyLoadedMsg, editSaveMsg, editAgentKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, editKeyLoadedMsg, editSaveMsg, ButtonFlashDoneMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -121,29 +110,38 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		s.agentKeys.SetSize(s.width, 5)
 		s.fileSelector.SetHeight(max(s.height-12, 8))
+		// Show file selector when Edit tab becomes active and no key loaded.
+		// Deferred from Init so picker's async messages route to this tab.
+		if s.rawKey == nil && !s.fileSelector.Visible() {
+			return s, s.fileSelector.Show()
+		}
 		return s, nil
 
 	case FileSelectedMsg:
-		s.fileSelector.Hide()
+		s.status = ""
+		s.statusErr = false
 		return s, editLoadKeyCmd(msg.Path)
 
 	case FilePickerCancelledMsg:
-		s.fileSelector.Hide()
-		return s, nil
+		// Return focus to tab bar; keep file picker visible (user can press down to re-enter)
+		return s, navToTabBarCmd()
 
 	case editKeyLoadedMsg:
 		if msg.err != nil {
-			s.status = msg.err.Error()
+			contracted := utils.ContractHomeDirectory(msg.filePath)
+			s.status = contracted + ": " + msg.err.Error()
 			s.statusErr = true
-			return s, nil
+			return s, nil // keep file picker visible
 		}
+		s.fileSelector.Hide()
 		s.keyType = msg.keyType
 		s.fingerprint = msg.fingerprint
 		s.pubKeyStr = msg.pubKeyStr
 		s.rawKey = msg.rawKey
 		s.loadedPath = msg.filePath
+		s.originalComment = msg.comment
+		s.saveDiffRendered = ""
 		s.commentIn.SetValue(msg.comment)
 		s.status = "loaded: " + filepath.Base(msg.filePath)
 		s.statusErr = false
@@ -157,22 +155,13 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = "saved: " + filepath.Base(s.loadedPath)
 			s.statusErr = false
+			s.saveDiffRendered = ""
+			s.originalComment = s.commentIn.Value()
+			s.focus = editFocusComment
+			s.saveBtn.Focused = false
+			s.saveBtn.ClearPress()
+			return s, s.commentIn.Focus()
 		}
-		return s, nil
-
-	case editAgentKeysMsg:
-		if msg.err != nil {
-			s.status = msg.err.Error()
-			s.statusErr = true
-			return s, nil
-		}
-		rows := make([]table.Row, len(msg.keys))
-		for i, k := range msg.keys {
-			rows[i] = table.Row{k.Type(), ssh.FingerprintSHA256(k), k.Comment}
-		}
-		s.agentKeys.SetRows(rows)
-		s.showAgent = true
-		s.focus = editFocusAgentTable
 		return s, nil
 
 	case ButtonFlashDoneMsg:
@@ -180,7 +169,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showAgent {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
@@ -188,9 +177,6 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if s.fileSelector.Visible() {
 			return s, s.fileSelector.Update(msg)
-		}
-		if s.showAgent && s.focus == editFocusAgentTable {
-			return s.handleAgentTable(msg)
 		}
 		if s.focus == editFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
@@ -202,13 +188,9 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
-	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
-		s.focus = editFocusLoadFile
+	if s.rawKey == nil && inZoneBounds(s.zonePrefix+"select-file", x, y) {
+		s.focus = editFocusSelectFile
 		return s, s.fileSelector.Show()
-	}
-	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
-		s.focus = editFocusLoadAgent
-		return s, editFetchAgentKeysCmd(s.socketPath)
 	}
 	if s.rawKey != nil {
 		if inZoneBounds(s.zonePrefix+"comment", x, y) {
@@ -224,8 +206,34 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 			s.commentIn.Blur()
 			s.focus = editFocusSave
 			s.saveBtn.Focused = true
+			s.saveBtn.Active = btn
+			if btn == 1 {
+				s.commentIn.SetValue(s.originalComment)
+				s.status = "reset to original"
+				s.statusErr = false
+				s.focus = editFocusComment
+				s.saveBtn.Focused = false
+				s.saveBtn.ClearPress()
+				return s, s.commentIn.Focus()
+			}
+			if btn == 2 {
+				s.editGoBack()
+				return s, s.fileSelector.Show()
+			}
+			comment := strings.TrimSpace(s.commentIn.Value())
+			if comment == strings.TrimSpace(s.originalComment) {
+				s.status = "no changes"
+				s.statusErr = false
+				s.focus = editFocusComment
+				s.saveBtn.Focused = false
+				return s, s.commentIn.Focus()
+			}
+			if comment == "" {
+				s.status = "comment cannot be empty"
+				s.statusErr = true
+				return s, nil
+			}
 			s.saveBtn.Press()
-			comment := s.commentIn.Value()
 			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
 		}
 	}
@@ -235,20 +243,28 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
+		if s.focus == editFocusSave {
+			return s, navToTabBarCmd()
+		}
 		return s, tea.Quit
 	case "down", "j":
 		return s, s.advanceFocus(1)
 	case "up", "k":
 		return s, s.advanceFocus(-1)
 	case "left", "h", "right", "l":
-		// load buttons are rendered as a single row; left/right has no effect
+		if s.rawKey != nil && s.focus == editFocusSave {
+			if msg.String() == "left" || msg.String() == "h" {
+				s.saveBtn.Left()
+			} else {
+				s.saveBtn.Right()
+			}
+			return s, nil
+		}
 		return s, nil
 	case "enter":
 		switch s.focus {
-		case editFocusLoadFile:
+		case editFocusSelectFile:
 			return s, s.fileSelector.Show()
-		case editFocusLoadAgent:
-			return s, editFetchAgentKeysCmd(s.socketPath)
 		case editFocusComment:
 			return s, s.commentIn.Focus()
 		case editFocusSave:
@@ -257,32 +273,35 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				s.statusErr = true
 				return s, nil
 			}
+			if s.saveBtn.Active == 1 {
+				s.commentIn.SetValue(s.originalComment)
+				s.status = "reset to original"
+				s.statusErr = false
+				s.focus = editFocusComment
+				s.saveBtn.Focused = false
+				s.saveBtn.ClearPress()
+				return s, s.commentIn.Focus()
+			}
+			if s.saveBtn.Active == 2 {
+				s.editGoBack()
+				return s, s.fileSelector.Show()
+			}
+			comment := strings.TrimSpace(s.commentIn.Value())
+			if comment == strings.TrimSpace(s.originalComment) {
+				s.status = "no changes"
+				s.statusErr = false
+				return s, nil
+			}
+			if comment == "" {
+				s.status = "comment cannot be empty"
+				s.statusErr = true
+				return s, nil
+			}
 			s.saveBtn.Press()
-			comment := s.commentIn.Value()
 			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
 		}
 	}
 	return s, nil
-}
-
-func (s *EditScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		s.showAgent = false
-		s.focus = editFocusLoadFile
-		return s, nil
-	case "enter":
-		row := s.agentKeys.SelectedRow()
-		if row != nil {
-			s.status = "agent keys cannot be edited directly; load from file"
-			s.statusErr = true
-			s.showAgent = false
-			s.focus = editFocusLoadFile
-		}
-		return s, nil
-	}
-	cmd := s.agentKeys.Update(msg)
-	return s, cmd
 }
 
 func (s *EditScreen) handleCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -300,27 +319,34 @@ func (s *EditScreen) handleCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	return s, cmd
 }
 
+func (s *EditScreen) editGoBack() {
+	s.rawKey = nil
+	s.loadedPath = ""
+	s.originalComment = ""
+	s.keyType = ""
+	s.fingerprint = ""
+	s.pubKeyStr = ""
+	s.saveDiffRendered = ""
+	s.commentIn.SetValue("")
+	s.status = ""
+	s.statusErr = false
+	s.focus = editFocusSelectFile
+	s.saveBtn.Focused = false
+	s.saveBtn.ClearPress()
+}
+
 func (s *EditScreen) advanceFocus(dir int) tea.Cmd {
 	s.commentIn.Blur()
 	next := s.focus + dir
-	if next < editFocusLoadFile {
-		return navToTabBarCmd()
-	}
-	maxFocus := editFocusLoadAgent
+	maxFocus := editFocusSelectFile
 	if s.rawKey != nil {
 		maxFocus = editFocusSave
 	}
+	if next < editFocusSelectFile {
+		return navToTabBarCmd()
+	}
 	if next > maxFocus {
 		next = maxFocus
-	}
-	if next == editFocusAgentTable && !s.showAgent {
-		next += dir
-		if next < editFocusLoadFile {
-			return navToTabBarCmd()
-		}
-		if next > maxFocus {
-			next = maxFocus
-		}
 	}
 	s.focus = next
 	s.saveBtn.Focused = s.focus == editFocusSave
@@ -344,15 +370,7 @@ func (s *EditScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height)))
-	}
-
-	if s.showAgent {
-		title := SectionTitleStyle.Render("Select key from agent")
-		box := s.agentKeys.FocusedBoxView(true)
-		hint := DimStyle.Render("  Note: To edit, you must load the key from its file")
-		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+box+"\n"+hint))
+			s.fileSelector.View(width, height, active)))
 	}
 
 	w := width
@@ -362,27 +380,15 @@ func (s *EditScreen) View() tea.View {
 
 	var sections []string
 
-	loadFileFocused := active && s.focus == editFocusLoadFile
-	loadAgentFocused := active && s.focus == editFocusLoadAgent
-	loadFileStyle := PinkStyle
-	loadAgentStyle := PinkStyle
-	loadFileLabel := "  Load from file"
-	loadAgentLabel := "  Load from agent"
-	if loadFileFocused {
-		loadFileStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
-		loadFileLabel = "> Load from file"
-	}
-	if loadAgentFocused {
-		loadAgentStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
-		loadAgentLabel = "> Load from agent"
-	}
-	loadSection := lipgloss.JoinVertical(lipgloss.Left,
-		zone.Mark(s.zonePrefix+"load-file", loadFileStyle.Render(loadFileLabel)),
-		zone.Mark(s.zonePrefix+"load-agent", loadAgentStyle.Render(loadAgentLabel)),
-	)
-	sections = append(sections, loadSection)
-
-	if s.rawKey != nil {
+	if s.rawKey == nil {
+		selectStyle := PinkStyle
+		selectLabel := "  Select key file"
+		if active && s.focus == editFocusSelectFile {
+			selectStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+			selectLabel = "> Select key file"
+		}
+		sections = append(sections, zone.Mark(s.zonePrefix+"select-file", selectStyle.Render(selectLabel)))
+	} else {
 		sections = append(sections, "")
 
 		infoW := w * 3 / 4
@@ -398,16 +404,27 @@ func (s *EditScreen) View() tea.View {
 
 		sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
 
+		// Save + Diff in one full-width box so right edge aligns with boxes above
 		s.saveBtn.Focused = active && s.focus == editFocusSave
-		sections = append(sections, " "+s.saveBtn.View())
+		savePart := " " + s.saveBtn.View()
+		comment := strings.TrimSpace(s.commentIn.Value())
+		orig := strings.TrimSpace(s.originalComment)
+		diffPart := ""
+		if comment != orig {
+			diffPart = renderCommentDiff(orig, comment)
+		} else {
+			diffPart = DimStyle.Render("  (no changes)")
+		}
+		inner := lipgloss.JoinHorizontal(lipgloss.Top, savePart, "    ", diffPart)
+		sections = append(sections, SectionBox("Save / Diff", inner, infoW, active && s.focus == editFocusSave))
 	}
 
-	if s.status != "" {
-		style := GreenStyle
+	if s.rawKey == nil && s.status != "" {
+		statusStyle := GreenStyle
 		if s.statusErr {
-			style = ErrorStyle
+			statusStyle = ErrorStyle
 		}
-		sections = append(sections, style.Render("  "+s.status))
+		sections = append(sections, statusStyle.Render("  "+s.status))
 	}
 
 	content := strings.Join(sections, "\n")
@@ -428,6 +445,18 @@ func (s *EditScreen) StatusTextRaw() (string, bool) {
 	return s.status, s.statusErr
 }
 
+// renderCommentDiff returns a styled diff of old vs new comment, side by side.
+func renderCommentDiff(oldComment, newComment string) string {
+	var parts []string
+	if oldComment != "" {
+		parts = append(parts, ErrorStyle.Render("- "+oldComment))
+	}
+	if newComment != "" {
+		parts = append(parts, "    ", GreenStyle.Render("+ "+newComment))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen || maxLen < 4 {
 		return s
@@ -442,9 +471,9 @@ func editLoadKeyCmd(path string) tea.Cmd {
 		parsed, rawKey, signer, err := keys.LoadKeyMaterial(path)
 		if err != nil {
 			if strings.Contains(err.Error(), "encrypted keys not supported") {
-				return editKeyLoadedMsg{err: fmt.Errorf("not an unencrypted OpenSSH key")}
+				return editKeyLoadedMsg{filePath: path, err: fmt.Errorf("is not an unencrypted OpenSSH key")}
 			}
-			return editKeyLoadedMsg{err: err}
+			return editKeyLoadedMsg{filePath: path, err: err}
 		}
 
 		fp := ssh.FingerprintSHA256(signer.PublicKey())
@@ -467,18 +496,5 @@ func editSaveKeyCmd(rawKey interface{}, comment, filePath string) tea.Cmd {
 		}
 
 		return editSaveMsg{}
-	}
-}
-
-func editFetchAgentKeysCmd(socketPath string) tea.Cmd {
-	return func() tea.Msg {
-		if socketPath == "" {
-			return editAgentKeysMsg{err: fmt.Errorf("no socket path")}
-		}
-		keys, err := agent.ListKeysFromSocket(socketPath)
-		if err != nil {
-			return editAgentKeysMsg{err: fmt.Errorf("agent not running")}
-		}
-		return editAgentKeysMsg{keys: keys}
 	}
 }

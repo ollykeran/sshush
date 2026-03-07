@@ -228,10 +228,10 @@ type StyledFilePicker struct {
 }
 
 // NewStyledFilePicker creates a file picker with sshush styles; dirOnly restricts selection to directories.
+// Starts in ~/.ssh if it exists, otherwise home.
 func NewStyledFilePicker(dirOnly bool) StyledFilePicker {
 	fp := filepicker.New()
-	home, err := os.UserHomeDir()
-	if err == nil {
+	if home, err := os.UserHomeDir(); err == nil {
 		sshDir := home + "/.ssh"
 		if info, statErr := os.Stat(sshDir); statErr == nil && info.IsDir() {
 			fp.CurrentDirectory = sshDir
@@ -270,4 +270,8 @@ func (s StyledFilePicker) View() string {
 
 func (s StyledFilePicker) DidSelectFile(msg tea.Msg) (bool, string) {
 	return s.Model.DidSelectFile(msg)
+}
+
+func (s StyledFilePicker) CurrentDirectory() string {
+	return s.Model.CurrentDirectory
 }

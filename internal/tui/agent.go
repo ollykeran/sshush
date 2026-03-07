@@ -98,17 +98,17 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
-		sk:         sk,
-		keyTable:   kt,
-		buttons:    btns,
-		zonePrefix: prefix,
-		configPath: configPath,
+		sk:           sk,
+		keyTable:     kt,
+		buttons:      btns,
+		zonePrefix:   prefix,
+		configPath:   configPath,
 		socketPath:   socketPath,
 		status:       "loading...",
 		loadedFPs:    make(map[string]bool),
 		fileSelector: NewFileSelector(ModeLoadFile, "Select key file"),
 		passInput:    pi,
-		focus:      agentFocusTable,
+		focus:        agentFocusTable,
 	}
 }
 
@@ -166,7 +166,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.running {
 				state = "running"
 			}
-			s.sk.UpdateWidgetValue("daemon-status", state)
+			s.sk.UpdateWidgetValue("sshushd", state)
 		}
 		return s, nil
 
@@ -213,7 +213,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.status = msg.text
 		s.statusErr = msg.isErr
 		if s.sk != nil {
-			s.sk.UpdateWidgetValue("daemon-status", msg.text)
+			s.sk.UpdateWidgetValue("sshushd", msg.text)
 		}
 		if !msg.isErr {
 			return s, tea.Batch(
@@ -462,7 +462,7 @@ func (s *AgentScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height)))
+			s.fileSelector.View(width, height, active)))
 	}
 
 	if s.showPass {

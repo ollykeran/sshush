@@ -90,7 +90,8 @@ func (f *FileSelector) Update(msg tea.Msg) tea.Cmd {
 
 // View returns the modal content when visible, or empty string when hidden.
 // Parent should use lipgloss.Place to center it.
-func (f *FileSelector) View(width, height int) string {
+// focused controls border style: pink when false, green when true.
+func (f *FileSelector) View(width, height int, focused bool) string {
 	if !f.visible {
 		return ""
 	}
@@ -107,7 +108,13 @@ func (f *FileSelector) View(width, height int) string {
 	}
 
 	title := SectionTitleStyle.Render(f.title)
-	hint := DimStyle.Render("  h: back  l/enter: open  q/esc: cancel")
+	hint := DimStyle.Render("bksp: up dir | enter: select | q/esc: exit")
+	dirPath := f.picker.CurrentDirectory()
+	dirPart := PinkStyle.Render("dir: " + dirPath)
+	lineW := usableW - 2*pad
+	hintLine := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(lineW/2).Align(lipgloss.Left).Render(hint),
+		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Right).Render(dirPart))
 
 	pickerView := f.picker.View()
 	var truncated []string
@@ -116,7 +123,11 @@ func (f *FileSelector) View(width, height int) string {
 		truncated = append(truncated, line)
 	}
 
-	boxContent := FocusedBorderStyle.Width(boxW).Render(strings.Join(truncated, "\n"))
-	block := lipgloss.JoinVertical(lipgloss.Left, title, hint, boxContent)
-	return lipgloss.NewStyle().Padding(0, pad).Render(block)
+	border := UnfocusedBorderStyle
+	if focused {
+		border = FocusedBorderStyle
+	}
+	boxContent := border.Width(boxW).Render(strings.Join(truncated, "\n"))
+	block := lipgloss.JoinVertical(lipgloss.Left, title, "", hintLine, boxContent)
+	return lipgloss.NewStyle().Padding(0, pad).PaddingTop(1).PaddingBottom(1).Render(block)
 }

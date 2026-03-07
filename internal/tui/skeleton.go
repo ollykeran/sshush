@@ -224,15 +224,24 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 
+		if s.navFocus != navFocusScreen {
+			if key == "q" || key == "esc" {
+				s.quitting = true
+				return s, tea.Quit
+			}
+		}
+
 		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
-			updated, cmd := s.pages[s.activeTab].model.Update(msg)
-			s.pages[s.activeTab].model = updated
-			return s, cmd
+			if s.navFocus == navFocusScreen || key == "q" || key == "esc" {
+				updated, cmd := s.pages[s.activeTab].model.Update(msg)
+				s.pages[s.activeTab].model = updated
+				return s, cmd
+			}
 		}
 
 		if s.navFocus != navFocusScreen {
 			switch {
-			case key == "ctrl+c" || key == "q":
+			case key == "ctrl+c" || key == "q" || key == "esc":
 				s.quitting = true
 				return s, tea.Quit
 			case containsKey(s.KeyMap.SwitchTabLeft, key):
@@ -321,7 +330,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		for i, p := range s.pages {
 			if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
-				s.navFocus = navFocusScreen
+				s.navFocus = navFocusTabs
 				return s, s.switchTab(i)
 			}
 		}

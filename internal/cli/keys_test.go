@@ -51,3 +51,21 @@ func TestListKeysTo_Empty(t *testing.T) {
 		t.Errorf("expected 'no keys loaded' message, got: %s", buf.String())
 	}
 }
+
+func TestPrintCommentDiff(t *testing.T) {
+	t.Parallel()
+	out := printCommentDiff("old-comment", "new-comment")
+	s := out.String()
+	if !bytes.Contains([]byte(s), []byte("old-comment")) {
+		t.Errorf("output should contain old comment, got: %s", s)
+	}
+	if !bytes.Contains([]byte(s), []byte("new-comment")) {
+		t.Errorf("output should contain new comment, got: %s", s)
+	}
+	if !bytes.Contains([]byte(s), []byte("- ")) {
+		t.Errorf("output should contain removal line (- ), got: %s", s)
+	}
+	if !bytes.Contains([]byte(s), []byte("+ ")) {
+		t.Errorf("output should contain addition line (+ ), got: %s", s)
+	}
+}
