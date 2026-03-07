@@ -90,7 +90,7 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '*'
 
-	btns := NewButtonRow("Start", "Stop", "Reload")
+	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload")
 	btns.Focused = true
 	btns.ZonePrefix = prefix + "ctrl-"
 
@@ -524,7 +524,7 @@ func (s *AgentScreen) ControlButtonsView(focused bool) string {
 		case s.buttons.Active == i && focused:
 			style = HeaderTabActiveFocused
 		case s.buttons.Active == i:
-			style = HeaderTabActive
+			style = HeaderTabActiveUnfocused
 		default:
 			style = HeaderTabInactive
 		}
