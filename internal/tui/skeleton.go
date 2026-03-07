@@ -240,6 +240,27 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if s.navFocus != navFocusScreen {
+			// Daemon shortcuts work when focus is in navbar (tabs/tools)
+			switch key {
+			case "s":
+				if agent := s.agentScreen(); agent != nil {
+					_, cmd := agent.pressButton(0)
+					return s, cmd
+				}
+				return s, nil
+			case "x":
+				if agent := s.agentScreen(); agent != nil {
+					_, cmd := agent.pressButton(1)
+					return s, cmd
+				}
+				return s, nil
+			case "r":
+				if agent := s.agentScreen(); agent != nil {
+					_, cmd := agent.pressButton(2)
+					return s, cmd
+				}
+				return s, nil
+			}
 			switch {
 			case key == "ctrl+c" || key == "q" || key == "esc":
 				s.quitting = true
@@ -291,24 +312,6 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key == "ctrl+c":
 			s.quitting = true
 			return s, tea.Quit
-		case key == "s":
-			if agent := s.agentScreen(); agent != nil {
-				_, cmd := agent.pressButton(0)
-				return s, cmd
-			}
-			return s, nil
-		case key == "x":
-			if agent := s.agentScreen(); agent != nil {
-				_, cmd := agent.pressButton(1)
-				return s, cmd
-			}
-			return s, nil
-		case key == "r":
-			if agent := s.agentScreen(); agent != nil {
-				_, cmd := agent.pressButton(2)
-				return s, cmd
-			}
-			return s, nil
 		case key == "tab":
 			idx := (s.activeTab + 1) % len(s.pages)
 			return s, s.switchTab(idx)

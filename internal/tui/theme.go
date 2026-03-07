@@ -91,6 +91,14 @@ var (
 			BorderStyle(headerTabBorder()).
 			BorderForeground(ColorPurple)
 
+	// HeaderTabActiveUnfocused: same border as inactive, but bold; no purple background (avoids lingering purple box)
+	HeaderTabActiveUnfocused = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorPink).
+				PaddingLeft(2).PaddingRight(2).
+				BorderStyle(headerTabBorder()).
+				BorderForeground(ColorPurple)
+
 	HeaderTabActiveFocused = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorBlack).
