@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -93,6 +94,12 @@ func ResolveEditor(editorFlag string) string {
 	}
 	if strings.TrimSpace(os.Getenv("EDITOR")) != "" {
 		return strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if _, err := exec.LookPath("vim"); err == nil {
+		return "vim"
+	}
+	if _, err := exec.LookPath("nano"); err == nil {
+		return "nano"
 	}
 	return "vi"
 }

@@ -94,6 +94,18 @@ func writeFakeEditor(t *testing.T, dir, name, newComment string) string {
 	return path
 }
 
+// writeNoOpEditor creates a shell script that exits 0 without modifying the file.
+// Simulates user exiting the editor without saving.
+func writeNoOpEditor(t *testing.T, dir, name string) string {
+	t.Helper()
+	script := "#!/bin/sh\nexit 0\n"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // writeFailingEditor creates a shell script that exits with code 1.
 func writeFailingEditor(t *testing.T, dir, name string) string {
 	t.Helper()

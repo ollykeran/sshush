@@ -149,3 +149,16 @@ func printKeysDiff(before, after []diffEntry) *style.Output {
 	}
 	return out
 }
+
+// printCommentDiff returns an Output showing old (removed) and new (added) comment
+// in the same style as printKeysDiff.
+func printCommentDiff(oldComment, newComment string) *style.Output {
+	out := style.NewOutput()
+	if oldComment != "" {
+		out.Add(style.Err("- " + oldComment))
+	}
+	if newComment != "" {
+		out.Add(style.Green("+ " + newComment))
+	}
+	return out
+}

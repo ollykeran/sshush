@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,20 @@ func TestEditCommentWithEditor_success(t *testing.T) {
 	}
 }
 
+func TestEditCommentWithEditor_exitWithoutSaving(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	editorPath := writeNoOpEditor(t, dir, "noop-editor.sh")
+
+	_, err := editCommentWithEditor("old-comment", editorPath)
+	if err == nil {
+		t.Fatal("expected ErrExitedWithoutSaving when editor exits without saving")
+	}
+	if !errors.Is(err, ErrExitedWithoutSaving) {
+		t.Errorf("expected ErrExitedWithoutSaving, got: %v", err)
+	}
+}
+
 func TestEditCommentWithEditor_editorFails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -203,6 +218,20 @@ func TestRunEdit_editorFailsReportsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when editor fails")
 	}
+}
+
+func TestRunEdit_exitWithoutSaving_keyNotModified(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "original-comment")
+	editorPath := writeNoOpEditor(t, dir, "noop-editor.sh")
+
+	err := runEdit(privPath, editorPath, "", false, "")
+	if err != nil {
+		t.Fatalf("runEdit with no-save should succeed with no error: %v", err)
+	}
+
+	assertPrivKeyComment(t, privPath, "original-comment")
 }
 
 // --- assertion helpers ---

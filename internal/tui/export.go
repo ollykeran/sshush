@@ -355,7 +355,7 @@ func (s *ExportScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height)))
+			s.fileSelector.View(width, height, active)))
 	}
 
 	if s.showAgent {
