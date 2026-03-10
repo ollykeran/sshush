@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -16,32 +17,40 @@ const defaultConfigPath = "~/.config/sshush/config.toml"
 const defaultSocketFileName = "sshush.sock"
 const defaultPidFileName = "sshush.pid"
 
-// ResolveConfigPath returns a full path to a config file.
-func ResolveConfigPath(cmd *cobra.Command) (string, error) {
-	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
-
-	// Config loads in this order
-	// config flag
-	if cmd.Flags().Changed("config") {
+// configPath returns the config path using the standard order (--config flag,
+// ~/.config/sshush/config.toml if it exists, SSHUSH_CONFIG, ./config.toml if it exists,
+// else default path). Does not require the file to exist.
+func configPath(cmd *cobra.Command) string {
+	if cmd != nil && cmd.Flags().Changed("config") {
 		p, _ := cmd.Flags().GetString("config")
-		return utils.ExpandHomeDirectory(p), nil
+		return utils.ExpandHomeDirectory(p)
 	}
-	// ~/.config/sshush/config.toml
+	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
 	if _, err := os.Stat(expanded); err == nil {
-		return expanded, nil
+		return expanded
 	}
-	// SSHUSH
 	if p := os.Getenv("SSHUSH_CONFIG"); p != "" {
-		return utils.ExpandHomeDirectory(p), nil
+		return utils.ExpandHomeDirectory(p)
 	}
-	// ./config.toml
 	if _, err := os.Stat("./config.toml"); err == nil {
-		return "./config.toml", nil
+		return "./config.toml"
 	}
-	return "", style.NewOutput().
-		Error("config file not found").
-		Info("create " + defaultConfigPath + " or use --config").
-		AsError()
+	return expanded
+}
+
+// ResolveConfigPath returns the config file path (see configPath). The path is always
+// returned; error is non-nil when the file does not exist, so callers that need the
+// file must check err. Theme show/list/set can use the path regardless and handle
+// missing file as needed.
+func ResolveConfigPath(cmd *cobra.Command) (string, error) {
+	path := configPath(cmd)
+	if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
+		return path, style.NewOutput().
+			Error("config file not found").
+			Info("create " + defaultConfigPath + " or use --config").
+			AsError()
+	}
+	return path, nil
 }
 
 // ResolveDaemonConfigPath resolves SSHUSH_CONFIG or default daemon config path.
@@ -93,6 +102,12 @@ func ResolveEditor(editorFlag string) string {
 	}
 	if strings.TrimSpace(os.Getenv("EDITOR")) != "" {
 		return strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if _, err := exec.LookPath("vim"); err == nil {
+		return "vim"
+	}
+	if _, err := exec.LookPath("nano"); err == nil {
+		return "nano"
 	}
 	return "vi"
 }

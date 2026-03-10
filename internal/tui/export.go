@@ -80,12 +80,12 @@ func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	saveIn.Prompt = ""
 	saveIn.Placeholder = "filename.pub"
 
-	kt := NewKeyTable(80, 5)
+	kt := NewKeyTable(80, 5, sk.Styles())
 	kt.ZonePrefix = prefix + "agent-"
 
 	return &ExportScreen{
 		sk:           sk,
-		fileSelector: NewFileSelector(ModeLoadFile, "Select key file"),
+		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
 		agentKeys:    kt,
 		socketPath:   socketPath,
 		zonePrefix:   prefix,
@@ -120,8 +120,12 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		s.agentKeys.SetSize(s.width, 5)
+		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
 		s.fileSelector.SetHeight(max(s.height-12, 8))
+		return s, nil
+
+	case ThemeChangedMsg:
+		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -355,34 +359,35 @@ func (s *ExportScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height)))
+			s.fileSelector.View(width, height, active, s.sk.Styles())))
 	}
 
 	if s.showAgent {
-		title := SectionTitleStyle.Render("Select key from agent")
+		st := s.sk.Styles()
+		title := st.SectionTitleStyle.Render("Select key from agent")
 		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+s.agentKeys.FocusedBoxView(true)))
+			title+"\n"+s.agentKeys.FocusedBoxView(st, true)))
 	}
 
 	w := width
 	if w < 1 {
 		w = 80
 	}
-
+	st := s.sk.Styles()
 	var sections []string
 
 	loadFileFocused := active && s.focus == exportFocusLoadFile
 	loadAgentFocused := active && s.focus == exportFocusLoadAgent
-	loadFileStyle := PinkStyle
-	loadAgentStyle := PinkStyle
+	loadFileStyle := st.PinkStyle
+	loadAgentStyle := st.PinkStyle
 	loadFileLabel := "  Load from file"
 	loadAgentLabel := "  Load from agent"
 	if loadFileFocused {
-		loadFileStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+		loadFileStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 		loadFileLabel = "> Load from file"
 	}
 	if loadAgentFocused {
-		loadAgentStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+		loadAgentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 		loadAgentLabel = "> Load from agent"
 	}
 	sections = append(sections,
@@ -398,39 +403,39 @@ func (s *ExportScreen) View() tea.View {
 			contentW = 100
 		}
 
-		pubStyle := PinkStyle
+		pubStyle := st.PinkStyle
 		if active && s.focus == exportFocusPubKey {
-			pubStyle = lipgloss.NewStyle().Foreground(ColorBright).Background(ColorGreen)
+			pubStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Background(lipgloss.Color(s.sk.Theme().Focus))
 		}
-		sections = append(sections, SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && s.focus == exportFocusPubKey))
+		sections = append(sections, st.SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && s.focus == exportFocusPubKey))
 
 		copyFocused := active && s.focus == exportFocusCopy
-		copyStyle := PinkStyle
+		copyStyle := st.PinkStyle
 		copyLabel := "  Copy to clipboard"
 		if copyFocused {
-			copyStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+			copyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			copyLabel = "> Copy to clipboard"
 		}
 		sections = append(sections, zone.Mark(s.zonePrefix+"copy", copyStyle.Render(copyLabel)))
 
 		saveFocused := active && s.focus == exportFocusSaveFile
-		saveStyle := PinkStyle
+		saveStyle := st.PinkStyle
 		saveLabel := "  Save to file"
 		if saveFocused {
-			saveStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+			saveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			saveLabel = "> Save to file"
 		}
 		sections = append(sections, zone.Mark(s.zonePrefix+"save", saveStyle.Render(saveLabel)))
 
 		if s.showSaveIn {
-			sections = append(sections, SectionBox("Filename", s.saveFilename.View(), contentW, active))
+			sections = append(sections, st.SectionBox("Filename", s.saveFilename.View(), contentW, active))
 		}
 	}
 
 	if s.status != "" {
-		style := GreenStyle
+		style := st.GreenStyle
 		if s.statusErr {
-			style = ErrorStyle
+			style = st.ErrorStyle
 		}
 		sections = append(sections, "", style.Render("  "+s.status))
 	}
@@ -441,10 +446,11 @@ func (s *ExportScreen) View() tea.View {
 }
 
 func (s *ExportScreen) HelpEntries() []string {
+	st := s.sk.Styles()
 	return []string{
-		HelpRow("up/k", "Previous field"),
-		HelpRow("down/j", "Next field"),
-		HelpRow("enter", "Activate"),
+		st.HelpRow("up/k", "Previous field"),
+		st.HelpRow("down/j", "Next field"),
+		st.HelpRow("enter", "Activate"),
 		"",
 	}
 }

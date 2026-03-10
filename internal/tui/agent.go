@@ -15,6 +15,7 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
+	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -90,25 +91,25 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '*'
 
-	btns := NewButtonRow("Start", "Stop", "Reload")
+	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload")
 	btns.Focused = true
 	btns.ZonePrefix = prefix + "ctrl-"
 
-	kt := NewKeyTable(80, 8)
+	kt := NewKeyTable(80, 8, sk.Styles())
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
-		sk:         sk,
-		keyTable:   kt,
-		buttons:    btns,
-		zonePrefix: prefix,
-		configPath: configPath,
+		sk:           sk,
+		keyTable:     kt,
+		buttons:      btns,
+		zonePrefix:   prefix,
+		configPath:   configPath,
 		socketPath:   socketPath,
 		status:       "loading...",
 		loadedFPs:    make(map[string]bool),
-		fileSelector: NewFileSelector(ModeLoadFile, "Select key file"),
+		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
 		passInput:    pi,
-		focus:      agentFocusTable,
+		focus:        agentFocusTable,
 	}
 }
 
@@ -145,8 +146,19 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if tableH < 3 {
 			tableH = 3
 		}
-		s.keyTable.SetSize(s.width, tableH)
+		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
 		s.fileSelector.SetHeight(max(s.height-12, 8))
+		return s, nil
+
+	case ThemeChangedMsg:
+		tableH := s.height - 14
+		if tableH > 12 {
+			tableH = 12
+		}
+		if tableH < 3 {
+			tableH = 3
+		}
+		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -166,7 +178,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.running {
 				state = "running"
 			}
-			s.sk.UpdateWidgetValue("daemon-status", state)
+			s.sk.UpdateWidgetValue("sshushd", state)
 		}
 		return s, nil
 
@@ -213,7 +225,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.status = msg.text
 		s.statusErr = msg.isErr
 		if s.sk != nil {
-			s.sk.UpdateWidgetValue("daemon-status", msg.text)
+			s.sk.UpdateWidgetValue("sshushd", msg.text)
 		}
 		if !msg.isErr {
 			return s, tea.Batch(
@@ -328,7 +340,7 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, s.fileSelector.Show()
 
-	case "d":
+	case "backspace", "delete", "d":
 		if s.focus == agentFocusTable {
 			return s.removeSelectedKey()
 		}
@@ -462,13 +474,14 @@ func (s *AgentScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height)))
+			s.fileSelector.View(width, height, active, s.sk.Styles())))
 	}
 
 	if s.showPass {
-		title := SectionTitleStyle.Render("Enter " + s.passAction + " passphrase")
+		st := s.sk.Styles()
+		title := st.SectionTitleStyle.Render("Enter " + s.passAction + " passphrase")
 		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			title+"\n"+FocusedBorderStyle.Render(s.passInput.View())))
+			title+"\n"+st.FocusedBorderStyle.Render(s.passInput.View())))
 	}
 
 	w := width
@@ -476,7 +489,8 @@ func (s *AgentScreen) View() tea.View {
 		w = 80
 	}
 
-	keyBox := s.keyTable.FocusedBoxView(active && s.focus == agentFocusTable)
+	st := s.sk.Styles()
+	keyBox := s.keyTable.FocusedBoxView(st, active && s.focus == agentFocusTable)
 
 	var sections []string
 	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
@@ -493,19 +507,24 @@ func (s *AgentScreen) View() tea.View {
 }
 
 func (s *AgentScreen) BannerColor() color.Color {
+	t := s.sk.Theme()
 	if s.statusErr {
-		return ColorErr
+		c, _ := theme.HexToRGBA(t.Error)
+		return c
 	}
 	if s.daemonRunning {
-		return ColorGreen
+		c, _ := theme.HexToRGBA(t.Focus)
+		return c
 	}
-	return ColorPink
+	c, _ := theme.HexToRGBA(t.Accent)
+	return c
 }
 
 func (s *AgentScreen) StatusText() string {
-	statusStyle := PinkStyle
+	st := s.sk.Styles()
+	statusStyle := st.PinkStyle
 	if s.statusErr {
-		statusStyle = ErrorStyle
+		statusStyle = st.ErrorStyle
 	}
 	return statusStyle.Render(s.status)
 }
@@ -515,18 +534,45 @@ func (s *AgentScreen) StatusTextRaw() (string, bool) {
 }
 
 func (s *AgentScreen) ControlButtonsView(focused bool) string {
+	st := s.sk.Styles()
 	var parts []string
 	for i, label := range s.buttons.Labels {
 		var style lipgloss.Style
 		switch {
 		case s.buttons.Pressed == i:
-			style = HeaderTabActiveFocused
+			style = st.HeaderTabActiveFocused
 		case s.buttons.Active == i && focused:
-			style = HeaderTabActiveFocused
+			style = st.HeaderTabActiveFocused
 		case s.buttons.Active == i:
-			style = HeaderTabActive
+			style = st.HeaderTabActiveUnfocused
 		default:
-			style = HeaderTabInactive
+			style = st.HeaderTabInactive
+		}
+		rendered := style.Render(label)
+		if s.buttons.ZonePrefix != "" {
+			rendered = zone.Mark(s.buttons.ZonePrefix+label, rendered)
+		}
+		parts = append(parts, rendered)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
+}
+
+// ControlButtonsInlineView returns buttons as styled text without per-button borders,
+// for use inside a single daemon box (same headerTabBorder as tabs).
+func (s *AgentScreen) ControlButtonsInlineView(focused bool) string {
+	st := s.sk.Styles()
+	var parts []string
+	for i, label := range s.buttons.Labels {
+		var style lipgloss.Style
+		switch {
+		case s.buttons.Pressed == i:
+			style = st.FocusedButtonStyle
+		case s.buttons.Active == i && focused:
+			style = st.FocusedButtonStyle
+		case s.buttons.Active == i:
+			style = st.ButtonActiveStyle
+		default:
+			style = st.UnfocusedButtonStyle
 		}
 		rendered := style.Render(label)
 		if s.buttons.ZonePrefix != "" {
@@ -538,17 +584,18 @@ func (s *AgentScreen) ControlButtonsView(focused bool) string {
 }
 
 func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
-	title := SectionTitleStyle.Render(" Found Keys")
+	st := s.sk.Styles()
+	title := st.SectionTitleStyle.Render(" Found Keys")
 	var lines []string
 	maxShow := 6
 	if len(visible) < maxShow {
 		maxShow = len(visible)
 	}
 	for i := 0; i < maxShow; i++ {
-		style := PinkStyle
+		style := st.PinkStyle
 		linePrefix := "  "
 		if active && s.focus == agentFocusFound && i == s.foundSelected {
-			style = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			linePrefix = "> "
 		}
 		rendered := style.Render(linePrefix + visible[i])
@@ -556,39 +603,40 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 		lines = append(lines, rendered)
 	}
 	if len(visible) > maxShow {
-		lines = append(lines, DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
+		lines = append(lines, st.DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
 	}
 	content := strings.Join(lines, "\n")
 	boxW := width * 3 / 4
 	if boxW > 120 {
 		boxW = 120
 	}
-	border := UnfocusedBorderStyle
+	border := st.UnfocusedBorderStyle
 	if active && s.focus == agentFocusFound {
-		border = FocusedBorderStyle
+		border = st.FocusedBorderStyle
 	}
 	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top,
 		title+"\n"+border.Width(boxW-4).Render(content))
 }
 
 func (s *AgentScreen) HelpEntries() []string {
+	st := s.sk.Styles()
 	return []string{
-		HelpRow("s", "Start daemon"),
-		HelpRow("x", "Stop daemon"),
-		HelpRow("r", "Reload daemon"),
+		st.HelpRow("s", "Start daemon"),
+		st.HelpRow("x", "Stop daemon"),
+		st.HelpRow("r", "Reload daemon"),
 		"",
-		HelpRow("a", "Add key"),
-		HelpRow("d", "Remove key"),
-		HelpRow("l", "Lock agent"),
-		HelpRow("u", "Unlock agent"),
+		st.HelpRow("a", "Add key"),
+		st.HelpRow("d / bksp", "Remove key"),
+		st.HelpRow("l", "Lock agent"),
+		st.HelpRow("u", "Unlock agent"),
 		"",
-		HelpRow("left/h", "Navigate left"),
-		HelpRow("right/l", "Navigate right"),
-		HelpRow("up/k", "Move up"),
-		HelpRow("down/j", "Move down"),
-		HelpRow("enter", "Activate"),
+		st.HelpRow("left/h", "Navigate left"),
+		st.HelpRow("right/l", "Navigate right"),
+		st.HelpRow("up/k", "Move up"),
+		st.HelpRow("down/j", "Move down"),
+		st.HelpRow("enter", "Activate"),
 		"",
-		HelpRow("q/esc/ctrl+c", "Quit"),
+		st.HelpRow("q/esc/ctrl+c", "Quit"),
 	}
 }
 

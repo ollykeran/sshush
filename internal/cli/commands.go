@@ -16,6 +16,7 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newExportCommand())
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newTUICommand())
+	root.AddCommand(newThemeCommand())
 	root.AddCommand(newFindCommand())
 	root.AddCommand(newCompletionCommand())
 	// root.AddCommand(newLockCommand())

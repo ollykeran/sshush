@@ -480,34 +480,35 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 		s.saveBtn.Focused = false
 	}
 
+	st := s.sk.Styles()
 	focused := func(region int) bool {
 		return active && s.focus == region
 	}
 
-	sections = append(sections, SectionBox("Type", s.typeRow.View(), w, focused(createFocusType)))
+	sections = append(sections, st.SectionBox("Type", s.typeRow.View(st), w, focused(createFocusType)))
 
 	kt := s.currentKeyType()
 	if kt == "rsa" || kt == "ecdsa" {
-		sections = append(sections, SectionBox("Options", s.optionRow.View(), w, focused(createFocusOptions)))
+		sections = append(sections, st.SectionBox("Options", s.optionRow.View(st), w, focused(createFocusOptions)))
 	}
 
-	sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), w, focused(createFocusComment))))
+	sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), w, focused(createFocusComment))))
 
-	sections = append(sections, zone.Mark(s.zonePrefix+"dir", SectionBox("Directory", s.dirInput.View(), w, focused(createFocusDir))))
+	sections = append(sections, zone.Mark(s.zonePrefix+"dir", st.SectionBox("Directory", s.dirInput.View(), w, focused(createFocusDir))))
 
-	sections = append(sections, zone.Mark(s.zonePrefix+"filename", SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename))))
+	sections = append(sections, zone.Mark(s.zonePrefix+"filename", st.SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename))))
 
 	fullPath := filepath.Join(s.dirInput.Value(), s.filenameIn.Value())
 	if _, err := os.Stat(fullPath); err == nil {
-		sections = append(sections, WarnStyle.Render("  ⚠ File exists: "+fullPath))
+		sections = append(sections, st.WarnStyle.Render("  ⚠ File exists: "+fullPath))
 	}
 
-	sections = append(sections, " "+s.saveBtn.View())
+	sections = append(sections, " "+s.saveBtn.View(st))
 
 	if s.status != "" {
-		style := GreenStyle
+		style := st.GreenStyle
 		if s.statusErr {
-			style = ErrorStyle
+			style = st.ErrorStyle
 		}
 		sections = append(sections, style.Render("  "+s.status))
 	}
@@ -516,26 +517,28 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 }
 
 func (s *CreateScreen) viewResultPanel(w int) string {
+	st := s.sk.Styles()
 	if s.genResult == nil {
-		return DimStyle.Render("  Generate a key to see results")
+		return st.DimStyle.Render("  Generate a key to see results")
 	}
 
 	var sections []string
 
-	sections = append(sections, SectionBox("Public Key", PinkStyle.Render(s.genResult.pubKeyStr), w, false))
-	sections = append(sections, SectionBox("Private Key", PinkStyle.Render(s.genResult.privPath), w, false))
-	sections = append(sections, SectionBox("Public Key File", PinkStyle.Render(s.genResult.pubPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key", st.PinkStyle.Render(s.genResult.pubKeyStr), w, false))
+	sections = append(sections, st.SectionBox("Private Key", st.PinkStyle.Render(s.genResult.privPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key File", st.PinkStyle.Render(s.genResult.pubPath), w, false))
 
 	return strings.Join(sections, "\n")
 }
 
 func (s *CreateScreen) HelpEntries() []string {
+	st := s.sk.Styles()
 	return []string{
-		HelpRow("up/k", "Previous field"),
-		HelpRow("down/j", "Next field"),
-		HelpRow("left/h", "Previous option"),
-		HelpRow("right/l", "Next option"),
-		HelpRow("enter", "Activate/Edit"),
+		st.HelpRow("up/k", "Previous field"),
+		st.HelpRow("down/j", "Next field"),
+		st.HelpRow("left/h", "Previous option"),
+		st.HelpRow("right/l", "Next option"),
+		st.HelpRow("enter", "Activate/Edit"),
 		"",
 	}
 }

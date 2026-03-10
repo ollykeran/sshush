@@ -33,10 +33,10 @@ type FileSelector struct {
 }
 
 // NewFileSelector creates a FileSelector with the given mode and title.
-func NewFileSelector(mode FileSelectorMode, title string) *FileSelector {
+func NewFileSelector(mode FileSelectorMode, title string, st Styles) *FileSelector {
 	dirOnly := mode == ModeDirectory
 	return &FileSelector{
-		picker: NewStyledFilePicker(dirOnly),
+		picker: NewStyledFilePicker(dirOnly, st),
 		title:  title,
 		mode:   mode,
 	}
@@ -90,7 +90,8 @@ func (f *FileSelector) Update(msg tea.Msg) tea.Cmd {
 
 // View returns the modal content when visible, or empty string when hidden.
 // Parent should use lipgloss.Place to center it.
-func (f *FileSelector) View(width, height int) string {
+// focused controls border style: pink when false, green when true.
+func (f *FileSelector) View(width, height int, focused bool, st Styles) string {
 	if !f.visible {
 		return ""
 	}
@@ -106,8 +107,14 @@ func (f *FileSelector) View(width, height int) string {
 		innerW = 40
 	}
 
-	title := SectionTitleStyle.Render(f.title)
-	hint := DimStyle.Render("  h: back  l/enter: open  q/esc: cancel")
+	title := st.SectionTitleStyle.Render(f.title)
+	hint := st.DimStyle.Render("bksp: up dir | enter: select | q/esc: exit")
+	dirPath := f.picker.CurrentDirectory()
+	dirPart := st.PinkStyle.Render("dir: " + dirPath)
+	lineW := usableW - 2*pad
+	hintLine := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(lineW/2).Align(lipgloss.Left).Render(hint),
+		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Right).Render(dirPart))
 
 	pickerView := f.picker.View()
 	var truncated []string
@@ -116,7 +123,11 @@ func (f *FileSelector) View(width, height int) string {
 		truncated = append(truncated, line)
 	}
 
-	boxContent := FocusedBorderStyle.Width(boxW).Render(strings.Join(truncated, "\n"))
-	block := lipgloss.JoinVertical(lipgloss.Left, title, hint, boxContent)
-	return lipgloss.NewStyle().Padding(0, pad).Render(block)
+	border := st.UnfocusedBorderStyle
+	if focused {
+		border = st.FocusedBorderStyle
+	}
+	boxContent := border.Width(boxW).Render(strings.Join(truncated, "\n"))
+	block := lipgloss.JoinVertical(lipgloss.Left, title, "", hintLine, boxContent)
+	return lipgloss.NewStyle().Padding(0, pad).PaddingTop(1).PaddingBottom(1).Render(block)
 }

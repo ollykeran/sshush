@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ func newEditCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "edit <private-key-filepath>",
 		Long:    "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
-		Example: "sshush edit ~/.ssh/id_ed25519 --comment 'user@host' --copy --output ~/.ssh/id_ed25519.new",
+		Example: "sshush edit ~/.ssh/id_ed25519 --comment 'new-comment' --copy --output ~/.ssh/id_ed25519.new",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				cmd.Help()
@@ -37,9 +38,9 @@ func newEditCommand() *cobra.Command {
 			return runEdit(args[0], editorFlag, commentFlag, copyFlag, outputFlag)
 		},
 	}
-	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vi)")
+	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
 	cmd.Flags().StringVarP(&commentFlag, "comment", "C", "", "new key comment (skip editor)")
-	cmd.Flags().BoolVar(&copyFlag, "copy", false, "write edited key to a new file (requires --output)")
+	cmd.Flags().BoolVar(&copyFlag, "copy", false, "write edited key to a new file (requires -o/--output)")
 	cmd.Flags().StringVarP(&outputFlag, "output", "o", "", "destination path when using --copy")
 	return cmd
 }
@@ -69,6 +70,10 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	if strings.TrimSpace(comment) == "" {
 		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
+			if errors.Is(err, ErrExitedWithoutSaving) {
+				style.NewOutput().Success("no changes").Print()
+				return nil
+			}
 			return style.NewOutput().Error(err.Error()).AsError()
 		}
 	}
@@ -76,6 +81,8 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	if comment == "" {
 		return style.NewOutput().Error("comment cannot be empty").AsError()
 	}
+
+	printCommentDiff(parsed.Comment, comment).Print()
 
 	destPath := privateKeyPath
 	if copyFlag {
@@ -113,6 +120,9 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	return nil
 }
 
+// ErrExitedWithoutSaving is returned when the user exits the editor without saving changes.
+var ErrExitedWithoutSaving = errors.New("exited without saving")
+
 func resolveEditor(editorFlag string) string {
 	return runtime.ResolveEditor(editorFlag)
 }
@@ -149,5 +159,9 @@ func editCommentWithEditor(currentComment, editor string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read edited comment: %w", err)
 	}
-	return strings.TrimSpace(string(edited)), nil
+	trimmed := strings.TrimSpace(string(edited))
+	if trimmed == strings.TrimSpace(currentComment) {
+		return "", ErrExitedWithoutSaving
+	}
+	return trimmed, nil
 }
