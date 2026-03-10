@@ -44,23 +44,19 @@ func (b *ButtonRow) ClearPress() {
 	b.Pressed = -1
 }
 
-func (b ButtonRow) View() string {
+func (b ButtonRow) View(st Styles) string {
 	var parts []string
 	for i, label := range b.Labels {
 		var style lipgloss.Style
 		switch {
 		case b.Pressed == i:
-			style = FocusedButtonStyle
+			style = st.FocusedButtonStyle
 		case b.Active == i && b.Focused:
-			style = FocusedButtonStyle
+			style = st.FocusedButtonStyle
 		case b.Active == i:
-			style = lipgloss.NewStyle().
-				Foreground(ColorBright).
-				Background(ColorPurple).
-				Bold(true).
-				Padding(0, 2)
+			style = st.ButtonActiveStyle
 		default:
-			style = UnfocusedButtonStyle
+			style = st.UnfocusedButtonStyle
 		}
 		rendered := style.Render(label)
 		if b.ZonePrefix != "" {
@@ -92,7 +88,7 @@ type KeyTable struct {
 const keyCellPadOverhead = 6
 
 // NewKeyTable creates a KeyTable with type, fingerprint, and comment columns.
-func NewKeyTable(width, height int) KeyTable {
+func NewKeyTable(width, height int, st Styles) KeyTable {
 	innerW := keyBoxInnerWidth(width)
 	rowW := innerW + keyCellPadOverhead
 	cols := keyTableColumns(innerW)
@@ -103,16 +99,16 @@ func NewKeyTable(width, height int) KeyTable {
 		table.WithHeight(height),
 		table.WithWidth(rowW),
 	)
-	t.SetStyles(keyTableStyles(rowW))
+	t.SetStyles(keyTableStyles(rowW, st))
 	return KeyTable{Table: t}
 }
 
-func (kt *KeyTable) SetSize(width, height int) {
+func (kt *KeyTable) SetSize(width, height int, st Styles) {
 	innerW := keyBoxInnerWidth(width)
 	rowW := innerW + keyCellPadOverhead
 	kt.Table.SetColumns(keyTableColumns(innerW))
 	kt.Table.SetWidth(rowW)
-	kt.Table.SetStyles(keyTableStyles(rowW))
+	kt.Table.SetStyles(keyTableStyles(rowW, st))
 	kt.Table.SetHeight(height)
 }
 
@@ -157,16 +153,16 @@ func (kt KeyTable) SelectedRow() table.Row {
 	return kt.Table.SelectedRow()
 }
 
-func (kt KeyTable) FocusedBoxView(focused bool) string {
-	border := UnfocusedBorderStyle
+func (kt KeyTable) FocusedBoxView(st Styles, focused bool) string {
+	border := st.UnfocusedBorderStyle
 	if focused {
-		border = FocusedBorderStyle
+		border = st.FocusedBorderStyle
 	}
 	return border.Render(kt.Table.View())
 }
 
-func (kt KeyTable) BoxView() string {
-	return UnfocusedBorderStyle.Render(kt.Table.View())
+func (kt KeyTable) BoxView(st Styles) string {
+	return st.UnfocusedBorderStyle.Render(kt.Table.View())
 }
 
 func keyBoxInnerWidth(termWidth int) int {
@@ -201,21 +197,21 @@ func keyTableColumns(w int) []table.Column {
 	}
 }
 
-func keyTableStyles(rowWidth int) table.Styles {
+func keyTableStyles(rowWidth int, st Styles) table.Styles {
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(ColorDim).
+		BorderForeground(lipgloss.Color(st.TableHeaderFgHex)).
 		BorderBottom(true).
 		Bold(true).
-		Foreground(ColorGreen).
+		Foreground(lipgloss.Color(st.TableHeaderFgHex)).
 		Padding(0, 1)
 	s.Cell = s.Cell.
-		Foreground(ColorPink).
+		Foreground(lipgloss.Color(st.TableCellFgHex)).
 		Padding(0, 1)
 	s.Selected = lipgloss.NewStyle().
-		Foreground(ColorBright).
-		Background(ColorPurple).
+		Foreground(lipgloss.Color(st.TableSelectedFgHex)).
+		Background(lipgloss.Color(st.TableSelectedBgHex)).
 		Bold(true).
 		Width(rowWidth)
 	return s
@@ -228,10 +224,10 @@ type StyledFilePicker struct {
 }
 
 // NewStyledFilePicker creates a file picker with sshush styles; dirOnly restricts selection to directories.
-func NewStyledFilePicker(dirOnly bool) StyledFilePicker {
+// Starts in ~/.ssh if it exists, otherwise home.
+func NewStyledFilePicker(dirOnly bool, st Styles) StyledFilePicker {
 	fp := filepicker.New()
-	home, err := os.UserHomeDir()
-	if err == nil {
+	if home, err := os.UserHomeDir(); err == nil {
 		sshDir := home + "/.ssh"
 		if info, statErr := os.Stat(sshDir); statErr == nil && info.IsDir() {
 			fp.CurrentDirectory = sshDir
@@ -242,11 +238,14 @@ func NewStyledFilePicker(dirOnly bool) StyledFilePicker {
 	fp.DirAllowed = dirOnly
 	fp.FileAllowed = !dirOnly
 	fp.ShowHidden = true
-	fp.Styles.Cursor = lipgloss.NewStyle().Foreground(ColorGreen)
-	fp.Styles.Directory = lipgloss.NewStyle().Foreground(ColorPink).Bold(true)
-	fp.Styles.File = lipgloss.NewStyle().Foreground(ColorPink)
-	fp.Styles.Selected = lipgloss.NewStyle().Foreground(ColorBright).Bold(true)
-	fp.Styles.Symlink = lipgloss.NewStyle().Foreground(ColorDim)
+	fp.Styles.Cursor = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableHeaderFgHex))
+	fp.Styles.Directory = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Bold(true)
+	fp.Styles.File = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex))
+	fp.Styles.Selected = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#000000")).
+		Background(lipgloss.Color(st.TableHeaderFgHex)).
+		Bold(true)
+	fp.Styles.Symlink = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableHeaderFgHex))
 	return StyledFilePicker{Model: fp}
 }
 
@@ -270,4 +269,8 @@ func (s StyledFilePicker) View() string {
 
 func (s StyledFilePicker) DidSelectFile(msg tea.Msg) (bool, string) {
 	return s.Model.DidSelectFile(msg)
+}
+
+func (s StyledFilePicker) CurrentDirectory() string {
+	return s.Model.CurrentDirectory
 }

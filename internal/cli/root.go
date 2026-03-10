@@ -9,6 +9,7 @@ import (
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
@@ -21,6 +22,15 @@ var env struct {
 }
 
 var errHelpShown = errors.New("")
+
+func isThemeCmd(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c.Name() == "theme" {
+			return true
+		}
+	}
+	return false
+}
 
 // argsNoneOrHelp rejects positional args like cobra.NoArgs, but treats
 // "help" as a request to print help (matching cobra's root-level behaviour).
@@ -95,6 +105,11 @@ func NewRootCommand() *cobra.Command {
 			config.SetupConfig()
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
+				if isThemeCmd(cmd) {
+					env.Config = nil
+					style.SetTheme(theme.DefaultTheme())
+					return nil
+				}
 				return err
 			}
 
@@ -112,6 +127,7 @@ func NewRootCommand() *cobra.Command {
 			}
 
 			env.Config = &cfg
+			style.SetTheme(config.ResolveThemeFromConfig(cfg))
 			return nil
 		},
 	}

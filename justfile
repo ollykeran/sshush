@@ -8,6 +8,11 @@ deps:
     go mod tidy
     go mod download
 
+update:
+    go get -u -t ./...
+    go mod tidy
+    go mod download
+
 build-sshushd: deps
     mkdir -p {{ build_dir }}
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binaryd }} ./cmd/sshushd
