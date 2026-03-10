@@ -340,7 +340,7 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, s.fileSelector.Show()
 
-	case "d", "backspace":
+	case "backspace", "delete", "d":
 		if s.focus == agentFocusTable {
 			return s.removeSelectedKey()
 		}
@@ -495,10 +495,10 @@ func (s *AgentScreen) View() tea.View {
 	var sections []string
 	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
 
-		visible := s.visibleFoundKeys()
+	visible := s.visibleFoundKeys()
 	if len(visible) > 0 {
 		sections = append(sections, "")
-		foundContent := s.renderFoundKeys(st, visible, w, active)
+		foundContent := s.renderFoundKeys(visible, w, active)
 		sections = append(sections, foundContent)
 	}
 
@@ -557,7 +557,34 @@ func (s *AgentScreen) ControlButtonsView(focused bool) string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
-func (s *AgentScreen) renderFoundKeys(st Styles, visible []string, width int, active bool) string {
+// ControlButtonsInlineView returns buttons as styled text without per-button borders,
+// for use inside a single daemon box (same headerTabBorder as tabs).
+func (s *AgentScreen) ControlButtonsInlineView(focused bool) string {
+	st := s.sk.Styles()
+	var parts []string
+	for i, label := range s.buttons.Labels {
+		var style lipgloss.Style
+		switch {
+		case s.buttons.Pressed == i:
+			style = st.FocusedButtonStyle
+		case s.buttons.Active == i && focused:
+			style = st.FocusedButtonStyle
+		case s.buttons.Active == i:
+			style = st.ButtonActiveStyle
+		default:
+			style = st.UnfocusedButtonStyle
+		}
+		rendered := style.Render(label)
+		if s.buttons.ZonePrefix != "" {
+			rendered = zone.Mark(s.buttons.ZonePrefix+label, rendered)
+		}
+		parts = append(parts, rendered)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
+}
+
+func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
+	st := s.sk.Styles()
 	title := st.SectionTitleStyle.Render(" Found Keys")
 	var lines []string
 	maxShow := 6

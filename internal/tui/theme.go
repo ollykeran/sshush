@@ -29,6 +29,12 @@ type Styles struct {
 	HeaderTabActiveUnfocused lipgloss.Style
 	HeaderTabActiveFocused lipgloss.Style
 	HeaderTabInactive      lipgloss.Style
+	HeaderTabBoxActiveFocused lipgloss.Style
+	HeaderTabBoxActive     lipgloss.Style
+	HeaderTabBoxInactive   lipgloss.Style
+	DaemonLabelStyle       lipgloss.Style
+	DaemonBoxUnfocused     lipgloss.Style
+	DaemonBoxFocused       lipgloss.Style
 	BannerStyle            lipgloss.Style
 	// Hex strings for borders and table (use lipgloss.Color(st.XXX) at use site)
 	OuterBorderColorHex string
@@ -131,6 +137,37 @@ func BuildStyles(t theme.Theme) Styles {
 			PaddingLeft(2).PaddingRight(2).
 			BorderStyle(headerTabBorder()).
 			BorderForeground(accent),
+		HeaderTabBoxActiveFocused: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(black).
+			Background(focus).
+			PaddingLeft(2).PaddingRight(2).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(focus),
+		HeaderTabBoxActive: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(black).
+			Background(accent).
+			PaddingLeft(2).PaddingRight(2).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(accent),
+		HeaderTabBoxInactive: lipgloss.NewStyle().
+			Foreground(accent).
+			PaddingLeft(2).PaddingRight(2).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(accent),
+		DaemonLabelStyle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(accent).
+			PaddingRight(1),
+		DaemonBoxUnfocused: lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(accent).
+			PaddingLeft(1).PaddingRight(1),
+		DaemonBoxFocused: lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(focus).
+			PaddingLeft(1).PaddingRight(1),
 		BannerStyle: lipgloss.NewStyle().
 			Foreground(accent).
 			BorderStyle(lipgloss.RoundedBorder()).
@@ -143,7 +180,7 @@ func BuildStyles(t theme.Theme) Styles {
 	}
 }
 
-// SectionBox renders a titled box with optional focus styling for TUI sections.
+// SectionBox renders a titled box with optional focus styling for TUI sections. a titled box with optional focus styling for TUI sections.
 func (st Styles) SectionBox(title, content string, width int, focused bool) string {
 	t := st.SectionTitleStyle.Render(title)
 	innerW := width - 4
