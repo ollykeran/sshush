@@ -32,7 +32,7 @@ func AppendKeysTo(keyring sshagent.Agent, out *style.Output) error {
 		}
 	}
 	for _, key := range keys {
-		out.Add(style.Pink(fmt.Sprintf("%-*s  %s  %s", maxTypeLen, key.Type(), ssh.FingerprintSHA256(key), key.Comment)))
+		out.Add(style.Highlight(fmt.Sprintf("%-*s  %s  %s", maxTypeLen, key.Type(), ssh.FingerprintSHA256(key), key.Comment)))
 	}
 	return nil
 }
@@ -60,7 +60,7 @@ func ListKeysSnapshotTo(keys []*sshagent.Key, w io.Writer) error {
 	}
 	out := style.NewOutput()
 	for _, key := range keys {
-		out.Add(style.Pink(fmt.Sprintf("%-*s  %s  %s", maxTypeLen, key.Type(), ssh.FingerprintSHA256(key), key.Comment)))
+		out.Add(style.Highlight(fmt.Sprintf("%-*s  %s  %s", maxTypeLen, key.Type(), ssh.FingerprintSHA256(key), key.Comment)))
 	}
 	out.PrintTo(w)
 	return nil
@@ -109,9 +109,9 @@ func printKeysDiff(before, after []diffEntry) *style.Output {
 	for fp, e := range afterByFP {
 		line := fmt.Sprintf(fmtStr, maxTypeLen, e.keyType, fp, e.comment)
 		if _, exists := beforeByFP[fp]; !exists {
-			added = append(added, style.Green("+ "+line))
+			added = append(added, style.Success("+ "+line))
 		} else {
-			unchanged = append(unchanged, style.Pink("= "+line))
+			unchanged = append(unchanged, style.Highlight("= "+line))
 		}
 	}
 	for fp, e := range beforeByFP {
@@ -158,7 +158,7 @@ func printCommentDiff(oldComment, newComment string) *style.Output {
 		out.Add(style.Err("- " + oldComment))
 	}
 	if newComment != "" {
-		out.Add(style.Green("+ " + newComment))
+		out.Add(style.Success("+ " + newComment))
 	}
 	return out
 }

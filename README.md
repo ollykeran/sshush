@@ -34,6 +34,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 | `export`         | Export public key                         | `sshush export ~/.ssh/id_ed25519`         |
 | `find`           | Find private keys (defaults: cwd, ~/.ssh) | `sshush find` or `sshush find /path`      |
 | `tui`            | Start the TUI                             | `sshush tui`                              |
+| `theme`          | Show or set colour theme                  | `sshush theme show`, `sshush theme list`, `sshush theme set dracula` |
 | `completion`     | Shell completion script                   | `sshush completion bash`                  |
 | `version`        | Print version                             | `sshush version`                          |
 

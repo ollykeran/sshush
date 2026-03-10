@@ -102,7 +102,7 @@ func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChange
 	}
 
 	// printKeysDiff returns a pointer - append further lines directly onto it.
-	out := style.NewOutput().Add(style.Green(fmt.Sprintf("Reloading keys from config file %s", configPath)))
+	out := style.NewOutput().Add(style.Success(fmt.Sprintf("Reloading keys from config file %s", configPath)))
 	out.Spacer()
 	out.Add(printKeysDiff(before, after).String())
 	for _, w := range skipWarnings {
