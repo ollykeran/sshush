@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -188,8 +189,14 @@ func TestResolveEditor_envFallback(t *testing.T) {
 
 func TestResolveEditor_defaultVi(t *testing.T) {
 	t.Setenv("EDITOR", "")
-	if got := resolveEditor(""); got != "vi" {
-		t.Errorf("resolveEditor: got %q, want %q", got, "vi")
+	want := "vi"
+	if _, err := exec.LookPath("vim"); err == nil {
+		want = "vim"
+	} else if _, err := exec.LookPath("nano"); err == nil {
+		want = "nano"
+	}
+	if got := resolveEditor(""); got != want {
+		t.Errorf("resolveEditor: got %q, want %q (vim then nano then vi by PATH)", got, want)
 	}
 }
 
