@@ -99,6 +99,9 @@ func CreateDefaultConfig() error {
 		socketPathLine,
 		keyPathLine,
 		"",
+		"[theme]",
+		`name = "default"`,
+		"",
 	}
 
 	config := strings.Join(configLines, "\n")

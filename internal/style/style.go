@@ -7,27 +7,53 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/ollykeran/sshush/internal/theme"
 )
+
+var currentTheme theme.Theme
+
+func init() {
+	currentTheme = theme.DefaultTheme()
+	rebuildStyles()
+}
 
 var (
-	green  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#89FC00"))
-	pink   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF36AB"))
-	purple = lipgloss.NewStyle().Foreground(lipgloss.Color("#642CA9"))
-	warn   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2E94E"))
-	err    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E63462"))
-	box    = lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#631596")).
-		Padding(0, 1)
+	success   lipgloss.Style
+	warn      lipgloss.Style
+	err       lipgloss.Style
+	box       lipgloss.Style
+	text      lipgloss.Style
+	highlight lipgloss.Style
+	focus     lipgloss.Style
 )
 
-// Standalone style functions - used for pre-styled strings (e.g. diff prefix symbols).
-func Green(s string) string  { return green.Render(s) }
-func Pink(s string) string   { return pink.Render(s) }
-func Purple(s string) string { return purple.Render(s) }
-func Warn(s string) string   { return warn.Render(s) }
-func Err(s string) string    { return err.Render(s) }
-func Box(s string) string    { return box.Render(s) }
+func rebuildStyles() {
+	success = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Accent))
+	warn = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
+	err = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
+	text = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Text))
+	highlight = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
+	focus = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Focus))
+	box = lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(currentTheme.Focus)).
+		Padding(0, 1)
+}
+
+// SetTheme sets the theme used by all style functions and Output. Call after loading config (e.g. in root PersistentPreRunE).
+func SetTheme(t theme.Theme) {
+	currentTheme = t
+	rebuildStyles()
+}
+
+// Standalone style functions - all driven by the current theme (SetTheme).
+func Success(s string) string   { return success.Render(s) }
+func Text(s string) string      { return text.Render(s) }
+func Highlight(s string) string { return highlight.Render(s) }
+func Focus(s string) string     { return focus.Render(s) }
+func Warn(s string) string      { return warn.Render(s) }
+func Err(s string) string       { return err.Render(s) }
+func Box(s string) string      { return box.Render(s) }
 
 // Output is a builder for styled terminal output. Append lines with semantic
 // level methods (Success/Info/Warn/Error), then flush with Print() or AsError().
@@ -38,11 +64,11 @@ type Output struct {
 // NewOutput returns a new empty Output builder.
 func NewOutput() *Output { return &Output{} }
 
-// Semantic append methods - encode color, callers describe intent not appearance.
-func (o *Output) Success(s string) *Output { return o.add(green.Render(s)) }
-func (o *Output) Info(s string) *Output    { return o.add(pink.Render(s)) }
-func (o *Output) Warn(s string) *Output    { return o.add(warn.Render(s)) }
-func (o *Output) Error(s string) *Output   { return o.add(err.Render(s)) }
+// Semantic append methods - encode color from theme, callers describe intent.
+func (o *Output) Success(s string) *Output { return o.add(success.Render(s)) }
+func (o *Output) Info(s string) *Output    { return o.add(highlight.Render(s)) }
+func (o *Output) Warn(s string) *Output   { return o.add(warn.Render(s)) }
+func (o *Output) Error(s string) *Output  { return o.add(err.Render(s)) }
 
 // Spacer appends a blank line for visual separation.
 func (o *Output) Spacer() *Output { return o.add("") }
@@ -75,7 +101,9 @@ func (o *Output) Print() {
 func (o *Output) PrintTo(w io.Writer) { fmt.Fprintln(w, o.Box()) }
 
 // PrintErr renders as a box to stderr.
-func (o *Output) PrintErr() { fmt.Fprintln(os.Stderr, o.Box()) }
+func (o *Output) PrintErr() {
+	fmt.Fprintln(os.Stderr, o.Box())
+}
 
 // AsError wraps the Output in a StyledError for display at the Execute level.
 // Use instead of errors.New() for all user-facing command errors.

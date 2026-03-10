@@ -73,7 +73,7 @@ func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 
 	return &EditScreen{
 		sk:           sk,
-		fileSelector: NewFileSelector(ModeLoadFile, "Select private key file"),
+		fileSelector: NewFileSelector(ModeLoadFile, "Select private key file", sk.Styles()),
 		commentIn:    comment,
 		saveBtn:      saveBtn,
 		zonePrefix:   prefix,
@@ -370,21 +370,21 @@ func (s *EditScreen) View() tea.View {
 			innerW = 1
 		}
 		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
-			s.fileSelector.View(width, height, active)))
+			s.fileSelector.View(width, height, active, s.sk.Styles())))
 	}
 
 	w := width
 	if w < 1 {
 		w = 80
 	}
-
+	st := s.sk.Styles()
 	var sections []string
 
 	if s.rawKey == nil {
-		selectStyle := PinkStyle
+		selectStyle := st.PinkStyle
 		selectLabel := "  Select key file"
 		if active && s.focus == editFocusSelectFile {
-			selectStyle = lipgloss.NewStyle().Foreground(ColorBlack).Background(ColorGreen).Bold(true)
+			selectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			selectLabel = "> Select key file"
 		}
 		sections = append(sections, zone.Mark(s.zonePrefix+"select-file", selectStyle.Render(selectLabel)))
@@ -396,33 +396,33 @@ func (s *EditScreen) View() tea.View {
 			infoW = 100
 		}
 
-		sections = append(sections, SectionBox("Public Key",
-			PinkStyle.Render(truncate(s.pubKeyStr, infoW-6)), infoW, false))
+		sections = append(sections, st.SectionBox("Public Key",
+			st.PinkStyle.Render(truncate(s.pubKeyStr, infoW-6)), infoW, false))
 
-		sections = append(sections, SectionBox("Fingerprint",
-			PinkStyle.Render(s.fingerprint), infoW, false))
+		sections = append(sections, st.SectionBox("Fingerprint",
+			st.PinkStyle.Render(s.fingerprint), infoW, false))
 
-		sections = append(sections, zone.Mark(s.zonePrefix+"comment", SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
+		sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
 
 		// Save + Diff in one full-width box so right edge aligns with boxes above
 		s.saveBtn.Focused = active && s.focus == editFocusSave
-		savePart := " " + s.saveBtn.View()
+		savePart := " " + s.saveBtn.View(st)
 		comment := strings.TrimSpace(s.commentIn.Value())
 		orig := strings.TrimSpace(s.originalComment)
 		diffPart := ""
 		if comment != orig {
-			diffPart = renderCommentDiff(orig, comment)
+			diffPart = renderCommentDiff(st, orig, comment)
 		} else {
-			diffPart = DimStyle.Render("  (no changes)")
+			diffPart = st.DimStyle.Render("  (no changes)")
 		}
 		inner := lipgloss.JoinHorizontal(lipgloss.Top, savePart, "    ", diffPart)
-		sections = append(sections, SectionBox("Save / Diff", inner, infoW, active && s.focus == editFocusSave))
+		sections = append(sections, st.SectionBox("Save / Diff", inner, infoW, active && s.focus == editFocusSave))
 	}
 
 	if s.rawKey == nil && s.status != "" {
-		statusStyle := GreenStyle
+		statusStyle := st.GreenStyle
 		if s.statusErr {
-			statusStyle = ErrorStyle
+			statusStyle = st.ErrorStyle
 		}
 		sections = append(sections, statusStyle.Render("  "+s.status))
 	}
@@ -433,10 +433,11 @@ func (s *EditScreen) View() tea.View {
 }
 
 func (s *EditScreen) HelpEntries() []string {
+	st := s.sk.Styles()
 	return []string{
-		HelpRow("up/k", "Previous field"),
-		HelpRow("down/j", "Next field"),
-		HelpRow("enter", "Activate/Edit"),
+		st.HelpRow("up/k", "Previous field"),
+		st.HelpRow("down/j", "Next field"),
+		st.HelpRow("enter", "Activate/Edit"),
 		"",
 	}
 }
@@ -446,13 +447,13 @@ func (s *EditScreen) StatusTextRaw() (string, bool) {
 }
 
 // renderCommentDiff returns a styled diff of old vs new comment, side by side.
-func renderCommentDiff(oldComment, newComment string) string {
+func renderCommentDiff(st Styles, oldComment, newComment string) string {
 	var parts []string
 	if oldComment != "" {
-		parts = append(parts, ErrorStyle.Render("- "+oldComment))
+		parts = append(parts, st.ErrorStyle.Render("- "+oldComment))
 	}
 	if newComment != "" {
-		parts = append(parts, "    ", GreenStyle.Render("+ "+newComment))
+		parts = append(parts, "    ", st.GreenStyle.Render("+ "+newComment))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }

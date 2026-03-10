@@ -44,6 +44,32 @@ key_paths   = ["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]
 
 CLI overrides: `-s` / `--socket` overrides `socket_path`.
 
+## Theme
+
+Optional `[theme]` section controls colours for CLI and TUI. You can use a preset name or custom hex colours.
+
+**Preset** (name takes precedence over any hex keys):
+
+```toml
+[theme]
+name = "dracula"
+```
+
+**Custom colours** (any subset; missing keys use the default theme):
+
+```toml
+[theme]
+text    = "#585858"
+focus   = "#7EE787"
+accent  = "#F472B6"
+error   = "#F87171"
+warning = "#F2E94E"
+```
+
+**Preset names:** `default`, `dracula`, `nord`, `solarized-dark`, `catppuccin-mocha`.
+
+Set theme from the CLI: `sshush theme show`, `sshush theme list`, `sshush theme set dracula`, or `sshush theme set --accent "#FF0000"`. In the TUI, press **t** to open the theme picker (bottom of screen); use **up/down** to preview, **s** to save to config, **esc** to cancel.
+
 ## Reload Behavior
 
 `sshush reload` reconciles the running agent to the config file:
