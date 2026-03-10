@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	bl "github.com/winder/bubblelayout"
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/config"
@@ -32,21 +33,27 @@ type SkeletonKeyMap struct {
 
 // Skeleton is the main TUI layout: header with tabs and control buttons, content area, and footer.
 type Skeleton struct {
-	pages             []skeletonPage
-	widgets           []skeletonWidget
-	activeTab         int
-	navFocus          skeletonNavFocus
-	width             int
-	height            int
-	showHelp          bool
-	quitting          bool
-	KeyMap            SkeletonKeyMap
-	theme             theme.Theme
-	styles            Styles
-	configPath        string
-	showThemePicker   bool
-	themePickerIndex  int
-	themeBeforePicker theme.Theme // restored on Esc so we don't save
+	pages                []skeletonPage
+	widgets              []skeletonWidget
+	activeTab            int
+	navFocus             skeletonNavFocus
+	navFocusBeforeDaemon skeletonNavFocus
+	activeTabBeforeDaemon int
+	width                int
+	height               int
+	layoutContentW       int
+	layoutContentH       int
+	layout               bl.BubbleLayout
+	contentID            bl.ID
+	showHelp             bool
+	quitting             bool
+	KeyMap               SkeletonKeyMap
+	theme                theme.Theme
+	styles               Styles
+	configPath           string
+	showThemePicker      bool
+	themePickerIndex     int
+	themeBeforePicker    theme.Theme // restored on Esc so we don't save
 }
 
 // Styles returns the current styles (derived from theme). Use for all TUI rendering.
@@ -68,7 +75,7 @@ type skeletonNavFocus int
 const (
 	navFocusScreen skeletonNavFocus = iota
 	navFocusTabs
-	navFocusTools
+	navFocusDaemon
 )
 
 const (
@@ -141,8 +148,12 @@ func themeEqual(a, b theme.Theme) bool {
 
 // NewSkeleton returns a new Skeleton with default keymap and nav focus.
 func NewSkeleton() *Skeleton {
+	layout := bl.New()
+	contentID := layout.Add("grow")
 	return &Skeleton{
-		navFocus: navFocusTools,
+		navFocus: navFocusTabs,
+		layout:   layout,
+		contentID: contentID,
 		KeyMap: SkeletonKeyMap{
 			SwitchTabLeft:  []string{"ctrl+left"},
 			SwitchTabRight: []string{"ctrl+right"},
@@ -210,11 +221,17 @@ func (s *Skeleton) switchTab(idx int) tea.Cmd {
 		return nil
 	}
 	s.activeTab = idx
-	ch := s.contentHeight()
-	if ch < 1 {
-		ch = 1
+	w, h := s.layoutContentW, s.layoutContentH
+	if w < 1 {
+		w = s.GetTerminalWidth() - 2
 	}
-	updated, cmd := s.pages[s.activeTab].model.Update(tea.WindowSizeMsg{Width: s.GetTerminalWidth() - 2, Height: ch})
+	if h < 1 {
+		h = s.contentHeight()
+		if h < 1 {
+			h = 1
+		}
+	}
+	updated, cmd := s.pages[s.activeTab].model.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	s.pages[s.activeTab].model = updated
 	return cmd
 }
@@ -228,51 +245,44 @@ func (s *Skeleton) agentScreen() *AgentScreen {
 }
 
 func (s *Skeleton) navMoveLeft() (tea.Model, tea.Cmd) {
-	switch s.navFocus {
-	case navFocusTools:
-		agent := s.agentScreen()
-		if agent != nil && agent.buttons.Active > 0 {
-			agent.buttons.Left()
-			return s, nil
-		}
-		s.navFocus = navFocusTabs
-		return s, s.switchTab(len(s.pages) - 1)
-	default:
-		s.navFocus = navFocusTabs
-		if s.activeTab > 0 {
-			return s, s.switchTab(s.activeTab - 1)
-		}
-		agent := s.agentScreen()
-		if agent != nil {
-			s.navFocus = navFocusTools
-			agent.buttons.Active = len(agent.buttons.Labels) - 1
-		}
-		return s, nil
+	s.navFocus = navFocusTabs
+	idx := s.activeTab - 1
+	if idx < 0 {
+		idx = len(s.pages) - 1
 	}
+	return s, s.switchTab(idx)
 }
 
 func (s *Skeleton) navMoveRight() (tea.Model, tea.Cmd) {
-	switch s.navFocus {
-	case navFocusTools:
-		agent := s.agentScreen()
-		if agent != nil && agent.buttons.Active < len(agent.buttons.Labels)-1 {
-			agent.buttons.Right()
-			return s, nil
-		}
-		s.navFocus = navFocusTabs
-		return s, s.switchTab(0)
-	default:
-		s.navFocus = navFocusTabs
-		if s.activeTab < len(s.pages)-1 {
-			return s, s.switchTab(s.activeTab + 1)
-		}
-		agent := s.agentScreen()
-		if agent != nil {
-			s.navFocus = navFocusTools
-			agent.buttons.Active = 0
-		}
-		return s, nil
+	s.navFocus = navFocusTabs
+	idx := s.activeTab + 1
+	if idx >= len(s.pages) {
+		idx = 0
 	}
+	return s, s.switchTab(idx)
+}
+
+func (s *Skeleton) exitDaemonFocus() (tea.Model, tea.Cmd) {
+	s.navFocus = s.navFocusBeforeDaemon
+	s.activeTab = s.activeTabBeforeDaemon
+	if agent := s.agentScreen(); agent != nil {
+		agent.buttons.Active = 0
+	}
+	return s, nil
+}
+
+func (s *Skeleton) enterDaemonFocus() (tea.Model, tea.Cmd) {
+	s.navFocusBeforeDaemon = s.navFocus
+	s.activeTabBeforeDaemon = s.activeTab
+	s.navFocus = navFocusDaemon
+	if agent := s.agentScreen(); agent != nil {
+		agent.buttons.Active = 0
+	}
+	// Switch view to agent screen when activating daemon bar
+	if s.activeTab != 0 {
+		return s, s.switchTab(0)
+	}
+	return s, nil
 }
 
 func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -284,11 +294,20 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
+		innerW := msg.Width - 2
 		ch := s.contentHeight()
 		if ch < 1 {
 			ch = 1
 		}
-		adjusted := tea.WindowSizeMsg{Width: msg.Width - 2, Height: ch}
+		layoutMsg := s.layout.Resize(innerW, ch)
+		if sz, err := layoutMsg.Size(s.contentID); err == nil {
+			s.layoutContentW = sz.Width
+			s.layoutContentH = sz.Height
+		} else {
+			s.layoutContentW = innerW
+			s.layoutContentH = ch
+		}
+		adjusted := tea.WindowSizeMsg{Width: s.layoutContentW, Height: s.layoutContentH}
 		updated, cmd := s.pages[s.activeTab].model.Update(adjusted)
 		s.pages[s.activeTab].model = updated
 		return s, cmd
@@ -308,13 +327,6 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.showHelp = false
 			}
 			return s, nil
-		}
-
-		if s.navFocus != navFocusScreen {
-			if key == "q" || key == "esc" {
-				s.quitting = true
-				return s, tea.Quit
-			}
 		}
 
 		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
@@ -344,9 +356,52 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if s.navFocus != navFocusScreen {
-			// Daemon shortcuts work when focus is in navbar (tabs/tools)
+		// Global daemon hotkeys s/x/r (when not in text input; theme picker keeps "s" for save)
+		if (key == "s" || key == "x" || key == "r") && !s.showThemePicker {
+			textInputActive := false
+			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
+				textInputActive = tip.HasActiveTextInput()
+			}
+			if !textInputActive {
+				if agent := s.agentScreen(); agent != nil {
+					var cmd tea.Cmd
+					switch key {
+					case "s":
+						_, cmd = agent.pressButton(0)
+					case "x":
+						_, cmd = agent.pressButton(1)
+					case "r":
+						_, cmd = agent.pressButton(2)
+					}
+					return s, cmd
+				}
+			}
+		}
+
+		// Daemon focus: left/right, enter, s/x/r, d/q/esc exit
+		if s.navFocus == navFocusDaemon {
 			switch key {
+			case "ctrl+c":
+				s.quitting = true
+				return s, tea.Quit
+			case "d", "q", "esc":
+				return s.exitDaemonFocus()
+			case "left", "h":
+				if agent := s.agentScreen(); agent != nil && agent.buttons.Active > 0 {
+					agent.buttons.Left()
+				}
+				return s, nil
+			case "right", "l":
+				if agent := s.agentScreen(); agent != nil && agent.buttons.Active < len(agent.buttons.Labels)-1 {
+					agent.buttons.Right()
+				}
+				return s, nil
+			case "enter":
+				if agent := s.agentScreen(); agent != nil {
+					_, cmd := agent.pressButton(agent.buttons.Active)
+					return s, cmd
+				}
+				return s, nil
 			case "s":
 				if agent := s.agentScreen(); agent != nil {
 					_, cmd := agent.pressButton(0)
@@ -365,9 +420,28 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, cmd
 				}
 				return s, nil
+			case "?":
+				s.showHelp = true
+				return s, nil
+			}
+			return s, nil
+		}
+
+		// 'd' key: enter daemon (when not in text field)
+		if key == "d" {
+			tip, hasInput := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool })
+			if !hasInput || !tip.HasActiveTextInput() {
+				return s.enterDaemonFocus()
+			}
+		}
+
+		if s.navFocus != navFocusScreen {
+			if key == "q" || key == "esc" {
+				s.quitting = true
+				return s, tea.Quit
 			}
 			switch {
-			case key == "ctrl+c" || key == "q" || key == "esc":
+			case key == "ctrl+c":
 				s.quitting = true
 				return s, tea.Quit
 			case containsKey(s.KeyMap.SwitchTabLeft, key):
@@ -381,21 +455,13 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.navFocus = navFocusTabs
 				return s, nil
 			case key == "enter":
-				if s.navFocus == navFocusTools {
-					if agent := s.agentScreen(); agent != nil {
-						_, cmd := agent.pressButton(agent.buttons.Active)
-						return s, cmd
-					}
-				}
 				s.navFocus = navFocusScreen
 				return s, nil
 			case key == "?":
 				s.showHelp = true
 				return s, nil
 			}
-			if s.navFocus != navFocusScreen {
-				return s, nil
-			}
+			return s, nil
 		}
 
 		if s.showThemePicker {
@@ -526,6 +592,33 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if s.showThemePicker {
 			order := s.themePickerOrder()
+			// If click is on tab or daemon, close picker (revert) and let that handle the click
+			for i, p := range s.pages {
+				if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
+					cmd := s.SetTheme(s.themeBeforePicker)
+					s.showThemePicker = false
+					s.navFocus = navFocusTabs
+					return s, tea.Batch(cmd, s.switchTab(i))
+				}
+			}
+			if agent := s.agentScreen(); agent != nil {
+				if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
+					cmd := s.SetTheme(s.themeBeforePicker)
+					s.showThemePicker = false
+					if s.navFocus != navFocusDaemon {
+						s.navFocusBeforeDaemon = s.navFocus
+						s.activeTabBeforeDaemon = s.activeTab
+						s.navFocus = navFocusDaemon
+					}
+					agent.buttons.Active = btn
+					_, pressCmd := agent.pressButton(btn)
+					if s.activeTab != 0 {
+						return s, tea.Batch(cmd, s.switchTab(0), pressCmd)
+					}
+					return s, tea.Batch(cmd, pressCmd)
+				}
+			}
+			// Theme menu zones
 			for i := 0; i < len(order); i++ {
 				if inZoneBounds("theme-picker-"+strconv.Itoa(i), msg.X, msg.Y) {
 					s.themePickerIndex = i
@@ -535,12 +628,29 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, nil
 				}
 			}
-		}
-		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
-			updated, cmd := s.pages[s.activeTab].model.Update(msg)
-			s.pages[s.activeTab].model = updated
+			if inZoneBounds("theme-picker-save", msg.X, msg.Y) {
+				if s.themePickerIndex >= 0 && s.themePickerIndex < len(order) && s.configPath != "" {
+					presetName := order[s.themePickerIndex]
+					if presetName == "custom" {
+						section := &config.ThemeSection{
+							Text: s.theme.Text, Focus: s.theme.Focus, Accent: s.theme.Accent,
+							Error: s.theme.Error, Warning: s.theme.Warning,
+						}
+						_ = config.WriteThemeToPath(s.configPath, "", section)
+					} else {
+						_ = config.WriteThemeToPath(s.configPath, presetName, nil)
+					}
+					s.themeBeforePicker = s.theme
+				}
+				s.showThemePicker = false
+				return s, nil
+			}
+			// Click outside theme menu: close without saving
+			cmd := s.SetTheme(s.themeBeforePicker)
+			s.showThemePicker = false
 			return s, cmd
 		}
+		// Check tab and daemon zones before modal so user can always click to navigate away
 		for i, p := range s.pages {
 			if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
 				s.navFocus = navFocusTabs
@@ -549,11 +659,25 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if agent := s.agentScreen(); agent != nil {
 			if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
+				if s.navFocus != navFocusDaemon {
+					s.navFocusBeforeDaemon = s.navFocus
+					s.activeTabBeforeDaemon = s.activeTab
+					s.navFocus = navFocusDaemon
+				}
+				agent.buttons.Active = btn
 				_, cmd := agent.pressButton(btn)
+				if s.activeTab != 0 {
+					return s, tea.Batch(s.switchTab(0), cmd)
+				}
 				return s, cmd
 			}
 		}
-		// Click was not on tab or navbar; pass to page (e.g. table row) and focus screen so keys reach it
+		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
+			updated, cmd := s.pages[s.activeTab].model.Update(msg)
+			s.pages[s.activeTab].model = updated
+			return s, cmd
+		}
+		// Click was not on tab or navbar; pass to page and focus screen so keys reach it
 		s.navFocus = navFocusScreen
 		updated, cmd := s.pages[s.activeTab].model.Update(msg)
 		s.pages[s.activeTab].model = updated
@@ -589,13 +713,14 @@ func (s *Skeleton) statusLine() (string, bool) {
 }
 
 func (s *Skeleton) contentHeight() int {
-	// header = 3 rows (tab boxes), footer = 1 row
+	// header = 3 rows, footer = 1 row
 	return s.GetTerminalHeight() - 3 - 1
 }
 
 func (s *Skeleton) renderOuterHeader(w int) string {
 	st := s.styles
 	bc := lipgloss.NewStyle().Foreground(lipgloss.Color(st.OuterBorderColorHex))
+	innerW := w - 2
 
 	var tabParts []string
 	for i, p := range s.pages {
@@ -603,52 +728,70 @@ func (s *Skeleton) renderOuterHeader(w int) string {
 		var style lipgloss.Style
 		switch {
 		case i == s.activeTab && s.navFocus == navFocusTabs:
-			style = st.HeaderTabActiveFocused
+			style = st.HeaderTabBoxActiveFocused
 		case i == s.activeTab:
-			style = st.HeaderTabActive
+			style = st.HeaderTabBoxActive
 		default:
-			style = st.HeaderTabInactive
+			style = st.HeaderTabBoxInactive
 		}
 		tabParts = append(tabParts, style.Render(label))
 	}
 
 	tabsBlock := lipgloss.JoinHorizontal(lipgloss.Center, tabParts...)
-	tabsW := lipgloss.Width(tabsBlock)
-
-	tools := ""
-	toolsW := 0
+	var toolsBlock string
 	if agent := s.agentScreen(); agent != nil {
-		tools = agent.ControlButtonsView(s.navFocus == navFocusTools)
-		toolsW = lipgloss.Width(tools)
-	}
-
-	innerW := w - 2
-	fillW := max(innerW-tabsW-toolsW, 2)
-
-	var middle string
-	if toolsW > 0 {
-		before := max(fillW-1, 1)
-		after := fillW - before
-		if after < 0 {
-			after = 0
+		btns := agent.ControlButtonsInlineView(s.navFocus == navFocusDaemon)
+		inner := st.DaemonLabelStyle.Render("[d]") + " " + btns
+		box := st.DaemonBoxUnfocused
+		if s.navFocus == navFocusDaemon {
+			box = st.DaemonBoxFocused
 		}
-		middle = lipgloss.JoinHorizontal(lipgloss.Center,
-			tabsBlock,
-			bc.Render(strings.Repeat("─", before)),
-			tools,
-			bc.Render(strings.Repeat("─", after)),
-		)
-	} else {
-		middle = lipgloss.JoinHorizontal(lipgloss.Center,
-			tabsBlock,
-			bc.Render(strings.Repeat("─", fillW)),
-		)
+		toolsBlock = box.Render(inner)
 	}
 
-	leftCorner := bc.Render("╭") + "\n" + bc.Render("│")
-	rightCorner := bc.Render("╮") + "\n" + bc.Render("│")
+	// Tabs left, tools right, fill between (no side padding)
+	tabsW := lipgloss.Width(strings.Split(tabsBlock, "\n")[0])
+	toolsW := lipgloss.Width(strings.Split(toolsBlock, "\n")[0])
+	fillW := innerW - tabsW - toolsW
+	if fillW < 0 {
+		fillW = 0
+	}
+	fillLine := strings.Repeat(" ", fillW)
+	fillBlock := fillLine + "\n" + fillLine + "\n" + fillLine
+	headerBlock := lipgloss.JoinHorizontal(lipgloss.Top, tabsBlock, fillBlock, toolsBlock)
+	lines := strings.Split(headerBlock, "\n")
+	for len(lines) < 3 {
+		lines = append(lines, "")
+	}
+	if len(lines) > 3 {
+		lines = lines[:3]
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Bottom, leftCorner, middle, rightCorner)
+	var result []string
+	for i, line := range lines {
+		lineW := lipgloss.Width(line)
+		var fill string
+		if lineW >= innerW {
+			line = ansi.Truncate(line, innerW, "")
+			fill = ""
+		} else {
+			fillCh := " "
+			if i == 0 {
+				fillCh = "─"
+			}
+			fill = bc.Render(strings.Repeat(fillCh, innerW-lineW))
+		}
+		row := line + fill
+		if lipgloss.Width(row) > innerW {
+			row = ansi.Truncate(row, innerW, "")
+		}
+		if i == 0 {
+			result = append(result, bc.Render("╭")+row+bc.Render("╮"))
+		} else {
+			result = append(result, bc.Render("│")+row+bc.Render("│"))
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 func (s *Skeleton) renderOuterFooter(w int) string {
@@ -726,6 +869,7 @@ func (s *Skeleton) View() tea.View {
 		st := s.styles
 		common := []string{
 			"",
+			st.HelpRow("d", "Daemon controls"),
 			st.HelpRow("Tab", "Next screen"),
 			st.HelpRow("Shift+Tab", "Previous screen"),
 			st.HelpRow("?", "Toggle help"),
@@ -820,7 +964,7 @@ func (s *Skeleton) themePickerMenuBox() string {
 		}
 		lines = append(lines, zone.Mark("theme-picker-"+strconv.Itoa(i), lineContent))
 	}
-	lines = append(lines, "", st.DimStyle.Render("[↑↓] move [s] save [q]uit"))
+	lines = append(lines, "", zone.Mark("theme-picker-save", st.DimStyle.Render("[↑↓] move [s] save [q]uit")))
 	body := strings.Join(lines, "\n")
 	return lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).

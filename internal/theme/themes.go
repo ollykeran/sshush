@@ -60,7 +60,7 @@ func PresetNames() []string {
 func PresetNamesOrdered() []string {
 	return []string{
 		"default", "dracula", "nord", "solarized-dark",
-		"catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato", "catppuccin-mocha",
+		"catppuccin-latte", "catppuccin-mocha",
 	}
 }
 
