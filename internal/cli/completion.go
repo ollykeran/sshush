@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 
+	"github.com/ollykeran/sshush/internal/style"
 	"github.com/spf13/cobra"
 )
 
@@ -10,7 +11,7 @@ func newCompletionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "completion [bash|zsh|fish]",
 		Short: "Generate shell completion script",
-		Long: `Generate shell completion script for sshush.
+		Long: `Generate shell completion script
 
 To load completions:
 
@@ -34,8 +35,9 @@ To load completions:
 				return root.GenZshCompletion(os.Stdout)
 			case "fish":
 				return root.GenFishCompletion(os.Stdout, true)
+			default:
+				return style.NewOutput().Error("invalid shell").AsError()
 			}
-			return nil
 		},
 	}
 }

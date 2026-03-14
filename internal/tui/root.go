@@ -23,6 +23,10 @@ type NavToTabBarMsg struct{}
 // ThemeChangedMsg is sent after the theme is updated so screens can refresh styled components (e.g. KeyTable).
 type ThemeChangedMsg struct{}
 
+// ThemeMessageClearMsg is sent after the temporary footer theme message times out.
+// Generation is used so an old timeout does not clear a message that was overridden.
+type ThemeMessageClearMsg struct{ Generation int }
+
 func navToTabBarCmd() tea.Cmd {
 	return func() tea.Msg {
 		return NavToTabBarMsg{}
@@ -33,6 +37,15 @@ func themeChangedCmd() tea.Cmd {
 	return func() tea.Msg {
 		return ThemeChangedMsg{}
 	}
+}
+
+// themeMessageTimeoutCmd returns a Cmd that clears the temporary theme footer message
+// after 2s. Pass the current theme message generation so an old timeout does not clear
+// a message that was overridden by another theme message.
+func themeMessageTimeoutCmd(generation int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return ThemeMessageClearMsg{Generation: generation}
+	})
 }
 
 // NewTUI builds the TUI skeleton with agent, create, edit, and export tabs.

@@ -440,20 +440,22 @@ func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
 }
 
 func (s *CreateScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 
 	leftW := w / 2
-	if leftW < 40 {
+	if leftW < minCreatePanelWidth {
 		leftW = w - 4
 	}
 	rightW := w - leftW - 4
@@ -461,7 +463,7 @@ func (s *CreateScreen) View() tea.View {
 	left := s.viewCreatePanel(leftW, active)
 	right := s.viewResultPanel(rightW)
 
-	if w >= 100 {
+	if w >= minWidthForHorizontalLayout {
 		content := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 		return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content))
 	}
@@ -506,7 +508,7 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 	sections = append(sections, " "+s.saveBtn.View(st))
 
 	if s.status != "" {
-		style := st.GreenStyle
+		style := st.FocusStyle
 		if s.statusErr {
 			style = st.ErrorStyle
 		}
@@ -524,23 +526,11 @@ func (s *CreateScreen) viewResultPanel(w int) string {
 
 	var sections []string
 
-	sections = append(sections, st.SectionBox("Public Key", st.PinkStyle.Render(s.genResult.pubKeyStr), w, false))
-	sections = append(sections, st.SectionBox("Private Key", st.PinkStyle.Render(s.genResult.privPath), w, false))
-	sections = append(sections, st.SectionBox("Public Key File", st.PinkStyle.Render(s.genResult.pubPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key", st.AccentStyle.Render(s.genResult.pubKeyStr), w, false))
+	sections = append(sections, st.SectionBox("Private Key", st.AccentStyle.Render(s.genResult.privPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key File", st.AccentStyle.Render(s.genResult.pubPath), w, false))
 
 	return strings.Join(sections, "\n")
-}
-
-func (s *CreateScreen) HelpEntries() []string {
-	st := s.sk.Styles()
-	return []string{
-		st.HelpRow("up/k", "Previous field"),
-		st.HelpRow("down/j", "Next field"),
-		st.HelpRow("left/h", "Previous option"),
-		st.HelpRow("right/l", "Next option"),
-		st.HelpRow("enter", "Activate/Edit"),
-		"",
-	}
 }
 
 func (s *CreateScreen) StatusTextRaw() (string, bool) {

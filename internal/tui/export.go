@@ -80,7 +80,7 @@ func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	saveIn.Prompt = ""
 	saveIn.Placeholder = "filename.pub"
 
-	kt := NewKeyTable(80, 5, sk.Styles())
+	kt := NewKeyTable(defaultViewWidth, defaultExportAgentKeysRows, sk.Styles())
 	kt.ZonePrefix = prefix + "agent-"
 
 	return &ExportScreen{
@@ -120,12 +120,26 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
-		s.fileSelector.SetHeight(max(s.height-12, 8))
+		agentKeysRows := s.height / agentKeysTableHeightDiv
+		if agentKeysRows < agentKeysTableMinRows {
+			agentKeysRows = agentKeysTableMinRows
+		}
+		if agentKeysRows > agentKeysTableMaxRows {
+			agentKeysRows = agentKeysTableMaxRows
+		}
+		s.agentKeys.SetSize(s.width, agentKeysRows, s.sk.Styles())
+		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		return s, nil
 
 	case ThemeChangedMsg:
-		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
+		agentKeysRows := s.height / agentKeysTableHeightDiv
+		if agentKeysRows < agentKeysTableMinRows {
+			agentKeysRows = agentKeysTableMinRows
+		}
+		if agentKeysRows > agentKeysTableMaxRows {
+			agentKeysRows = agentKeysTableMaxRows
+		}
+		s.agentKeys.SetSize(s.width, agentKeysRows, s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -346,11 +360,13 @@ func (s *ExportScreen) updateDefaultSaveFilename() {
 }
 
 func (s *ExportScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	if s.fileSelector.Visible() {
@@ -371,15 +387,15 @@ func (s *ExportScreen) View() tea.View {
 
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 	st := s.sk.Styles()
 	var sections []string
 
 	loadFileFocused := active && s.focus == exportFocusLoadFile
 	loadAgentFocused := active && s.focus == exportFocusLoadAgent
-	loadFileStyle := st.PinkStyle
-	loadAgentStyle := st.PinkStyle
+	loadFileStyle := st.AccentStyle
+	loadAgentStyle := st.AccentStyle
 	loadFileLabel := "  Load from file"
 	loadAgentLabel := "  Load from agent"
 	if loadFileFocused {
@@ -399,18 +415,21 @@ func (s *ExportScreen) View() tea.View {
 		sections = append(sections, "")
 
 		contentW := w * 3 / 4
-		if contentW > 100 {
-			contentW = 100
+		if contentW > sectionBoxMaxWidth {
+			contentW = sectionBoxMaxWidth
+		}
+		if contentW < sectionBoxMinWidth {
+			contentW = sectionBoxMinWidth
 		}
 
-		pubStyle := st.PinkStyle
+		pubStyle := st.AccentStyle
 		if active && s.focus == exportFocusPubKey {
 			pubStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Background(lipgloss.Color(s.sk.Theme().Focus))
 		}
 		sections = append(sections, st.SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && s.focus == exportFocusPubKey))
 
 		copyFocused := active && s.focus == exportFocusCopy
-		copyStyle := st.PinkStyle
+		copyStyle := st.AccentStyle
 		copyLabel := "  Copy to clipboard"
 		if copyFocused {
 			copyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -419,7 +438,7 @@ func (s *ExportScreen) View() tea.View {
 		sections = append(sections, zone.Mark(s.zonePrefix+"copy", copyStyle.Render(copyLabel)))
 
 		saveFocused := active && s.focus == exportFocusSaveFile
-		saveStyle := st.PinkStyle
+		saveStyle := st.AccentStyle
 		saveLabel := "  Save to file"
 		if saveFocused {
 			saveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -433,7 +452,7 @@ func (s *ExportScreen) View() tea.View {
 	}
 
 	if s.status != "" {
-		style := st.GreenStyle
+		style := st.FocusStyle
 		if s.statusErr {
 			style = st.ErrorStyle
 		}
@@ -443,16 +462,6 @@ func (s *ExportScreen) View() tea.View {
 	content := strings.Join(sections, "\n")
 	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
 		lipgloss.NewStyle().Padding(1, 2).Render(content)))
-}
-
-func (s *ExportScreen) HelpEntries() []string {
-	st := s.sk.Styles()
-	return []string{
-		st.HelpRow("up/k", "Previous field"),
-		st.HelpRow("down/j", "Next field"),
-		st.HelpRow("enter", "Activate"),
-		"",
-	}
 }
 
 func (s *ExportScreen) StatusTextRaw() (string, bool) {
