@@ -24,7 +24,8 @@ type NavToTabBarMsg struct{}
 type ThemeChangedMsg struct{}
 
 // ThemeMessageClearMsg is sent after the temporary footer theme message times out.
-type ThemeMessageClearMsg struct{}
+// Generation is used so an old timeout does not clear a message that was overridden.
+type ThemeMessageClearMsg struct{ Generation int }
 
 func navToTabBarCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -39,10 +40,11 @@ func themeChangedCmd() tea.Cmd {
 }
 
 // themeMessageTimeoutCmd returns a Cmd that clears the temporary theme footer message
-// after a short delay.
-func themeMessageTimeoutCmd() tea.Cmd {
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-		return ThemeMessageClearMsg{}
+// after 2s. Pass the current theme message generation so an old timeout does not clear
+// a message that was overridden by another theme message.
+func themeMessageTimeoutCmd(generation int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return ThemeMessageClearMsg{Generation: generation}
 	})
 }
 

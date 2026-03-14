@@ -1,12 +1,9 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,7 +11,6 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/theme"
-	bl "github.com/winder/bubblelayout"
 )
 
 type skeletonPage struct {
@@ -44,10 +40,6 @@ type Skeleton struct {
 	activeTabBeforeDaemon   int
 	width                   int
 	height                  int
-	layoutContentW          int
-	layoutContentH          int
-	layout                  bl.BubbleLayout
-	contentID               bl.ID
 	showHelp                bool
 	quitting                bool
 	KeyMap                  SkeletonKeyMap
@@ -56,37 +48,11 @@ type Skeleton struct {
 	configPath              string
 	showThemePicker         bool
 	themePickerIndex        int
-	themePickerSearch       string
 	themePickerScrollOffset int
 	themeBeforePicker       theme.Theme // restored on Esc so we don't save
 	themeMessage            string      // footer message: session only, saved, save failed
+	themeMessageGeneration  int         // incremented each time message is set, so timeout only clears if still current
 }
-
-// #region agent log
-func debugLogThemeMessage(hypothesisID, event, value string) {
-	f, err := os.OpenFile("/home/ollyk/git/sshush/.cursor/debug-45ff5f.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	payload := map[string]interface{}{
-		"sessionId":    "45ff5f",
-		"runId":        "theme-message",
-		"hypothesisId": hypothesisID,
-		"location":     "internal/tui/skeleton.go",
-		"message":      event,
-		"data":         map[string]interface{}{"value": value},
-		"timestamp":    time.Now().UnixMilli(),
-	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	_, _ = f.Write(append(b, '\n'))
-}
-
-// #endregion
 
 // Styles returns the current styles (derived from theme). Use for all TUI rendering.
 func (s *Skeleton) Styles() Styles { return s.styles }
@@ -114,6 +80,29 @@ const (
 	minTermWidth          = 120
 	minTermHeight         = 30
 	themePickerMaxVisible = 10
+
+	headerRows     = 3
+	footerRows     = 1
+	sideBorderCols = 2
+
+	tableHeaderRows             = 14
+	minTableHeight              = 3
+	maxTableHeight              = 12
+	fileSelectorHeightReserve   = 12
+	fileSelectorMinHeight       = 8
+	sectionBoxMaxWidth          = 120
+	sectionBoxMinWidth          = 60
+	fileSelectorMinUsableWidth  = 60
+	fileSelectorMinInnerWidth   = 40
+	minCreatePanelWidth         = 40
+	minWidthForHorizontalLayout = 100
+	agentKeysTableMinRows       = 3
+	agentKeysTableMaxRows       = 8
+	agentKeysTableHeightDiv     = 5
+	defaultViewWidth            = 80
+	defaultViewHeight           = 24
+	defaultKeyTableHeight       = 8
+	defaultExportAgentKeysRows  = 5
 )
 
 var themePresetOrder = theme.PresetNamesOrdered()
@@ -142,22 +131,6 @@ func (s *Skeleton) themePickerOrder() []string {
 		order = append(order, "custom")
 	}
 	return order
-}
-
-// themePickerFilteredOrder returns themePickerOrder filtered by themePickerSearch (case-insensitive substring).
-func (s *Skeleton) themePickerFilteredOrder() []string {
-	order := s.themePickerOrder()
-	search := strings.TrimSpace(strings.ToLower(s.themePickerSearch))
-	if search == "" {
-		return order
-	}
-	out := make([]string, 0, len(order))
-	for _, name := range order {
-		if strings.Contains(strings.ToLower(name), search) {
-			out = append(out, name)
-		}
-	}
-	return out
 }
 
 func (s *Skeleton) currentThemePickerIndex() int {
@@ -191,16 +164,16 @@ func (s *Skeleton) themeForPickerChoice(name string) (theme.Theme, bool) {
 	return theme.ResolveTheme(name)
 }
 
-// themePickerClampIndexAndScroll ensures themePickerIndex is valid for filtered list and scroll offset keeps selection visible.
+// themePickerClampIndexAndScroll ensures themePickerIndex is valid for the list and scroll offset keeps selection visible.
 func (s *Skeleton) themePickerClampIndexAndScroll() {
-	filtered := s.themePickerFilteredOrder()
-	if len(filtered) == 0 {
+	order := s.themePickerOrder()
+	if len(order) == 0 {
 		s.themePickerIndex = 0
 		s.themePickerScrollOffset = 0
 		return
 	}
-	if s.themePickerIndex >= len(filtered) {
-		s.themePickerIndex = len(filtered) - 1
+	if s.themePickerIndex >= len(order) {
+		s.themePickerIndex = len(order) - 1
 	}
 	if s.themePickerIndex < 0 {
 		s.themePickerIndex = 0
@@ -222,12 +195,8 @@ func themeEqual(a, b theme.Theme) bool {
 
 // NewSkeleton returns a new Skeleton with default keymap and nav focus.
 func NewSkeleton() *Skeleton {
-	layout := bl.New()
-	contentID := layout.Add("grow")
 	return &Skeleton{
-		navFocus:  navFocusTabs,
-		layout:    layout,
-		contentID: contentID,
+		navFocus: navFocusTabs,
 		KeyMap: SkeletonKeyMap{
 			SwitchTabLeft:  []string{"ctrl+left"},
 			SwitchTabRight: []string{"ctrl+right"},
@@ -259,14 +228,14 @@ func (s *Skeleton) UpdateWidgetValue(id, value string) {
 
 func (s *Skeleton) GetTerminalWidth() int {
 	if s.width < 1 {
-		return 80
+		return defaultViewWidth
 	}
 	return s.width
 }
 
 func (s *Skeleton) GetTerminalHeight() int {
 	if s.height < 1 {
-		return 24
+		return defaultViewHeight
 	}
 	return s.height
 }
@@ -295,18 +264,20 @@ func (s *Skeleton) switchTab(idx int) tea.Cmd {
 		return nil
 	}
 	s.activeTab = idx
-	w, h := s.layoutContentW, s.layoutContentH
+	w := s.contentWidth()
+	h := s.contentHeight()
 	if w < 1 {
-		w = s.GetTerminalWidth() - 2
+		w = defaultViewWidth
 	}
 	if h < 1 {
-		h = s.contentHeight()
-		if h < 1 {
-			h = 1
-		}
+		h = 1
 	}
 	updated, cmd := s.pages[s.activeTab].model.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	s.pages[s.activeTab].model = updated
+	// When landing on a tab that has a modal (e.g. filepicker), keep focus on navbar so user presses down to enter.
+	if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && m.HasModal() {
+		s.navFocus = navFocusTabs
+	}
 	return cmd
 }
 
@@ -368,20 +339,15 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		innerW := msg.Width - 2
+		innerW := s.contentWidth()
 		ch := s.contentHeight()
 		if ch < 1 {
 			ch = 1
 		}
-		layoutMsg := s.layout.Resize(innerW, ch)
-		if sz, err := layoutMsg.Size(s.contentID); err == nil {
-			s.layoutContentW = sz.Width
-			s.layoutContentH = sz.Height
-		} else {
-			s.layoutContentW = innerW
-			s.layoutContentH = ch
+		if innerW < 1 {
+			innerW = defaultViewWidth
 		}
-		adjusted := tea.WindowSizeMsg{Width: s.layoutContentW, Height: s.layoutContentH}
+		adjusted := tea.WindowSizeMsg{Width: innerW, Height: ch}
 		updated, cmd := s.pages[s.activeTab].model.Update(adjusted)
 		s.pages[s.activeTab].model = updated
 		return s, cmd
@@ -404,15 +370,21 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
-			if s.navFocus == navFocusScreen || (key != "q" && key != "esc") {
+			if (key == "q" || key == "esc") && s.navFocus == navFocusScreen {
+				// Return focus to navbar; next q/esc will quit.
+				s.navFocus = navFocusTabs
+				return s, nil
+			}
+			if s.navFocus == navFocusScreen {
 				updated, cmd := s.pages[s.activeTab].model.Update(msg)
 				s.pages[s.activeTab].model = updated
 				return s, cmd
 			}
 		}
 
-		// "t" opens theme picker from anywhere (screen or navbar), but not when file picker or text input is active
-		if key == "t" {
+		// "t" opens theme picker from anywhere (screen or navbar), but not when file picker or text input is active.
+		// When picker is already open, do not handle "t" here so it can be used for theme search.
+		if key == "t" && !s.showThemePicker {
 			modalActive := false
 			if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok {
 				modalActive = m.HasModal()
@@ -424,7 +396,6 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !modalActive && !textInputActive {
 				s.showThemePicker = true
 				s.themePickerIndex = s.currentThemePickerIndex()
-				s.themePickerSearch = ""
 				s.themePickerScrollOffset = 0
 				s.themeBeforePicker = s.theme
 				s.themeMessage = ""
@@ -543,18 +514,12 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if s.showThemePicker {
-			order := s.themePickerFilteredOrder()
+			order := s.themePickerOrder()
 			switch key {
 			case "esc", "escape":
-				if s.themePickerSearch != "" {
-					s.themePickerSearch = ""
-					s.themePickerClampIndexAndScroll()
-				} else {
-					cmd := s.SetTheme(s.themeBeforePicker)
-					s.showThemePicker = false
-					return s, cmd
-				}
-				return s, nil
+				cmd := s.SetTheme(s.themeBeforePicker)
+				s.showThemePicker = false
+				return s, cmd
 			case "q":
 				cmd := s.SetTheme(s.themeBeforePicker)
 				s.showThemePicker = false
@@ -570,36 +535,35 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						if err := config.WriteThemeToPath(s.configPath, "", section); err != nil {
 							s.themeMessage = "save failed"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessage = "custom - saved"
+							s.themeMessageGeneration++
 						}
 					} else {
 						if err := config.WriteThemeToPath(s.configPath, presetName, nil); err != nil {
 							s.themeMessage = "save failed"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessage = presetName + " - saved"
+							s.themeMessageGeneration++
 						}
 					}
 				}
 				s.showThemePicker = false
-				return s, themeMessageTimeoutCmd()
+				return s, themeMessageTimeoutCmd(s.themeMessageGeneration)
 			case "up", "k":
 				if s.themePickerIndex > 0 {
 					s.themePickerIndex--
 					s.themePickerClampIndexAndScroll()
-					order := s.themePickerFilteredOrder()
 					if s.themePickerIndex < len(order) {
 						presetName := order[s.themePickerIndex]
 						if t, ok := s.themeForPickerChoice(presetName); ok {
-							s.themeMessage = "loaded for this session"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
-							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd())
+							s.themeMessage = presetName + " - loaded"
+							s.themeMessageGeneration++
+							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd(s.themeMessageGeneration))
 						}
 					}
 				}
@@ -611,31 +575,11 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if s.themePickerIndex < len(order) {
 						presetName := order[s.themePickerIndex]
 						if t, ok := s.themeForPickerChoice(presetName); ok {
-							s.themeMessage = "loaded for this session"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
-							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd())
+							s.themeMessage = presetName + " - loaded"
+							s.themeMessageGeneration++
+							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd(s.themeMessageGeneration))
 						}
 					}
-				}
-				return s, nil
-			case "backspace":
-				if len(s.themePickerSearch) > 0 {
-					order := s.themePickerFilteredOrder()
-					presetName := ""
-					if s.themePickerIndex < len(order) {
-						presetName = order[s.themePickerIndex]
-					}
-					s.themePickerSearch = s.themePickerSearch[:len(s.themePickerSearch)-1]
-					order = s.themePickerFilteredOrder()
-					if presetName != "" {
-						for i, n := range order {
-							if n == presetName {
-								s.themePickerIndex = i
-								break
-							}
-						}
-					}
-					s.themePickerClampIndexAndScroll()
 				}
 				return s, nil
 			case "s":
@@ -648,42 +592,25 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						if err := config.WriteThemeToPath(s.configPath, "", section); err != nil {
 							s.themeMessage = "save failed"
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
+							s.themeMessage = "custom - saved"
+							s.themeMessageGeneration++
 						}
 					} else {
 						if err := config.WriteThemeToPath(s.configPath, presetName, nil); err != nil {
 							s.themeMessage = "save failed"
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
+							s.themeMessage = presetName + " - saved"
+							s.themeMessageGeneration++
 						}
 					}
 				}
 				s.showThemePicker = false
-				return s, themeMessageTimeoutCmd()
-			default:
-				// Search: single printable rune
-				if len(key) == 1 && key >= " " {
-					order := s.themePickerFilteredOrder()
-					presetName := ""
-					if s.themePickerIndex < len(order) {
-						presetName = order[s.themePickerIndex]
-					}
-					s.themePickerSearch += key
-					order = s.themePickerFilteredOrder()
-					if presetName != "" {
-						for i, n := range order {
-							if n == presetName {
-								s.themePickerIndex = i
-								break
-							}
-						}
-					}
-					s.themePickerClampIndexAndScroll()
-				}
-				return s, nil
+				return s, themeMessageTimeoutCmd(s.themeMessageGeneration)
 			}
 		}
 
@@ -732,7 +659,6 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !modalActive {
 				s.showThemePicker = true
 				s.themePickerIndex = s.currentThemePickerIndex()
-				s.themePickerSearch = ""
 				s.themePickerScrollOffset = 0
 				s.themeBeforePicker = s.theme
 				s.themeMessage = ""
@@ -742,7 +668,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 		if s.showThemePicker {
-			order := s.themePickerFilteredOrder()
+			order := s.themePickerOrder()
 			// If click is on tab or daemon, close picker (revert) and let that handle the click
 			for i, p := range s.pages {
 				if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
@@ -769,7 +695,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return s, tea.Batch(cmd, pressCmd)
 				}
 			}
-			// Theme menu zones: visible rows are theme-picker-0 .. theme-picker-(visible-1), mapping to filtered indices start+j
+			// Theme menu zones: visible rows are theme-picker-0 .. theme-picker-(visible-1), mapping to order indices start+j
 			visibleCount := themePickerMaxVisible
 			if len(order) < visibleCount {
 				visibleCount = len(order)
@@ -787,9 +713,10 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if idx < len(order) {
 						s.themePickerIndex = idx
 						s.themePickerClampIndexAndScroll()
-						s.themeMessage = "loaded for this session"
+						s.themeMessage = order[idx] + " - loaded"
+						s.themeMessageGeneration++
 						if t, ok := s.themeForPickerChoice(order[idx]); ok {
-							return s, s.SetTheme(t)
+							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd(s.themeMessageGeneration))
 						}
 					}
 					return s, nil
@@ -805,25 +732,25 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						if err := config.WriteThemeToPath(s.configPath, "", section); err != nil {
 							s.themeMessage = "save failed"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessage = "custom - saved"
+							s.themeMessageGeneration++
 						}
 					} else {
 						if err := config.WriteThemeToPath(s.configPath, presetName, nil); err != nil {
 							s.themeMessage = "save failed"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessageGeneration++
 						} else {
 							s.themeBeforePicker = s.theme
-							s.themeMessage = "saved"
-							debugLogThemeMessage("H1", "themeMessageSet", s.themeMessage)
+							s.themeMessage = presetName + " - saved"
+							s.themeMessageGeneration++
 						}
 					}
 				}
 				s.showThemePicker = false
-				return s, themeMessageTimeoutCmd()
+				return s, themeMessageTimeoutCmd(s.themeMessageGeneration)
 			}
 			// Click outside theme menu: close without saving
 			cmd := s.SetTheme(s.themeBeforePicker)
@@ -876,10 +803,9 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 	case ThemeMessageClearMsg:
-		if s.themeMessage != "" {
-			debugLogThemeMessage("H1", "themeMessageClear", s.themeMessage)
+		if msg.Generation == s.themeMessageGeneration {
+			s.themeMessage = ""
 		}
-		s.themeMessage = ""
 		return s, nil
 	}
 
@@ -898,9 +824,14 @@ func (s *Skeleton) statusLine() (string, bool) {
 	return "", false
 }
 
+// contentWidth returns the content area width (terminal width minus side borders).
+func (s *Skeleton) contentWidth() int {
+	return s.GetTerminalWidth() - sideBorderCols
+}
+
+// contentHeight returns the content area height (terminal height minus header and footer).
 func (s *Skeleton) contentHeight() int {
-	// header = 3 rows, footer = 1 row
-	return s.GetTerminalHeight() - 3 - 1
+	return s.GetTerminalHeight() - headerRows - footerRows
 }
 
 func (s *Skeleton) renderOuterHeader(w int) string {
@@ -1002,7 +933,7 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 	}
 
 	if s.themeMessage != "" {
-		leftParts = append(leftParts, st.DimStyle.Render("Theme: "+s.themeMessage))
+		leftParts = append(leftParts, st.DimStyle.Render(s.themeMessage))
 	}
 
 	leftContent := ""
@@ -1085,14 +1016,18 @@ func (s *Skeleton) View() tea.View {
 
 	header := s.renderOuterHeader(w)
 	footer := s.renderOuterFooter(w)
-
-	contentH := s.contentHeight()
+	contentH := h - lipgloss.Height(header) - lipgloss.Height(footer)
 	if contentH < 1 {
 		contentH = 1
 	}
 	var menuLines []string
 	if s.showThemePicker {
-		menuBox := s.themePickerMenuBox()
+		// Cap picker height so it fits in content area with one line gap above footer
+		maxPickerHeight := contentH - 1
+		if maxPickerHeight < 1 {
+			maxPickerHeight = 1
+		}
+		menuBox := s.themePickerMenuBox(maxPickerHeight)
 		menuLines = strings.Split(menuBox, "\n")
 	}
 
@@ -1102,30 +1037,57 @@ func (s *Skeleton) View() tea.View {
 	if s.showThemePicker && len(menuLines) > 0 {
 		innerW := w - 2
 		border := lipgloss.NewStyle().Foreground(lipgloss.Color(s.styles.OuterBorderColorHex)).Render("│")
-		menuBodyLines := make([]string, len(menuLines))
-		for i, line := range menuLines {
-			lineW := lipgloss.Width(line)
-			pad := innerW - lineW
-			if pad < 0 {
-				pad = 0
+		// Compute picker width so we overlay only on the right and leave table visible on the left
+		maxMenuW := 0
+		for _, line := range menuLines {
+			if lw := lipgloss.Width(line); lw > maxMenuW {
+				maxMenuW = lw
 			}
-			menuBodyLines[i] = border + strings.Repeat(" ", pad) + line + border
 		}
+		const minTableWidth = 40
+		if innerW-minTableWidth < maxMenuW {
+			maxMenuW = innerW - minTableWidth
+		}
+		if maxMenuW < 20 {
+			maxMenuW = 20
+		}
+		leftW := innerW - maxMenuW
 
 		bodyLines := strings.Split(body, "\n")
-		maxOverlay := len(menuBodyLines)
-		if maxOverlay > len(bodyLines) {
-			maxOverlay = len(bodyLines)
+		bodyLast := len(bodyLines) - 1
+		gapLines := 1
+		menuH := len(menuLines)
+		startIdx := bodyLast - menuH - gapLines
+		menuStart := 0
+		if startIdx < 0 {
+			menuStart = -startIdx
+			startIdx = 0
 		}
-		for i := 0; i < maxOverlay; i++ {
-			bodyIdx := len(bodyLines) - maxOverlay + i
-			menuIdx := len(menuBodyLines) - maxOverlay + i
-			bodyLines[bodyIdx] = menuBodyLines[menuIdx]
+		lastUsed := bodyLast - gapLines
+		n := menuH - menuStart
+		if n > lastUsed-startIdx {
+			n = lastUsed - startIdx
+		}
+		if n < 0 {
+			n = 0
+		}
+		for i := 0; i < n; i++ {
+			menuLine := menuLines[menuStart+i]
+			menuPart := ansi.Truncate(menuLine, maxMenuW, "")
+			if lipgloss.Width(menuPart) < maxMenuW {
+				menuPart = menuPart + strings.Repeat(" ", maxMenuW-lipgloss.Width(menuPart))
+			}
+			existing := bodyLines[startIdx+i]
+			bodyContent := strings.TrimSuffix(strings.TrimPrefix(existing, border), border)
+			leftPart := ansi.Truncate(bodyContent, leftW, "")
+			if lipgloss.Width(leftPart) < leftW {
+				leftPart = leftPart + strings.Repeat(" ", leftW-lipgloss.Width(leftPart))
+			}
+			bodyLines[startIdx+i] = border + leftPart + menuPart + border
 		}
 		body = strings.Join(bodyLines, "\n")
 	}
 	content := header + "\n" + body + "\n" + footer
-
 	v := tea.NewView(zone.Scan(content))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -1159,39 +1121,46 @@ func (s *Skeleton) renderSideBorders(content string, w, h int) string {
 }
 
 // themePickerMenuBox returns a vertical menu (one theme per line) for bottom-right placement above [t]heme.
-// Uses filtered order, search row, and a fixed-height window with ellipsis when scrolled.
-func (s *Skeleton) themePickerMenuBox() string {
+// maxHeight is the maximum number of lines the full box may use (border+padding+content); content is capped to fit.
+func (s *Skeleton) themePickerMenuBox(maxHeight int) string {
 	st := s.styles
-	filtered := s.themePickerFilteredOrder()
+	order := s.themePickerOrder()
 	lines := []string{st.SectionTitleStyle.Render(" Theme")}
-	// Search row (only when picker is active)
-	searchLabel := "Filter: "
-	if s.themePickerSearch != "" {
-		searchLabel += s.themePickerSearch
-	}
-	lines = append(lines, st.DimStyle.Render(searchLabel))
 
+	// Box has 2 border + 2 padding lines, so content lines must be <= maxHeight-4
+	maxContentLines := maxHeight - 4
+	if maxContentLines < 3 {
+		maxContentLines = 3
+	}
+	// Reserved: title(1) + optional "..."(1) + theme rows + optional "..."(1) + blank(1) + save(1) = 5 + theme rows
+	maxThemeRows := maxContentLines - 5
+	if maxThemeRows < 1 {
+		maxThemeRows = 1
+	}
 	visibleCount := themePickerMaxVisible
-	if len(filtered) < visibleCount {
-		visibleCount = len(filtered)
+	if visibleCount > maxThemeRows {
+		visibleCount = maxThemeRows
+	}
+	if len(order) < visibleCount {
+		visibleCount = len(order)
 	}
 	start := s.themePickerScrollOffset
-	if start+visibleCount > len(filtered) {
-		start = len(filtered) - visibleCount
+	if start+visibleCount > len(order) {
+		start = len(order) - visibleCount
 		if start < 0 {
 			start = 0
 		}
 	}
 	end := start + visibleCount
-	if end > len(filtered) {
-		end = len(filtered)
+	if end > len(order) {
+		end = len(order)
 	}
 
-	if len(filtered) > themePickerMaxVisible && start > 0 {
+	if len(order) > themePickerMaxVisible && start > 0 {
 		lines = append(lines, st.DimStyle.Render("  ..."))
 	}
 	for j := start; j < end; j++ {
-		name := filtered[j]
+		name := order[j]
 		lineContent := "  " + name
 		if j == s.themePickerIndex {
 			lineContent = st.FocusedButtonStyle.Render("> " + name)
@@ -1200,7 +1169,7 @@ func (s *Skeleton) themePickerMenuBox() string {
 		}
 		lines = append(lines, zone.Mark("theme-picker-"+strconv.Itoa(j-start), lineContent))
 	}
-	if len(filtered) > themePickerMaxVisible && end < len(filtered) {
+	if len(order) > themePickerMaxVisible && end < len(order) {
 		lines = append(lines, st.DimStyle.Render("  ..."))
 	}
 	lines = append(lines, "", zone.Mark("theme-picker-save", st.DimStyle.Render("[↑↓] move [s] save [q]uit")))
@@ -1208,7 +1177,7 @@ func (s *Skeleton) themePickerMenuBox() string {
 	return lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(st.OuterBorderColorHex)).
-		Padding(0, 1).
+		Padding(1, 1).
 		Render(body)
 }
 

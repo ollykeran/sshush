@@ -140,7 +140,7 @@ func runThemeSet(cmd *cobra.Command, args []string, text, focus, accent, errClr,
 		if err := config.WriteThemeToPath(path, presetName, nil); err != nil {
 			return style.NewOutput().Error("write config: " + err.Error()).AsError()
 		}
-		style.NewOutput().Success("Theme set to " + presetName).Print()
+		style.NewOutput().Success(presetName + " - set").Print()
 		return nil
 	}
 
@@ -199,6 +199,6 @@ func runThemeSet(cmd *cobra.Command, args []string, text, focus, accent, errClr,
 	if err := config.WriteThemeToPath(path, "", section); err != nil {
 		return style.NewOutput().Error("write config: " + err.Error()).AsError()
 	}
-	style.NewOutput().Success("Theme set to custom colours").Print()
+	style.NewOutput().Success("custom - saved").Print()
 	return nil
 }

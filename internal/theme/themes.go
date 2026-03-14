@@ -140,13 +140,6 @@ var Presets = map[string]Theme{
 		Error:   "#C75646",
 		Warning: "#D0B03C",
 	},
-	"solarized-dark-patched": {
-		Text:    "#fdf6e3",
-		Focus:   "#859900",
-		Accent:  "#268bd2",
-		Error:   "#dc322f",
-		Warning: "#b58900",
-	},
 	"synthwave": {
 		Text:    "#dad9c7",
 		Focus:   "#1ebb2b",
