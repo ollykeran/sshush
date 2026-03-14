@@ -80,6 +80,10 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	}
 	comment = strings.TrimSpace(comment)
 
+	if comment == "" {
+		return style.NewOutput().Error("comment cannot be empty").AsError()
+	}
+
 	printCommentDiff(parsed.Comment, comment).Print()
 
 	destPath := privateKeyPath
