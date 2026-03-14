@@ -378,8 +378,8 @@ func (s *ExportScreen) View() tea.View {
 
 	loadFileFocused := active && s.focus == exportFocusLoadFile
 	loadAgentFocused := active && s.focus == exportFocusLoadAgent
-	loadFileStyle := st.PinkStyle
-	loadAgentStyle := st.PinkStyle
+	loadFileStyle := st.AccentStyle
+	loadAgentStyle := st.AccentStyle
 	loadFileLabel := "  Load from file"
 	loadAgentLabel := "  Load from agent"
 	if loadFileFocused {
@@ -403,14 +403,14 @@ func (s *ExportScreen) View() tea.View {
 			contentW = 100
 		}
 
-		pubStyle := st.PinkStyle
+		pubStyle := st.AccentStyle
 		if active && s.focus == exportFocusPubKey {
 			pubStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Background(lipgloss.Color(s.sk.Theme().Focus))
 		}
 		sections = append(sections, st.SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && s.focus == exportFocusPubKey))
 
 		copyFocused := active && s.focus == exportFocusCopy
-		copyStyle := st.PinkStyle
+		copyStyle := st.AccentStyle
 		copyLabel := "  Copy to clipboard"
 		if copyFocused {
 			copyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -419,7 +419,7 @@ func (s *ExportScreen) View() tea.View {
 		sections = append(sections, zone.Mark(s.zonePrefix+"copy", copyStyle.Render(copyLabel)))
 
 		saveFocused := active && s.focus == exportFocusSaveFile
-		saveStyle := st.PinkStyle
+		saveStyle := st.AccentStyle
 		saveLabel := "  Save to file"
 		if saveFocused {
 			saveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -433,7 +433,7 @@ func (s *ExportScreen) View() tea.View {
 	}
 
 	if s.status != "" {
-		style := st.GreenStyle
+		style := st.FocusStyle
 		if s.statusErr {
 			style = st.ErrorStyle
 		}
@@ -443,16 +443,6 @@ func (s *ExportScreen) View() tea.View {
 	content := strings.Join(sections, "\n")
 	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
 		lipgloss.NewStyle().Padding(1, 2).Render(content)))
-}
-
-func (s *ExportScreen) HelpEntries() []string {
-	st := s.sk.Styles()
-	return []string{
-		st.HelpRow("up/k", "Previous field"),
-		st.HelpRow("down/j", "Next field"),
-		st.HelpRow("enter", "Activate"),
-		"",
-	}
 }
 
 func (s *ExportScreen) StatusTextRaw() (string, bool) {

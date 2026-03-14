@@ -506,7 +506,7 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 	sections = append(sections, " "+s.saveBtn.View(st))
 
 	if s.status != "" {
-		style := st.GreenStyle
+		style := st.FocusStyle
 		if s.statusErr {
 			style = st.ErrorStyle
 		}
@@ -524,23 +524,11 @@ func (s *CreateScreen) viewResultPanel(w int) string {
 
 	var sections []string
 
-	sections = append(sections, st.SectionBox("Public Key", st.PinkStyle.Render(s.genResult.pubKeyStr), w, false))
-	sections = append(sections, st.SectionBox("Private Key", st.PinkStyle.Render(s.genResult.privPath), w, false))
-	sections = append(sections, st.SectionBox("Public Key File", st.PinkStyle.Render(s.genResult.pubPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key", st.AccentStyle.Render(s.genResult.pubKeyStr), w, false))
+	sections = append(sections, st.SectionBox("Private Key", st.AccentStyle.Render(s.genResult.privPath), w, false))
+	sections = append(sections, st.SectionBox("Public Key File", st.AccentStyle.Render(s.genResult.pubPath), w, false))
 
 	return strings.Join(sections, "\n")
-}
-
-func (s *CreateScreen) HelpEntries() []string {
-	st := s.sk.Styles()
-	return []string{
-		st.HelpRow("up/k", "Previous field"),
-		st.HelpRow("down/j", "Next field"),
-		st.HelpRow("left/h", "Previous option"),
-		st.HelpRow("right/l", "Next option"),
-		st.HelpRow("enter", "Activate/Edit"),
-		"",
-	}
 }
 
 func (s *CreateScreen) StatusTextRaw() (string, bool) {

@@ -6,40 +6,39 @@ import (
 )
 
 const tabWidth = 10
-const Banner = "              ██                   ██    \n██▀▀▀▀ ██▀▀▀▀ ██▀▀██ ██  ██ ██▀▀▀▀ ██▀▀██\n▀▀▀▀██ ▀▀▀▀██ ██  ██ ██  ██ ▀▀▀▀██ ██  ██\n▀▀▀▀▀▀ ▀▀▀▀▀▀ ▀▀  ▀▀ ▀▀▀▀▀▀ ▀▀▀▀▀▀ ▀▀  ▀▀"
 
 // Styles holds all lipgloss styles derived from a theme. Built by BuildStyles.
 type Styles struct {
-	TitleStyle             lipgloss.Style
-	ActiveTabStyle         lipgloss.Style
-	ActiveTabFocusedStyle   lipgloss.Style
-	InactiveTabStyle       lipgloss.Style
-	FocusedBorderStyle     lipgloss.Style
-	UnfocusedBorderStyle   lipgloss.Style
-	SectionTitleStyle      lipgloss.Style
-	FocusedButtonStyle     lipgloss.Style
-	UnfocusedButtonStyle   lipgloss.Style
-	ButtonActiveStyle      lipgloss.Style // active but not focused; same padding as FocusedButtonStyle to avoid resize
-	ErrorStyle             lipgloss.Style
-	DimStyle               lipgloss.Style
-	PinkStyle              lipgloss.Style
-	GreenStyle             lipgloss.Style
-	WarnStyle              lipgloss.Style
-	HeaderTabActive        lipgloss.Style
-	HeaderTabActiveUnfocused lipgloss.Style
-	HeaderTabActiveFocused lipgloss.Style
-	HeaderTabInactive      lipgloss.Style
+	TitleStyle                lipgloss.Style
+	ActiveTabStyle            lipgloss.Style
+	ActiveTabFocusedStyle     lipgloss.Style
+	InactiveTabStyle          lipgloss.Style
+	FocusedBorderStyle        lipgloss.Style
+	UnfocusedBorderStyle      lipgloss.Style
+	SectionTitleStyle         lipgloss.Style
+	FocusedButtonStyle        lipgloss.Style
+	UnfocusedButtonStyle      lipgloss.Style
+	ButtonActiveStyle         lipgloss.Style // active but not focused; same padding as FocusedButtonStyle to avoid resize
+	ErrorStyle                lipgloss.Style
+	DimStyle                  lipgloss.Style
+	AccentStyle               lipgloss.Style
+	FocusStyle                lipgloss.Style
+	WarnStyle                 lipgloss.Style
+	HeaderTabActive           lipgloss.Style
+	HeaderTabActiveUnfocused  lipgloss.Style
+	HeaderTabActiveFocused    lipgloss.Style
+	HeaderTabInactive         lipgloss.Style
 	HeaderTabBoxActiveFocused lipgloss.Style
-	HeaderTabBoxActive     lipgloss.Style
-	HeaderTabBoxInactive   lipgloss.Style
-	DaemonLabelStyle       lipgloss.Style
-	DaemonBoxUnfocused     lipgloss.Style
-	DaemonBoxFocused       lipgloss.Style
-	BannerStyle            lipgloss.Style
+	HeaderTabBoxActive        lipgloss.Style
+	HeaderTabBoxInactive      lipgloss.Style
+	DaemonLabelStyle          lipgloss.Style
+	DaemonBoxUnfocused        lipgloss.Style
+	DaemonBoxFocused          lipgloss.Style
+	BannerStyle               lipgloss.Style
 	// Hex strings for borders and table (use lipgloss.Color(st.XXX) at use site)
 	OuterBorderColorHex string
 	TableHeaderFgHex    string
-	TableCellFgHex     string
+	TableCellFgHex      string
 	TableSelectedFgHex  string
 	TableSelectedBgHex  string
 }
@@ -61,7 +60,7 @@ func BuildStyles(t theme.Theme) Styles {
 	black := lipgloss.Color("#000000")
 
 	return Styles{
-		TitleStyle:           lipgloss.NewStyle().Bold(true).Foreground(focus),
+		TitleStyle: lipgloss.NewStyle().Bold(true).Foreground(focus),
 		ActiveTabStyle: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(black).
@@ -106,11 +105,11 @@ func BuildStyles(t theme.Theme) Styles {
 			Foreground(black).
 			Background(accent).
 			Padding(0, 2),
-		ErrorStyle:   lipgloss.NewStyle().Foreground(errClr),
-		DimStyle:     lipgloss.NewStyle().Foreground(text),
-		PinkStyle:    lipgloss.NewStyle().Foreground(accent),
-		GreenStyle:   lipgloss.NewStyle().Bold(true).Foreground(focus),
-		WarnStyle:    lipgloss.NewStyle().Foreground(warnClr),
+		ErrorStyle:          lipgloss.NewStyle().Foreground(errClr),
+		DimStyle:            lipgloss.NewStyle().Foreground(text),
+		AccentStyle:         lipgloss.NewStyle().Foreground(accent),
+		FocusStyle:          lipgloss.NewStyle().Bold(true).Foreground(focus),
+		WarnStyle:           lipgloss.NewStyle().Foreground(warnClr),
 		OuterBorderColorHex: t.Accent,
 		HeaderTabActive: lipgloss.NewStyle().
 			Bold(true).
@@ -175,8 +174,8 @@ func BuildStyles(t theme.Theme) Styles {
 			Padding(0, 2),
 		TableHeaderFgHex:   t.Focus,
 		TableCellFgHex:     t.Text,
-		TableSelectedFgHex:  "#000000",
-		TableSelectedBgHex:  t.Focus,
+		TableSelectedFgHex: "#000000",
+		TableSelectedBgHex: t.Focus,
 	}
 }
 
@@ -197,7 +196,7 @@ func (st Styles) SectionBox(title, content string, width int, focused bool) stri
 
 // HelpRow formats a help line with key and description for the help overlay.
 func (st Styles) HelpRow(key, desc string) string {
-	k := st.GreenStyle.Width(14).Render(key)
-	d := st.PinkStyle.Render(desc)
+	k := st.FocusStyle.Width(14).Render(key)
+	d := st.AccentStyle.Render(desc)
 	return "  " + k + d
 }

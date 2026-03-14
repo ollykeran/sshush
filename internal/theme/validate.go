@@ -2,6 +2,7 @@ package theme
 
 import (
 	"image/color"
+	"math"
 	"regexp"
 	"strconv"
 )
@@ -46,4 +47,37 @@ func HexToRGBA(hex string) (c color.RGBA, ok bool) {
 	g, _ := strconv.ParseUint(hex[3:5], 16, 8)
 	b, _ := strconv.ParseUint(hex[5:7], 16, 8)
 	return color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}, true
+}
+
+// ContrastForeground returns "#000000" or "#ffffff" for readable text on a background of the given hex.
+// Uses relative luminance; ok is false if hex is invalid.
+func ContrastForeground(hex string) (fg string, ok bool) {
+	c, ok := HexToRGBA(hex)
+	if !ok {
+		return "", false
+	}
+	// sRGB relative luminance (linearized then weighted)
+	r := float64(c.R) / 255
+	g := float64(c.G) / 255
+	b := float64(c.B) / 255
+	if r <= 0.03928 {
+		r = r / 12.92
+	} else {
+		r = math.Pow((r+0.055)/1.055, 2.4)
+	}
+	if g <= 0.03928 {
+		g = g / 12.92
+	} else {
+		g = math.Pow((g+0.055)/1.055, 2.4)
+	}
+	if b <= 0.03928 {
+		b = b / 12.92
+	} else {
+		b = math.Pow((b+0.055)/1.055, 2.4)
+	}
+	lum := 0.2126*r + 0.7152*g + 0.0722*b
+	if lum > 0.179 {
+		return "#000000", true
+	}
+	return "#ffffff", true
 }

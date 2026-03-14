@@ -15,6 +15,7 @@ func newAddCommand() *cobra.Command {
 		Use:     "add <key_paths...>",
 		Example: "sshush add ~/.ssh/id_ed25519 ~/.ssh/id_rsa",
 		Short:   "Add key(s) to the running agent",
+		Long:    "Add unencrypted OpenSSH private key(s) to sshushd by filepath",
 		RunE:    runAdd,
 	}
 }
@@ -26,18 +27,18 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	paths := args
 	if len(paths) == 0 {
 		cmd.Usage()
-		return nil
+		return style.NewOutput().Error("at least one key path is required").AsError()
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
 	if !sshushd.CheckAlreadyRunning(socketPath) {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
 	}
 	before, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
-		return err
+		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
 	for _, arg := range paths {
 		if err := agent.AddKeyToSocketFromPath(socketPath, arg); err == nil {
@@ -45,10 +46,10 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 		resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
 		if resolveErr != nil {
-			return resolveErr
+			return style.NewOutput().Error("failed to resolve key path by comment").AsError()
 		}
 		if err := agent.AddKeyToSocketFromPath(socketPath, resolved); err != nil {
-			return err
+			return style.NewOutput().Error("failed to add key to socket").AsError()
 		}
 	}
 	after, _ := agent.ListKeysFromSocket(socketPath)

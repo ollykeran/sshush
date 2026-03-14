@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/openssh"
+	"github.com/ollykeran/sshush/internal/runtime"
 )
 
 func TestRunEdit_commentFlag(t *testing.T) {
@@ -175,14 +176,14 @@ func TestEditCommentWithEditor_editorFails(t *testing.T) {
 
 func TestResolveEditor_flagTakesPrecedence(t *testing.T) {
 	t.Setenv("EDITOR", "nano")
-	if got := resolveEditor("custom-editor"); got != "custom-editor" {
+	if got := runtime.ResolveEditor("custom-editor"); got != "custom-editor" {
 		t.Errorf("resolveEditor: got %q, want %q", got, "custom-editor")
 	}
 }
 
 func TestResolveEditor_envFallback(t *testing.T) {
 	t.Setenv("EDITOR", "emacs")
-	if got := resolveEditor(""); got != "emacs" {
+	if got := runtime.ResolveEditor(""); got != "emacs" {
 		t.Errorf("resolveEditor: got %q, want %q", got, "emacs")
 	}
 }
@@ -195,7 +196,7 @@ func TestResolveEditor_defaultVi(t *testing.T) {
 	} else if _, err := exec.LookPath("nano"); err == nil {
 		want = "nano"
 	}
-	if got := resolveEditor(""); got != want {
+	if got := runtime.ResolveEditor(""); got != want {
 		t.Errorf("resolveEditor: got %q, want %q (vim then nano then vi by PATH)", got, want)
 	}
 }
