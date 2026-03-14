@@ -110,7 +110,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		s.fileSelector.SetHeight(max(s.height-12, 8))
+		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		// Show file selector when Edit tab becomes active and no key loaded.
 		// Deferred from Init so picker's async messages route to this tab.
 		if s.rawKey == nil && !s.fileSelector.Visible() {
@@ -357,11 +357,13 @@ func (s *EditScreen) advanceFocus(dir int) tea.Cmd {
 }
 
 func (s *EditScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	if s.fileSelector.Visible() {
@@ -375,7 +377,7 @@ func (s *EditScreen) View() tea.View {
 
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 	st := s.sk.Styles()
 	var sections []string
@@ -392,8 +394,11 @@ func (s *EditScreen) View() tea.View {
 		sections = append(sections, "")
 
 		infoW := w * 3 / 4
-		if infoW > 100 {
-			infoW = 100
+		if infoW > sectionBoxMaxWidth {
+			infoW = sectionBoxMaxWidth
+		}
+		if infoW < sectionBoxMinWidth {
+			infoW = sectionBoxMinWidth
 		}
 
 		sections = append(sections, st.SectionBox("Public Key",

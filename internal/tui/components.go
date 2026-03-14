@@ -167,27 +167,40 @@ func (kt KeyTable) BoxView(st Styles) string {
 
 func keyBoxInnerWidth(termWidth int) int {
 	boxW := termWidth * 3 / 4
-	if boxW > 120 {
-		boxW = 120
+	if boxW > sectionBoxMaxWidth {
+		boxW = sectionBoxMaxWidth
 	}
-	if boxW < 60 {
-		boxW = 60
+	if boxW < sectionBoxMinWidth {
+		boxW = sectionBoxMinWidth
 	}
 	return boxW - 4
 }
 
+const (
+	keyTableMinTotalWidth = 36
+	keyTableTypeMinWidth  = 19
+	keyTableFPMinWidth     = 30
+	keyTableCommentMinW   = 20
+)
+
 func keyTableColumns(w int) []table.Column {
-	if w < 36 {
-		w = 36
+	if w < keyTableMinTotalWidth {
+		w = keyTableMinTotalWidth
 	}
-	typeW := 19
-	fpW := 51
+	typeW := w / 6
+	if typeW < keyTableTypeMinWidth {
+		typeW = keyTableTypeMinWidth
+	}
+	fpW := w * 45 / 100
+	if fpW < keyTableFPMinWidth {
+		fpW = keyTableFPMinWidth
+	}
 	commentW := w - typeW - fpW
-	if commentW < 20 {
-		commentW = 20
+	if commentW < keyTableCommentMinW {
+		commentW = keyTableCommentMinW
 		fpW = w - typeW - commentW
-		if fpW < 30 {
-			fpW = 30
+		if fpW < keyTableFPMinWidth {
+			fpW = keyTableFPMinWidth
 		}
 	}
 	return []table.Column{
@@ -238,6 +251,7 @@ func NewStyledFilePicker(dirOnly bool, st Styles) StyledFilePicker {
 	fp.DirAllowed = dirOnly
 	fp.FileAllowed = !dirOnly
 	fp.ShowHidden = true
+	fp.AutoHeight = false // we set height via SetHeight so the picker gets a valid height before Init
 	fp.Styles.Cursor = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableHeaderFgHex))
 	fp.Styles.Directory = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Bold(true)
 	fp.Styles.File = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex))

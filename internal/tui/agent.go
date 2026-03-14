@@ -95,7 +95,7 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	btns.Focused = true
 	btns.ZonePrefix = prefix + "ctrl-"
 
-	kt := NewKeyTable(80, 8, sk.Styles())
+	kt := NewKeyTable(defaultViewWidth, defaultKeyTableHeight, sk.Styles())
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
@@ -139,24 +139,24 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		tableH := s.height - 14
-		if tableH > 12 {
-			tableH = 12
+		tableH := s.height - tableHeaderRows
+		if tableH > maxTableHeight {
+			tableH = maxTableHeight
 		}
-		if tableH < 3 {
-			tableH = 3
+		if tableH < minTableHeight {
+			tableH = minTableHeight
 		}
 		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
-		s.fileSelector.SetHeight(max(s.height-12, 8))
+		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		return s, nil
 
 	case ThemeChangedMsg:
-		tableH := s.height - 14
-		if tableH > 12 {
-			tableH = 12
+		tableH := s.height - tableHeaderRows
+		if tableH > maxTableHeight {
+			tableH = maxTableHeight
 		}
-		if tableH < 3 {
-			tableH = 3
+		if tableH < minTableHeight {
+			tableH = minTableHeight
 		}
 		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
 		return s, nil
@@ -461,11 +461,13 @@ func (s *AgentScreen) visibleFoundKeys() []string {
 }
 
 func (s *AgentScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	if s.fileSelector.Visible() {
@@ -486,7 +488,7 @@ func (s *AgentScreen) View() tea.View {
 
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 
 	st := s.sk.Styles()
@@ -607,8 +609,11 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 	}
 	content := strings.Join(lines, "\n")
 	boxW := width * 3 / 4
-	if boxW > 120 {
-		boxW = 120
+	if boxW > sectionBoxMaxWidth {
+		boxW = sectionBoxMaxWidth
+	}
+	if boxW < sectionBoxMinWidth {
+		boxW = sectionBoxMinWidth
 	}
 	border := st.UnfocusedBorderStyle
 	if active && s.focus == agentFocusFound {

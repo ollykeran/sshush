@@ -440,20 +440,22 @@ func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
 }
 
 func (s *CreateScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 
 	leftW := w / 2
-	if leftW < 40 {
+	if leftW < minCreatePanelWidth {
 		leftW = w - 4
 	}
 	rightW := w - leftW - 4
@@ -461,7 +463,7 @@ func (s *CreateScreen) View() tea.View {
 	left := s.viewCreatePanel(leftW, active)
 	right := s.viewResultPanel(rightW)
 
-	if w >= 100 {
+	if w >= minWidthForHorizontalLayout {
 		content := lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 		return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top, content))
 	}

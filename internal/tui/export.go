@@ -80,7 +80,7 @@ func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	saveIn.Prompt = ""
 	saveIn.Placeholder = "filename.pub"
 
-	kt := NewKeyTable(80, 5, sk.Styles())
+	kt := NewKeyTable(defaultViewWidth, defaultExportAgentKeysRows, sk.Styles())
 	kt.ZonePrefix = prefix + "agent-"
 
 	return &ExportScreen{
@@ -120,12 +120,26 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
-		s.fileSelector.SetHeight(max(s.height-12, 8))
+		agentKeysRows := s.height / agentKeysTableHeightDiv
+		if agentKeysRows < agentKeysTableMinRows {
+			agentKeysRows = agentKeysTableMinRows
+		}
+		if agentKeysRows > agentKeysTableMaxRows {
+			agentKeysRows = agentKeysTableMaxRows
+		}
+		s.agentKeys.SetSize(s.width, agentKeysRows, s.sk.Styles())
+		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		return s, nil
 
 	case ThemeChangedMsg:
-		s.agentKeys.SetSize(s.width, 5, s.sk.Styles())
+		agentKeysRows := s.height / agentKeysTableHeightDiv
+		if agentKeysRows < agentKeysTableMinRows {
+			agentKeysRows = agentKeysTableMinRows
+		}
+		if agentKeysRows > agentKeysTableMaxRows {
+			agentKeysRows = agentKeysTableMaxRows
+		}
+		s.agentKeys.SetSize(s.width, agentKeysRows, s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -346,11 +360,13 @@ func (s *ExportScreen) updateDefaultSaveFilename() {
 }
 
 func (s *ExportScreen) View() tea.View {
-	width := 80
-	height := 24
-	if s.sk != nil {
-		width = s.sk.GetTerminalWidth()
-		height = s.sk.GetTerminalHeight() - 12
+	width := s.width
+	height := s.height
+	if width < 1 {
+		width = defaultViewWidth
+	}
+	if height < 1 {
+		height = defaultViewHeight
 	}
 	active := s.sk.ScreenActive()
 	if s.fileSelector.Visible() {
@@ -371,7 +387,7 @@ func (s *ExportScreen) View() tea.View {
 
 	w := width
 	if w < 1 {
-		w = 80
+		w = defaultViewWidth
 	}
 	st := s.sk.Styles()
 	var sections []string
@@ -399,8 +415,11 @@ func (s *ExportScreen) View() tea.View {
 		sections = append(sections, "")
 
 		contentW := w * 3 / 4
-		if contentW > 100 {
-			contentW = 100
+		if contentW > sectionBoxMaxWidth {
+			contentW = sectionBoxMaxWidth
+		}
+		if contentW < sectionBoxMinWidth {
+			contentW = sectionBoxMinWidth
 		}
 
 		pubStyle := st.AccentStyle

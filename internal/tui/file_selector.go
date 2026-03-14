@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 // FileSelectedMsg is sent when the user selects a file or directory.
@@ -84,8 +85,9 @@ func (f *FileSelector) Update(msg tea.Msg) tea.Cmd {
 			return tea.Batch(cmd, func() tea.Msg { return FileSelectedMsg{Path: path} })
 		}
 		return cmd
+	default:
+		return f.picker.Update(msg)
 	}
-	return f.picker.Update(msg)
 }
 
 // View returns the modal content when visible, or empty string when hidden.
@@ -97,20 +99,20 @@ func (f *FileSelector) View(width, height int, focused bool, st Styles) string {
 	}
 	// Use width - 2 to fit inside skeleton's side borders; 4 cols padding each side
 	usableW := width - 2
-	if usableW < 60 {
-		usableW = 60
+	if usableW < fileSelectorMinUsableWidth {
+		usableW = fileSelectorMinUsableWidth
 	}
 	pad := 4
 	boxW := usableW - 2*pad
 	innerW := boxW - 6 // border + padding
-	if innerW < 40 {
-		innerW = 40
+	if innerW < fileSelectorMinInnerWidth {
+		innerW = fileSelectorMinInnerWidth
 	}
 
 	title := st.SectionTitleStyle.Render(f.title)
-//	hint := st.DimStyle.Render("→/l in ←/h out")
+	//	hint := st.DimStyle.Render("→/l in ←/h out")
 	dirPath := f.picker.CurrentDirectory()
-	dirPart := st.AccentStyle.Render("dir: " + dirPath)
+	dirPart := st.BannerStyle.Render(utils.ContractHomeDirectory(dirPath))
 	lineW := usableW - 2*pad
 	hintLine := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Left).Render(dirPart))
