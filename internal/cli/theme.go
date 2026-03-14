@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
@@ -13,8 +11,10 @@ import (
 
 func newThemeCommand() *cobra.Command {
 	themeCmd := &cobra.Command{
-		Use:   "theme",
-		Short: "Show or set the colour theme",
+		Use:     "theme",
+		Example: "sshush theme show\nsshush theme list\nsshush theme set dracula",
+		Long:    "Show or set the colour theme. Theme used to style the CLI and TUI.",
+		Short:   "Show or set the colour theme",
 	}
 	themeCmd.AddCommand(newThemeShowCommand())
 	themeCmd.AddCommand(newThemeListCommand())
@@ -24,10 +24,11 @@ func newThemeCommand() *cobra.Command {
 
 func newThemeListCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List available theme presets",
-		Args:  cobra.NoArgs,
-		RunE:  runThemeList,
+		Use:     "list",
+		Example: "sshush theme list",
+		Short:   "List available theme presets",
+		Args:    cobra.NoArgs,
+		RunE:    runThemeList,
 	}
 }
 
@@ -59,10 +60,11 @@ func runThemeList(cmd *cobra.Command, _ []string) error {
 
 func newThemeShowCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "show",
-		Short: "Show the current theme",
-		Args:  cobra.NoArgs,
-		RunE:  runThemeShow,
+		Use:     "show",
+		Example: "sshush theme show",
+		Short:   "Show the current theme",
+		Args:    cobra.NoArgs,
+		RunE:    runThemeShow,
 	}
 }
 
@@ -70,23 +72,24 @@ func runThemeShow(cmd *cobra.Command, _ []string) error {
 	path, _ := runtime.ResolveConfigPath(cmd.Root())
 	th := config.LoadThemeFromPath(path)
 	presetName := presetNameForTheme(th)
+	style.SetTheme(th)
 	if presetName != "" {
 		style.NewOutput().
 			Add(style.Success("Theme: " + presetName)).
-			Add(fmt.Sprintf("  text:    %s", th.Text)).
-			Add(fmt.Sprintf("  focus:   %s", th.Focus)).
-			Add(fmt.Sprintf("  accent:  %s", th.Accent)).
-			Add(fmt.Sprintf("  error:   %s", th.Error)).
-			Add(fmt.Sprintf("  warning: %s", th.Warning)).
+			Add(style.Text("  text:    ") + style.HexWithBackground(th.Text)).
+			Add(style.Text("  focus:   ") + style.HexWithBackground(th.Focus)).
+			Add(style.Text("  accent:  ") + style.HexWithBackground(th.Accent)).
+			Add(style.Text("  error:   ") + style.HexWithBackground(th.Error)).
+			Add(style.Text("  warning: ") + style.HexWithBackground(th.Warning)).
 			Print()
 	} else {
 		style.NewOutput().
 			Add(style.Highlight("Theme: custom")).
-			Add(fmt.Sprintf("  text:    %s", th.Text)).
-			Add(fmt.Sprintf("  focus:   %s", th.Focus)).
-			Add(fmt.Sprintf("  accent:  %s", th.Accent)).
-			Add(fmt.Sprintf("  error:   %s", th.Error)).
-			Add(fmt.Sprintf("  warning: %s", th.Warning)).
+			Add(style.Text("  text:    ") + style.HexWithBackground(th.Text)).
+			Add(style.Text("  focus:   ") + style.HexWithBackground(th.Focus)).
+			Add(style.Text("  accent:  ") + style.HexWithBackground(th.Accent)).
+			Add(style.Text("  error:   ") + style.HexWithBackground(th.Error)).
+			Add(style.Text("  warning: ") + style.HexWithBackground(th.Warning)).
 			Print()
 	}
 	return nil

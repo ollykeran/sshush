@@ -11,9 +11,11 @@ import (
 
 func newRemoveCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove [key-path|comment...]",
-		Short: "Remove key(s) from the running agent by file path or comment",
-		RunE:  runRemove,
+		Use:     "remove [key-path|comment...]",
+		Short:   "Remove key(s) from the running agent",
+		Example: "sshush remove ~/.ssh/id_ed25519 ~/.ssh/id_rsa",
+		Long:    "Remove key(s) from the running agent by file path or comment.",
+		RunE:    runRemove,
 	}
 }
 

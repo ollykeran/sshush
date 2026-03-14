@@ -10,10 +10,12 @@ import (
 
 func newListCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List keys in the running agent",
-		Args:  argsNoneOrHelp,
-		RunE:  runList,
+		Use:     "list",
+		Short:   "List keys in the running agent",
+		Example: "sshush list",
+		Long:    "List keys in the running agent via the agent socket. This command is not affected by config.",
+		Args:    argsNoneOrHelp,
+		RunE:    runList,
 	}
 }
 

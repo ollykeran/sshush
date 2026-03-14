@@ -23,9 +23,10 @@ func newEditCommand() *cobra.Command {
 	var outputFlag string
 
 	cmd := &cobra.Command{
-		Use:     "edit <private-key-filepath>",
-		Long:    "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
-		Example: "sshush edit ~/.ssh/id_ed25519 --comment 'new-comment' --copy --output ~/.ssh/id_ed25519.new",
+		Use: "edit <private-key-filepath>",
+		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'
+sshush edit ~/.ssh/id_rsa`,
+		Long: "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				cmd.Help()
@@ -52,10 +53,10 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	}
 
 	if copyFlag && strings.TrimSpace(outputFlag) == "" {
-		return style.NewOutput().Error("--output is required when --copy is set").AsError()
+		return style.NewOutput().Error("-o/--output is required when --copy is set").AsError()
 	}
 	if !copyFlag && strings.TrimSpace(outputFlag) != "" {
-		return style.NewOutput().Error("--output can only be used with --copy").AsError()
+		return style.NewOutput().Error("-o/--output can only be used with --copy").AsError()
 	}
 
 	parsed, rawKey, signer, err := keys.LoadKeyMaterial(privateKeyPath)
@@ -71,16 +72,13 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
 			if errors.Is(err, ErrExitedWithoutSaving) {
-				style.NewOutput().Success("no changes").Print()
+				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.ContractHomeDirectory(privateKeyPath))).Print()
 				return nil
 			}
 			return style.NewOutput().Error(err.Error()).AsError()
 		}
 	}
 	comment = strings.TrimSpace(comment)
-	if comment == "" {
-		return style.NewOutput().Error("comment cannot be empty").AsError()
-	}
 
 	printCommentDiff(parsed.Comment, comment).Print()
 
@@ -111,8 +109,9 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 
 	out := style.NewOutput().
 		Success("updated key comment").
-		Info("path: " + destPath).
-		Info("fingerprint: " + ssh.FingerprintSHA256(signer.PublicKey()))
+		Info("fingerprint: " + ssh.FingerprintSHA256(signer.PublicKey())).
+		Info("path: " + destPath)
+
 	if copyFlag {
 		out.Info("source: " + privateKeyPath)
 	}
@@ -122,10 +121,6 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 
 // ErrExitedWithoutSaving is returned when the user exits the editor without saving changes.
 var ErrExitedWithoutSaving = errors.New("exited without saving")
-
-func resolveEditor(editorFlag string) string {
-	return runtime.ResolveEditor(editorFlag)
-}
 
 func editCommentWithEditor(currentComment, editor string) (string, error) {
 	tmp, err := os.CreateTemp("", "sshush-comment-*")

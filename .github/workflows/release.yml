@@ -36,15 +36,10 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: "0"
           VERSION: ${{ steps.tag.outputs.version }}
-        run: >-
-          just
-          ldflags="-X github.com/ollykeran/sshush/internal/version.Version=v${{ steps.tag.outputs.version }}"
-          package
+        run: just version=${{ steps.tag.outputs.version }} package
 
       - name: Validate artifacts
-        env:
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: just check-artifacts "$VERSION"
+        run: just check-artifacts ${{ steps.tag.outputs.version }}
 
       - name: Release
         if: ${{ !env.ACT }}

@@ -522,7 +522,7 @@ func (s *AgentScreen) BannerColor() color.Color {
 
 func (s *AgentScreen) StatusText() string {
 	st := s.sk.Styles()
-	statusStyle := st.PinkStyle
+	statusStyle := st.AccentStyle
 	if s.statusErr {
 		statusStyle = st.ErrorStyle
 	}
@@ -592,7 +592,7 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 		maxShow = len(visible)
 	}
 	for i := 0; i < maxShow; i++ {
-		style := st.PinkStyle
+		style := st.AccentStyle
 		linePrefix := "  "
 		if active && s.focus == agentFocusFound && i == s.foundSelected {
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -621,22 +621,10 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 func (s *AgentScreen) HelpEntries() []string {
 	st := s.sk.Styles()
 	return []string{
-		st.HelpRow("s", "Start daemon"),
-		st.HelpRow("x", "Stop daemon"),
-		st.HelpRow("r", "Reload daemon"),
-		"",
+		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
 		st.HelpRow("d / bksp", "Remove key"),
-		st.HelpRow("l", "Lock agent"),
-		st.HelpRow("u", "Unlock agent"),
 		"",
-		st.HelpRow("left/h", "Navigate left"),
-		st.HelpRow("right/l", "Navigate right"),
-		st.HelpRow("up/k", "Move up"),
-		st.HelpRow("down/j", "Move down"),
-		st.HelpRow("enter", "Activate"),
-		"",
-		st.HelpRow("q/esc/ctrl+c", "Quit"),
 	}
 }
 

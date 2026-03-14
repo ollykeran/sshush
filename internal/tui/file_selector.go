@@ -108,13 +108,12 @@ func (f *FileSelector) View(width, height int, focused bool, st Styles) string {
 	}
 
 	title := st.SectionTitleStyle.Render(f.title)
-	hint := st.DimStyle.Render("bksp: up dir | enter: select | q/esc: exit")
+//	hint := st.DimStyle.Render("→/l in ←/h out")
 	dirPath := f.picker.CurrentDirectory()
-	dirPart := st.PinkStyle.Render("dir: " + dirPath)
+	dirPart := st.AccentStyle.Render("dir: " + dirPath)
 	lineW := usableW - 2*pad
 	hintLine := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(lineW/2).Align(lipgloss.Left).Render(hint),
-		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Right).Render(dirPart))
+		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Left).Render(dirPart))
 
 	pickerView := f.picker.View()
 	var truncated []string

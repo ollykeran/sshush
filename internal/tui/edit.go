@@ -381,7 +381,7 @@ func (s *EditScreen) View() tea.View {
 	var sections []string
 
 	if s.rawKey == nil {
-		selectStyle := st.PinkStyle
+		selectStyle := st.AccentStyle
 		selectLabel := "  Select key file"
 		if active && s.focus == editFocusSelectFile {
 			selectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
@@ -397,10 +397,10 @@ func (s *EditScreen) View() tea.View {
 		}
 
 		sections = append(sections, st.SectionBox("Public Key",
-			st.PinkStyle.Render(truncate(s.pubKeyStr, infoW-6)), infoW, false))
+			st.AccentStyle.Render(truncate(s.pubKeyStr, infoW-6)), infoW, false))
 
 		sections = append(sections, st.SectionBox("Fingerprint",
-			st.PinkStyle.Render(s.fingerprint), infoW, false))
+			st.AccentStyle.Render(s.fingerprint), infoW, false))
 
 		sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
 
@@ -420,7 +420,7 @@ func (s *EditScreen) View() tea.View {
 	}
 
 	if s.rawKey == nil && s.status != "" {
-		statusStyle := st.GreenStyle
+		statusStyle := st.FocusStyle
 		if s.statusErr {
 			statusStyle = st.ErrorStyle
 		}
@@ -430,16 +430,6 @@ func (s *EditScreen) View() tea.View {
 	content := strings.Join(sections, "\n")
 	return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Top,
 		lipgloss.NewStyle().Padding(1, 2).Render(content)))
-}
-
-func (s *EditScreen) HelpEntries() []string {
-	st := s.sk.Styles()
-	return []string{
-		st.HelpRow("up/k", "Previous field"),
-		st.HelpRow("down/j", "Next field"),
-		st.HelpRow("enter", "Activate/Edit"),
-		"",
-	}
 }
 
 func (s *EditScreen) StatusTextRaw() (string, bool) {
@@ -453,7 +443,7 @@ func renderCommentDiff(st Styles, oldComment, newComment string) string {
 		parts = append(parts, st.ErrorStyle.Render("- "+oldComment))
 	}
 	if newComment != "" {
-		parts = append(parts, "    ", st.GreenStyle.Render("+ "+newComment))
+		parts = append(parts, "    ", st.FocusStyle.Render("+ "+newComment))
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
