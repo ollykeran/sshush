@@ -8,6 +8,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 )
 
@@ -94,6 +95,7 @@ func CreateDefaultConfig() error {
 	socketPath := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "sshush.sock")
 	socketPathLine := `socket_path = "` + socketPath + `"`
 
+	def := theme.DefaultTheme()
 	configLines := []string{
 		"# Example config.toml",
 		socketPathLine,
@@ -101,6 +103,11 @@ func CreateDefaultConfig() error {
 		"",
 		"[theme]",
 		`name = "default"`,
+		"# text = \"" + def.Text + "\"",
+		"# focus = \"" + def.Focus + "\"",
+		"# accent = \"" + def.Accent + "\"",
+		"# error = \"" + def.Error + "\"",
+		"# warning = \"" + def.Warning + "\"",
 		"",
 	}
 

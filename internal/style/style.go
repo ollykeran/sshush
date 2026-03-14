@@ -53,7 +53,7 @@ func Highlight(s string) string { return highlight.Render(s) }
 func Focus(s string) string     { return focus.Render(s) }
 func Warn(s string) string      { return warn.Render(s) }
 func Err(s string) string       { return err.Render(s) }
-func Box(s string) string      { return box.Render(s) }
+func Box(s string) string       { return box.Render(s) }
 
 // Output is a builder for styled terminal output. Append lines with semantic
 // level methods (Success/Info/Warn/Error), then flush with Print() or AsError().
@@ -66,9 +66,9 @@ func NewOutput() *Output { return &Output{} }
 
 // Semantic append methods - encode color from theme, callers describe intent.
 func (o *Output) Success(s string) *Output { return o.add(success.Render(s)) }
-func (o *Output) Info(s string) *Output    { return o.add(highlight.Render(s)) }
-func (o *Output) Warn(s string) *Output   { return o.add(warn.Render(s)) }
-func (o *Output) Error(s string) *Output  { return o.add(err.Render(s)) }
+func (o *Output) Info(s string) *Output    { return o.add(text.Render(s)) }
+func (o *Output) Warn(s string) *Output    { return o.add(warn.Render(s)) }
+func (o *Output) Error(s string) *Output   { return o.add(err.Render(s)) }
 
 // Spacer appends a blank line for visual separation.
 func (o *Output) Spacer() *Output { return o.add("") }
@@ -108,6 +108,22 @@ func (o *Output) PrintErr() {
 // AsError wraps the Output in a StyledError for display at the Execute level.
 // Use instead of errors.New() for all user-facing command errors.
 func (o *Output) AsError() error { return &StyledError{o} }
+
+// HexWithBackground renders the hex string (e.g. " #RRGGBB ") with that colour as the terminal background
+// and a contrasting foreground. Returns plain hex if invalid.
+func HexWithBackground(hex string) string {
+	if !theme.ValidHex(hex) {
+		return hex
+	}
+	fg, ok := theme.ContrastForeground(hex)
+	if !ok {
+		return hex
+	}
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(hex)).
+		Foreground(lipgloss.Color(fg)).
+		Render(" " + hex + " ")
+}
 
 // StyledError carries a pre-styled Output to be printed by Execute.
 // It prevents cobra from printing a plain "Error: ..." line.

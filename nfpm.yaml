@@ -1,7 +1,7 @@
 name: sshush
 arch: amd64
 platform: linux
-version: ${VERSION:-dev}
+version: ${VERSION}
 maintainer: ollykeran
 description: Go SSH Agent and utilities
 contents:

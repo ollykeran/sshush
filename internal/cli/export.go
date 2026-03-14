@@ -16,15 +16,17 @@ func newExportCommand() *cobra.Command {
 	var outputPath string
 
 	cmd := &cobra.Command{
-		Use:   "export <private-key-filepath>",
-		Short: "Export public key from a private key",
-		Args:  cobra.ExactArgs(1),
+		Use:     "export <private-key-filepath>",
+		Short:   "Export public key from a private key",
+		Example: "sshush export ~/.ssh/id_ed25519 --output ~/.ssh/id_ed25519.pub",
+		Long:    "Export an OpenSSH public key from an unencrypted OpenSSH private key file",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runExport(args[0], outputPath)
 		},
 	}
 
-	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "write public key to file (default: stdout)")
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "write public key to file (default: stdout, default extension: .pub)")
 
 	return cmd
 }

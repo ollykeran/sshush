@@ -17,10 +17,13 @@ import (
 
 func newReloadCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "reload",
-		Short: "Reload config and reconcile keys with the running agent",
-		Args:  argsNoneOrHelp,
-		RunE:  runReload,
+		Use:     "reload",
+		Short:   "Reload config and reconcile keys with the running agent",
+		Example: "sshush reload --config ~/.sshush/config",
+		Long: `Reload the config file and reconcile keys with the running agent. 
+If the agent is not running, it will be started. This command is affected by config.`,
+		Args: argsNoneOrHelp,
+		RunE: runReload,
 	}
 	cmd.Flags().StringP("config", "c", "", "path to config file")
 	return cmd

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -35,7 +34,6 @@ func runFind(noDefaults, recursive bool, findPaths ...string) error {
 	paths := utils.DiscoverKeyPaths(findPaths, cwd, ssh, recursive)
 	out := style.NewOutput()
 
-	fmt.Println(paths)
 	if len(paths) == 0 {
 		out.Error("no keys found in: " + strings.Join(findPaths, ", ")).Print()
 		return nil

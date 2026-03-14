@@ -93,8 +93,10 @@ func getSocketPath() (string, error) {
 // NewRootCommand returns the root cobra command for sshush with flags and PersistentPreRunE wired.
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
-		Use:          "sshush",
+		Use:          "sshush <command>",
 		Short:        "SSH agent thats pretty",
+		Example:      "sshush start",
+		Long:         "An SSH agent and utilities with CLI and TUI. Drop in replacement for ssh-agent.",
 		RunE:         func(cmd *cobra.Command, args []string) error { return runStartDaemon(cmd) },
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
@@ -134,7 +136,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.Flags().StringP("config", "c", "", "path to config file")
 	root.Flags().StringP("socket", "s", "", "path to agent socket")
-	root.PersistentFlags().BoolP("version", "v", false, "print version and exit")
+	root.Flags().BoolP("version", "v", false, "print version and exit")
 
 	return root
 }

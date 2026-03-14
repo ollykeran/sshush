@@ -12,10 +12,12 @@ import (
 
 func newStopCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the sshush agent daemon",
-		Args:  argsNoneOrHelp,
-		RunE:  runStop,
+		Use:     "stop",
+		Short:   "Stop the sshush agent daemon",
+		Long:    "Stop the sshushd daemon by sending SIGTERM and removing the pidfile.",
+		Example: "sshush stop",
+		Args:    argsNoneOrHelp,
+		RunE:    runStop,
 	}
 }
 
