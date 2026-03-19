@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 
 	"github.com/BurntSushi/toml"
@@ -19,11 +20,95 @@ type ThemeSection struct {
 	Warning string `toml:"warning"`
 }
 
-// Config holds socket path, key paths, and optional theme from the TOML config file.
+// Config is the runtime view of the TOML file (flat fields for callers).
+// On disk the file uses [agent], [vault], [server], and [theme] sections.
 type Config struct {
-	KeyPaths   []string    `toml:"key_paths"`   // Paths to private keys to load into the agent.
-	SocketPath string      `toml:"socket_path"` // Unix socket path for the agent.
-	Theme      ThemeSection `toml:"theme"`      // Optional theme (preset name or hex keys).
+	KeyPaths   []string // From [agent].key_paths; ignored in vault mode for initial load semantics.
+	SocketPath string   // From [agent].socket_path.
+	VaultPath  string   // From [vault].vault_path when [agent].vault is true.
+	Theme      ThemeSection
+
+	ServerListenPort     int64  // From [server].listen_port.
+	ServerAuthorizedKeys string // From [server].authorized_keys.
+	ServerHostKey        string // From [server].host_key.
+}
+
+// configDocument matches the on-disk TOML layout.
+type configDocument struct {
+	Agent  agentSection  `toml:"agent"`
+	Vault  vaultSection  `toml:"vault"`
+	Server serverSection `toml:"server"`
+	Theme  ThemeSection  `toml:"theme"`
+}
+
+type agentSection struct {
+	SocketPath string   `toml:"socket_path"`
+	KeyPaths   []string `toml:"key_paths"`
+	Vault      bool     `toml:"vault"`
+}
+
+type vaultSection struct {
+	VaultPath string `toml:"vault_path"`
+}
+
+type serverSection struct {
+	ListenPort     int64  `toml:"listen_port"`
+	AuthorizedKeys string `toml:"authorized_keys"`
+	HostKey        string `toml:"host_key"`
+}
+
+// configDocumentThemePreset is used when encoding theme preset-only (avoid empty hex keys in file).
+type configDocumentThemePreset struct {
+	Agent  agentSection  `toml:"agent"`
+	Vault  vaultSection  `toml:"vault"`
+	Server serverSection `toml:"server"`
+	Theme  struct {
+		Name string `toml:"name"`
+	} `toml:"theme"`
+}
+
+func toDocument(cfg Config) configDocument {
+	a := agentSection{
+		SocketPath: cfg.SocketPath,
+		KeyPaths:   cfg.KeyPaths,
+		Vault:      cfg.VaultPath != "",
+	}
+	if a.KeyPaths == nil {
+		a.KeyPaths = []string{}
+	}
+	doc := configDocument{Agent: a, Theme: cfg.Theme}
+	if cfg.VaultPath != "" {
+		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
+	}
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" {
+		doc.Server = serverSection{
+			ListenPort:     cfg.ServerListenPort,
+			AuthorizedKeys: cfg.ServerAuthorizedKeys,
+			HostKey:        cfg.ServerHostKey,
+		}
+	}
+	return doc
+}
+
+func (d configDocument) toPresetDocument(name string) configDocumentThemePreset {
+	return configDocumentThemePreset{
+		Agent:  d.Agent,
+		Vault:  d.Vault,
+		Server: d.Server,
+		Theme: struct {
+			Name string `toml:"name"`
+		}{Name: name},
+	}
+}
+
+// MarshalConfig serializes cfg to canonical sectioned TOML bytes.
+func MarshalConfig(cfg Config) ([]byte, error) {
+	doc := toDocument(cfg)
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // EnsureSSHDirectory creates ~/.ssh with mode 0700 if it does not exist.
@@ -40,23 +125,70 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 
-	cfg := Config{}
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	var doc configDocument
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return Config{}, err
+	}
+
+	cfg, err := documentToConfig(&doc)
+	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.SocketPath = utils.ExpandHomeDirectory(cfg.SocketPath)
+	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
+	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
+	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)
 	for i, p := range cfg.KeyPaths {
 		cfg.KeyPaths[i] = utils.ExpandHomeDirectory(p)
 	}
 
-	if cfg.KeyPaths == nil {
-		return Config{}, style.NewOutput().Error("key_paths is required").AsError()
-	}
-	if cfg.SocketPath == "" {
-		return Config{}, style.NewOutput().Error("socket_path is required").AsError()
+	return cfg, nil
+}
+
+func documentToConfig(doc *configDocument) (Config, error) {
+	if doc.Agent.SocketPath == "" {
+		return Config{}, style.NewOutput().
+			Error("[agent].socket_path is required").
+			AsError()
 	}
 
+	vaultPath := doc.Vault.VaultPath
+	if doc.Agent.Vault {
+		if vaultPath == "" {
+			return Config{}, style.NewOutput().
+				Error("when [agent].vault is true, [vault].vault_path must be set").
+				AsError()
+		}
+	} else {
+		if vaultPath != "" {
+			return Config{}, style.NewOutput().
+				Error("[vault].vault_path is set but [agent].vault is false; set [agent].vault = true or remove [vault]").
+				AsError()
+		}
+	}
+
+	hasVault := doc.Agent.Vault && vaultPath != ""
+	hasKeys := doc.Agent.KeyPaths != nil
+	if !hasVault && !hasKeys {
+		return Config{}, style.NewOutput().
+			Error("config must set either [agent].vault = true with [vault].vault_path, or [agent].key_paths").
+			Info("Put key_paths under [agent]. Use [vault] only when using a vault.").
+			AsError()
+	}
+
+	cfg := Config{
+		SocketPath:           doc.Agent.SocketPath,
+		KeyPaths:             doc.Agent.KeyPaths,
+		VaultPath:            vaultPath,
+		Theme:                doc.Theme,
+		ServerListenPort:     doc.Server.ListenPort,
+		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
+		ServerHostKey:        doc.Server.HostKey,
+	}
+	if !doc.Agent.Vault {
+		cfg.VaultPath = ""
+	}
 	return cfg, nil
 }
 
@@ -89,11 +221,15 @@ func LoadThemeFromPath(path string) theme.Theme {
 	if err != nil {
 		return theme.DefaultTheme()
 	}
-	var structWithTheme struct {
-		Theme ThemeSection `toml:"theme"`
-	}
-	if err := toml.Unmarshal(data, &structWithTheme); err != nil {
+	var doc configDocument
+	if _, err := toml.Decode(string(data), &doc); err != nil {
 		return theme.DefaultTheme()
 	}
-	return ResolveThemeFromSection(structWithTheme.Theme)
+	return ResolveThemeFromSection(doc.Theme)
+}
+
+func decodeConfigDocument(data []byte) (configDocument, error) {
+	var doc configDocument
+	_, err := toml.Decode(string(data), &doc)
+	return doc, err
 }

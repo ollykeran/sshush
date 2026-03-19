@@ -10,6 +10,8 @@ import (
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -84,6 +86,43 @@ func runReload(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// desiredKeysFromConfig returns the set of keys that should be in the agent after reload:
+// key_paths (from disk) plus vault identities (when VaultPath is set). skipWarnings is populated for key_paths parse errors.
+func desiredKeysFromConfig(newCfg config.Config) (after []diffEntry, configByFP map[string]keyInfo, skipWarnings []string) {
+	configByFP = make(map[string]keyInfo)
+	for _, path := range newCfg.KeyPaths {
+		pubKey, comment, privKey, err := agent.ParseKeyFromPath(path)
+		if err != nil {
+			skipWarnings = append(skipWarnings, fmt.Sprintf("skip %s: %v", utils.DisplayPath(path), err))
+			continue
+		}
+		fp := ssh.FingerprintSHA256(pubKey)
+		after = append(after, diffEntry{fp: fp, comment: comment, keyType: pubKey.Type()})
+		configByFP[fp] = keyInfo{fingerprint: fp, comment: comment, pubKey: pubKey, privKey: privKey}
+	}
+	if newCfg.VaultPath != "" {
+		resolved := vault.ResolveToFile(newCfg.VaultPath)
+		store, err := vault.Open(resolved)
+		if err != nil {
+			skipWarnings = append(skipWarnings, fmt.Sprintf("vault %s: %v", utils.DisplayPath(resolved), err))
+			return after, configByFP, skipWarnings
+		}
+		for _, id := range store.AllIdentities() {
+			pubKey, err := ssh.ParsePublicKey(id.PublicKey)
+			if err != nil {
+				continue
+			}
+			fp := ssh.FingerprintSHA256(pubKey)
+			if _, exists := configByFP[fp]; exists {
+				continue
+			}
+			after = append(after, diffEntry{fp: fp, comment: id.Comment, keyType: pubKey.Type()})
+			configByFP[fp] = keyInfo{fingerprint: fp, comment: id.Comment, pubKey: pubKey, privKey: nil}
+		}
+	}
+	return after, configByFP, skipWarnings
+}
+
 // buildDiff returns an Output containing the key diff, any parse warnings, and an
 // optional socket-changed notice. The returned Output is ready to Print().
 func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool, configPath string) *style.Output {
@@ -93,26 +132,16 @@ func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChange
 	}
 	before := agentKeysToEntries(liveKeys)
 
-	var after []diffEntry
-	var skipWarnings []string
-	for _, path := range newCfg.KeyPaths {
-		pubKey, comment, _, err := agent.ParseKeyFromPath(path)
-		if err != nil {
-			skipWarnings = append(skipWarnings, fmt.Sprintf("skip %s: %v", path, err))
-			continue
-		}
-		after = append(after, diffEntry{fp: ssh.FingerprintSHA256(pubKey), comment: comment, keyType: pubKey.Type()})
-	}
+	after, _, skipWarnings := desiredKeysFromConfig(newCfg)
 
-	// printKeysDiff returns a pointer - append further lines directly onto it.
-	out := style.NewOutput().Add(style.Success(fmt.Sprintf("Reloading keys from config file %s", configPath)))
+	out := style.NewOutput().Add(style.Success(fmt.Sprintf("Reloading keys from config file %s", utils.DisplayPath(configPath))))
 	out.Spacer()
 	out.Add(printKeysDiff(before, after).String())
 	for _, w := range skipWarnings {
 		out.Add(w)
 	}
 	if socketChanged {
-		out.Add("socket_path changed - restart required")
+		out.Add("[agent].socket_path changed - restart required")
 	}
 	return out
 }
@@ -127,28 +156,18 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 		liveByFP[ssh.FingerprintSHA256(k)] = k
 	}
 
-	configByFP := make(map[string]keyInfo)
-	for _, path := range newCfg.KeyPaths {
-		pubKey, comment, _, err := agent.ParseKeyFromPath(path)
-		if err != nil {
-			continue
-		}
-		fp := ssh.FingerprintSHA256(pubKey)
-		configByFP[fp] = keyInfo{fingerprint: fp, comment: comment, pubKey: pubKey, privKey: nil}
-	}
+	_, configByFP, _ := desiredKeysFromConfig(newCfg)
 
 	applyErrs := style.NewOutput()
 
-	// Re-parse to get private keys for adds.
-	for _, path := range newCfg.KeyPaths {
-		pubKey, comment, privKey, err := agent.ParseKeyFromPath(path)
-		if err != nil {
+	// Add keys from key_paths that are in configByFP and have privKey (not in live).
+	for fp, info := range configByFP {
+		if info.privKey == nil {
 			continue
 		}
-		fp := ssh.FingerprintSHA256(pubKey)
 		if _, exists := liveByFP[fp]; !exists {
-			if err := client.Add(sshagent.AddedKey{PrivateKey: privKey, Comment: comment}); err != nil {
-				applyErrs.Error(fmt.Sprintf("add %s: %v", comment, err))
+			if err := client.Add(sshagent.AddedKey{PrivateKey: info.privKey, Comment: info.comment}); err != nil {
+				applyErrs.Error(fmt.Sprintf("add %s: %v", info.comment, err))
 			}
 		}
 	}

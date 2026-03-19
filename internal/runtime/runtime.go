@@ -16,6 +16,7 @@ const defaultConfigPath = "~/.config/sshush/config.toml"
 
 const defaultSocketFileName = "sshush.sock"
 const defaultPidFileName = "sshush.pid"
+const defaultServerPidFileName = "sshush-server.pid"
 
 // configPath returns the config path using the standard order (--config flag,
 // ~/.config/sshush/config.toml if it exists, SSHUSH_CONFIG, ./config.toml if it exists,
@@ -46,7 +47,7 @@ func ResolveConfigPath(cmd *cobra.Command) (string, error) {
 	path := configPath(cmd)
 	if _, err := os.Stat(path); err != nil && os.IsNotExist(err) {
 		return path, style.NewOutput().
-			Error("config file not found").
+			Error("config file not found: " + utils.DisplayPath(path)).
 			Info("create " + defaultConfigPath + " or use --config").
 			AsError()
 	}
@@ -76,6 +77,16 @@ func PidFilePath() string {
 		return filepath.Join(runtimeDir, defaultPidFileName)
 	}
 	return utils.ExpandHomeDirectory("~/.config/sshush/sshush.pid")
+}
+
+// ServerPidFilePath returns the standard location for the SSH server daemon pidfile.
+// Uses $XDG_RUNTIME_DIR/sshush-server.pid if available, otherwise ~/.config/sshush/sshush-server.pid.
+func ServerPidFilePath() string {
+	runtimeDir := getXDGRuntimeDir()
+	if runtimeDir != "" {
+		return filepath.Join(runtimeDir, defaultServerPidFileName)
+	}
+	return utils.ExpandHomeDirectory("~/.config/sshush/sshush-server.pid")
 }
 
 // ResolveSocketPath returns socket path from config first, then SSH_AUTH_SOCK.

@@ -12,7 +12,8 @@ How to add and maintain godoc comments in sshush. Godoc is Go's built-in documen
 ## Current State
 
 Many internal packages already have good doc comments:
-- `internal/config/default.go`: CreateDefaultConfig, SetupConfig, AddEvalToShell
+- `internal/config/default.go`: StandardConfigFile, WriteDefaultConfigFile, CreateDefaultConfig, SetupConfig, AddEvalToShell
+- `internal/utils/path.go`: ExpandHomeDirectory, ContractHomeDirectory, DisplayPath (use `DisplayPath` for any path shown to users)
 - `internal/runtime/runtime.go`: ResolveConfigPath, ResolveDaemonConfigPath, PidFilePath, ResolveSocketPath
 - `internal/cli/root.go`: LoadMergedConfig, LoadOverrides
 

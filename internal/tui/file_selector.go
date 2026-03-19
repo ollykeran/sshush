@@ -112,7 +112,7 @@ func (f *FileSelector) View(width, height int, focused bool, st Styles) string {
 	title := st.SectionTitleStyle.Render(f.title)
 	//	hint := st.DimStyle.Render("→/l in ←/h out")
 	dirPath := f.picker.CurrentDirectory()
-	dirPart := st.BannerStyle.Render(utils.ContractHomeDirectory(dirPath))
+	dirPart := st.BannerStyle.Render(utils.DisplayPath(dirPath))
 	lineW := usableW - 2*pad
 	hintLine := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(lineW-lineW/2).Align(lipgloss.Left).Render(dirPart))

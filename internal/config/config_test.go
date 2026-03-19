@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-
-	"github.com/BurntSushi/toml"
 )
 
 func TestLoad(t *testing.T) {
@@ -21,9 +19,13 @@ func TestLoad(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			content := Config{
+			cfg := Config{
 				KeyPaths:   tc.wantKeyPaths,
 				SocketPath: tc.wantSocketPath,
+			}
+			data, err := MarshalConfig(cfg)
+			if err != nil {
+				t.Fatal(err)
 			}
 			tmp, err := os.CreateTemp("", "test-config-*.toml")
 			if err != nil {
@@ -31,23 +33,22 @@ func TestLoad(t *testing.T) {
 			}
 			tmpPath := tmp.Name()
 			defer os.Remove(tmpPath)
-
-			if err := toml.NewEncoder(tmp).Encode(content); err != nil {
+			if _, err := tmp.Write(data); err != nil {
 				t.Fatal(err)
 			}
 			if err := tmp.Close(); err != nil {
 				t.Fatal(err)
 			}
 
-			cfg, err := LoadConfig(tmpPath)
+			got, err := LoadConfig(tmpPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(cfg.KeyPaths, tc.wantKeyPaths) {
-				t.Errorf("KeyPaths: got %v, want %v", cfg.KeyPaths, tc.wantKeyPaths)
+			if !reflect.DeepEqual(got.KeyPaths, tc.wantKeyPaths) {
+				t.Errorf("KeyPaths: got %v, want %v", got.KeyPaths, tc.wantKeyPaths)
 			}
-			if cfg.SocketPath != tc.wantSocketPath {
-				t.Errorf("SocketPath: got %q, want %q", cfg.SocketPath, tc.wantSocketPath)
+			if got.SocketPath != tc.wantSocketPath {
+				t.Errorf("SocketPath: got %q, want %q", got.SocketPath, tc.wantSocketPath)
 			}
 		})
 	}
@@ -73,9 +74,13 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Skip("no home directory available")
 		}
-		content := Config{
+		cfg := Config{
 			KeyPaths:   []string{"~/foo/id_ed25519"},
 			SocketPath: "~/.ssh/sshush.sock",
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
 		}
 		tmp, err := os.CreateTemp("", "tilde-config-*.toml")
 		if err != nil {
@@ -83,23 +88,50 @@ func TestLoad(t *testing.T) {
 		}
 		tmpPath := tmp.Name()
 		defer os.Remove(tmpPath)
-
-		if err := toml.NewEncoder(tmp).Encode(content); err != nil {
+		if _, err := tmp.Write(data); err != nil {
 			t.Fatal(err)
 		}
 		if err := tmp.Close(); err != nil {
 			t.Fatal(err)
 		}
 
-		cfg, err := LoadConfig(tmpPath)
+		loaded, err := LoadConfig(tmpPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := cfg.SocketPath; got != filepath.Join(home, ".ssh/sshush.sock") {
+		if got := loaded.SocketPath; got != filepath.Join(home, ".ssh/sshush.sock") {
 			t.Errorf("SocketPath: got %q, want %q", got, filepath.Join(home, ".ssh/sshush.sock"))
 		}
-		if len(cfg.KeyPaths) != 1 || cfg.KeyPaths[0] != filepath.Join(home, "foo/id_ed25519") {
-			t.Errorf("KeyPaths: got %v, want [%q]", cfg.KeyPaths, filepath.Join(home, "foo/id_ed25519"))
+		if len(loaded.KeyPaths) != 1 || loaded.KeyPaths[0] != filepath.Join(home, "foo/id_ed25519") {
+			t.Errorf("KeyPaths: got %v, want [%q]", loaded.KeyPaths, filepath.Join(home, "foo/id_ed25519"))
+		}
+	})
+
+	t.Run("listen_port under server section", func(t *testing.T) {
+		cfg := Config{
+			KeyPaths:         []string{"/tmp/id_ed25519"},
+			SocketPath:       "/tmp/agent.sock",
+			ServerListenPort: 2222,
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp, err := os.CreateTemp("", "server-config-*.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadConfig(tmpPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.ServerListenPort != 2222 {
+			t.Errorf("ServerListenPort: got %d, want 2222", loaded.ServerListenPort)
 		}
 	})
 }

@@ -35,6 +35,19 @@ func ContractHomeDirectory(path string) string {
 	return path
 }
 
+// DisplayPath formats a path for user-visible output: it is made absolute when
+// possible, then ContractHomeDirectory is applied so paths under $HOME use ~.
+func DisplayPath(path string) string {
+	if path == "" {
+		return path
+	}
+	p := path
+	if abs, err := filepath.Abs(path); err == nil {
+		p = abs
+	}
+	return ContractHomeDirectory(p)
+}
+
 // DiscoverKeyPaths finds valid private key files in searchDirs.
 // If cwd is true, adds current directory. If ssh is true, adds ~/.ssh.
 // If recursive is true, walks subdirectories.

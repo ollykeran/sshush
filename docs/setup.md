@@ -27,10 +27,13 @@ Both are equivalent. The export line goes to stdout so `eval $(sshush)` works; o
 On every run, before loading config, sshush runs `SetupConfig()`. It does two things if needed:
 
 1. **CreateDefaultConfig** (when `~/.config/sshush/config.toml` does not exist):
+  - Renders that file from an embedded template (`internal/config/default_config.toml.tmpl`) so the layout stays easy to edit in the repo
   - Creates `~/.config/sshush/` if needed
   - Scans `~/.ssh` for valid private keys (skips dirs and `.pub` files)
-  - Writes `socket_path` = `$XDG_RUNTIME_DIR/sshush.sock` (when set) 
-  - Writes `key_paths` = discovered keys from `~/.ssh` 
+  - Writes `[agent].socket_path` = `$XDG_RUNTIME_DIR/sshush.sock` (when set)
+  - Writes `[agent].vault` = false and `[agent].key_paths` = discovered keys from `~/.ssh`
+  - Writes `[theme]` with `name = "default"` and commented custom colour hints
+  - Appends commented-out `[vault]` and `[server]` sections with example keys so you can enable them later
   - Does not overwrite an existing config
 2. **AddEvalToShell** (when `~/.bashrc` exists and does not already contain `eval $(sshush)`):
   - Appends `eval $(sshush)` to `~/.bashrc`

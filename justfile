@@ -20,8 +20,8 @@ build-sshushd: deps
 build: build-sshushd
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary }} ./cmd/sshush
 
-test:
-    go test ./... -v -race
+test pkg="./...":
+    go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
 
 # Serve godoc at http://localhost:6060 (module-aware, use -http not -http=:6060)
 doc:

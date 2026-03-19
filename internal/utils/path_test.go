@@ -55,3 +55,19 @@ func TestContractHomeDirectory(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayPath(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absUnderHome := filepath.Join(homeDir, "foo", "bar")
+	got := DisplayPath(absUnderHome)
+	want := filepath.Join("~", "foo", "bar")
+	if got != want {
+		t.Errorf("under home: got %q, want %q", got, want)
+	}
+	if got := DisplayPath(""); got != "" {
+		t.Errorf("empty: got %q", got)
+	}
+}

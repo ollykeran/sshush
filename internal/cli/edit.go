@@ -23,10 +23,11 @@ func newEditCommand() *cobra.Command {
 	var outputFlag string
 
 	cmd := &cobra.Command{
-		Use: "edit <private-key-filepath>",
+		Use:   "edit <private-key-filepath>",
+		Short: "Edit comment on a private key file",
+		Long:  "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
 		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'
 sshush edit ~/.ssh/id_rsa`,
-		Long: "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				cmd.Help()
@@ -49,7 +50,7 @@ sshush edit ~/.ssh/id_rsa`,
 func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outputFlag string) error {
 	privateKeyPath = utils.ExpandHomeDirectory(privateKeyPath)
 	if _, err := os.Stat(privateKeyPath); err != nil {
-		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", privateKeyPath)).AsError()
+		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", utils.DisplayPath(privateKeyPath))).AsError()
 	}
 
 	if copyFlag && strings.TrimSpace(outputFlag) == "" {
@@ -72,7 +73,7 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
 			if errors.Is(err, ErrExitedWithoutSaving) {
-				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.ContractHomeDirectory(privateKeyPath))).Print()
+				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.DisplayPath(privateKeyPath))).Print()
 				return nil
 			}
 			return style.NewOutput().Error(err.Error()).AsError()
@@ -114,10 +115,10 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	out := style.NewOutput().
 		Success("updated key comment").
 		Info("fingerprint: " + ssh.FingerprintSHA256(signer.PublicKey())).
-		Info("path: " + destPath)
+		Info("path: " + utils.DisplayPath(destPath))
 
 	if copyFlag {
-		out.Info("source: " + privateKeyPath)
+		out.Info("source: " + utils.DisplayPath(privateKeyPath))
 	}
 	out.Print()
 	return nil

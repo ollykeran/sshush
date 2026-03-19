@@ -76,8 +76,8 @@ func runCreate(keyType string, bits int, comment, outputPath string, force bool)
 
 	out := style.NewOutput().
 		Success("created keypair").
-		Info("private: " + outputPath).
-		Info("public:  " + outputPath + ".pub").
+		Info("private: " + utils.DisplayPath(outputPath)).
+		Info("public:  " + utils.DisplayPath(outputPath+".pub")).
 		Info("type:    " + keyType)
 	if fp != "" {
 		out.Info(fmt.Sprintf("fingerprint: %s", fp))

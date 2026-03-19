@@ -34,7 +34,7 @@ func newExportCommand() *cobra.Command {
 func runExport(privateKeyPath, outputPath string) error {
 	privateKeyPath = utils.ExpandHomeDirectory(privateKeyPath)
 	if _, err := os.Stat(privateKeyPath); err != nil {
-		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", privateKeyPath)).AsError()
+		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", utils.DisplayPath(privateKeyPath))).AsError()
 	}
 	parsed, _, signer, err := keys.LoadKeyMaterial(privateKeyPath)
 	if err != nil {
@@ -58,7 +58,7 @@ func runExport(privateKeyPath, outputPath string) error {
 
 	style.NewOutput().
 		Success("exported public key").
-		Info("output: " + outputPath).
+		Info("output: " + utils.DisplayPath(outputPath)).
 		Info("fingerprint: " + ssh.FingerprintSHA256(signer.PublicKey())).
 		Print()
 	return nil

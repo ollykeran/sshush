@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/table"
@@ -600,7 +599,7 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			linePrefix = "> "
 		}
-		rendered := style.Render(linePrefix + visible[i])
+		rendered := style.Render(linePrefix + utils.DisplayPath(visible[i]))
 		rendered = zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), rendered)
 		lines = append(lines, rendered)
 	}
@@ -707,7 +706,7 @@ func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
-		return agentStatusMsg{text: "key added: " + filepath.Base(path)}
+		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}
 	}
 }
 

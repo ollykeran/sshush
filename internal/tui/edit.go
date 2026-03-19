@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -129,8 +128,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editKeyLoadedMsg:
 		if msg.err != nil {
-			contracted := utils.ContractHomeDirectory(msg.filePath)
-			s.status = contracted + ": " + msg.err.Error()
+			s.status = utils.DisplayPath(msg.filePath) + ": " + msg.err.Error()
 			s.statusErr = true
 			return s, nil // keep file picker visible
 		}
@@ -143,7 +141,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.originalComment = msg.comment
 		s.saveDiffRendered = ""
 		s.commentIn.SetValue(msg.comment)
-		s.status = "loaded: " + filepath.Base(msg.filePath)
+		s.status = "loaded: " + utils.DisplayPath(msg.filePath)
 		s.statusErr = false
 		s.focus = editFocusComment
 		return s, s.commentIn.Focus()
@@ -153,7 +151,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.status = "save failed: " + msg.err.Error()
 			s.statusErr = true
 		} else {
-			s.status = "saved: " + filepath.Base(s.loadedPath)
+			s.status = "saved: " + utils.DisplayPath(s.loadedPath)
 			s.statusErr = false
 			s.saveDiffRendered = ""
 			s.originalComment = s.commentIn.Value()

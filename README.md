@@ -15,8 +15,8 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 - **Agent**: Start, stop, list keys, add, remove. Uses a Unix socket; works with OpenSSH.
 - **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
 - **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
-- **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `socket_path`, the daemon restarts.
-- **Config auto-setup**: On first run, if no config exists, sshush creates `~/.config/sshush/config.toml` with discovered keys and default socket path.
+- **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `[agent].socket_path`, the daemon restarts.
+- **Config auto-setup**: On first run, if no config exists, sshush creates `~/.config/sshush/config.toml` with discovered keys and default socket path. You can write the same default file anytime with `sshush generate config` (optional path; use `--force` to overwrite).
 
 ## Commands
 
@@ -33,6 +33,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 | `edit`           | Edit key comment                          | `sshush edit ~/.ssh/id_ed25519`           |
 | `export`         | Export public key                         | `sshush export ~/.ssh/id_ed25519`         |
 | `find`           | Find private keys (defaults: cwd, ~/.ssh) | `sshush find` or `sshush find /path`      |
+| `generate config`| Write default `config.toml` (optional path) | `sshush generate config`                |
 | `tui`            | Start the TUI                             | `sshush tui`                              |
 | `theme`          | Show or set colour theme                  | `sshush theme show`, `sshush theme list`, `sshush theme set dracula` |
 | `completion`     | Shell completion script                   | `sshush completion bash`                  |

@@ -32,6 +32,10 @@ func isThemeCmd(cmd *cobra.Command) bool {
 	return false
 }
 
+func isGenerateConfigCmd(cmd *cobra.Command) bool {
+	return cmd != nil && cmd.Name() == "config" && cmd.Parent() != nil && cmd.Parent().Name() == "generate"
+}
+
 // argsNoneOrHelp rejects positional args like cobra.NoArgs, but treats
 // "help" as a request to print help (matching cobra's root-level behaviour).
 func argsNoneOrHelp(cmd *cobra.Command, args []string) error {
@@ -104,6 +108,11 @@ func NewRootCommand() *cobra.Command {
 				fmt.Printf("sshush %s (%s)\n", version.Version, stdruntime.Version())
 				os.Exit(0)
 			}
+			if isGenerateConfigCmd(cmd) {
+				env.Config = nil
+				style.SetTheme(theme.DefaultTheme())
+				return nil
+			}
 			config.SetupConfig()
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
@@ -134,8 +143,8 @@ func NewRootCommand() *cobra.Command {
 		},
 	}
 
-	root.Flags().StringP("config", "c", "", "path to config file")
-	root.Flags().StringP("socket", "s", "", "path to agent socket")
+	root.PersistentFlags().StringP("config", "c", "", "path to config file")
+	root.PersistentFlags().StringP("socket", "s", "", "path to agent socket")
 	root.Flags().BoolP("version", "v", false, "print version and exit")
 
 	return root
