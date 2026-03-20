@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
@@ -70,9 +70,9 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 
 	comment := commentFlag
 	if strings.TrimSpace(comment) == "" {
-		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
+		comment, err = editcomment.EditCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
-			if errors.Is(err, ErrExitedWithoutSaving) {
+			if errors.Is(err, editcomment.ErrExitedWithoutSaving) {
 				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.DisplayPath(privateKeyPath))).Print()
 				return nil
 			}
@@ -122,46 +122,4 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	}
 	out.Print()
 	return nil
-}
-
-// ErrExitedWithoutSaving is returned when the user exits the editor without saving changes.
-var ErrExitedWithoutSaving = errors.New("exited without saving")
-
-func editCommentWithEditor(currentComment, editor string) (string, error) {
-	tmp, err := os.CreateTemp("", "sshush-comment-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	defer tmp.Close()
-
-	if _, err := tmp.WriteString(currentComment + "\n"); err != nil {
-		return "", fmt.Errorf("write temp comment: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp file: %w", err)
-	}
-
-	editorParts := strings.Fields(editor)
-	if len(editorParts) == 0 {
-		return "", fmt.Errorf("invalid editor command")
-	}
-	cmd := exec.Command(editorParts[0], append(editorParts[1:], tmpPath)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("editor failed: %w", err)
-	}
-
-	edited, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("read edited comment: %w", err)
-	}
-	trimmed := strings.TrimSpace(string(edited))
-	if trimmed == strings.TrimSpace(currentComment) {
-		return "", ErrExitedWithoutSaving
-	}
-	return trimmed, nil
 }

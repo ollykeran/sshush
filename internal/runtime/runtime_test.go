@@ -80,6 +80,36 @@ func TestResolveSocketPath_ErrorWhenUnset(t *testing.T) {
 	})
 }
 
+func TestSocketPathForSSHushGUI_IgnoresSSHAuthSock(t *testing.T) {
+	withEnv(t, "SSH_AUTH_SOCK", "/wrong/gnome-keyring/ssh", func() {
+		withEnv(t, "XDG_RUNTIME_DIR", "/run/user/1000", func() {
+			got, err := SocketPathForSSHushGUI(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join("/run/user/1000", defaultSocketFileName)
+			if got != want {
+				t.Fatalf("got %q, want %q (must not use SSH_AUTH_SOCK)", got, want)
+			}
+		})
+	})
+}
+
+func TestSocketPathForSSHushGUI_ConfigWins(t *testing.T) {
+	withEnv(t, "SSH_AUTH_SOCK", "/env/other.sock", func() {
+		withEnv(t, "XDG_RUNTIME_DIR", "/run/user/1000", func() {
+			cfg := &config.Config{SocketPath: "/custom/sshush.sock"}
+			got, err := SocketPathForSSHushGUI(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != "/custom/sshush.sock" {
+				t.Fatalf("got %q", got)
+			}
+		})
+	})
+}
+
 func TestPidFilePath_UsesXDGRuntimeDir(t *testing.T) {
 	withEnv(t, "XDG_RUNTIME_DIR", "/run/user/1000", func() {
 		got := PidFilePath()

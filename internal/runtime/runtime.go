@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,12 @@ func configPath(cmd *cobra.Command) string {
 		return "./config.toml"
 	}
 	return expanded
+}
+
+// ConfigPathDefault returns the config file path using the same resolution as the CLI
+// when no --config flag is set. The file may not exist.
+func ConfigPathDefault() string {
+	return configPath(nil)
 }
 
 // ResolveConfigPath returns the config file path (see configPath). The path is always
@@ -104,6 +111,20 @@ func ResolveSocketPath(cfg *config.Config) (string, error) {
 		Error("socket path required").
 		Info("export SSH_AUTH_SOCK or use --socket or --config").
 		AsError()
+}
+
+// SocketPathForSSHushGUI returns the Unix socket that sshushd listens on for this install.
+// Unlike [ResolveSocketPath], it never uses SSH_AUTH_SOCK, so a desktop session where
+// SSH_AUTH_SOCK points at another agent (gnome-keyring, etc.) still targets the sshush
+// socket from config or $XDG_RUNTIME_DIR/sshush.sock.
+func SocketPathForSSHushGUI(cfg *config.Config) (string, error) {
+	if cfg != nil && strings.TrimSpace(cfg.SocketPath) != "" {
+		return cfg.SocketPath, nil
+	}
+	if runtimeDir := getXDGRuntimeDir(); runtimeDir != "" {
+		return filepath.Join(runtimeDir, defaultSocketFileName), nil
+	}
+	return "", errors.New("cannot resolve sshush agent socket: set [agent].socket_path in config or XDG_RUNTIME_DIR")
 }
 
 // ResolveEditor returns explicit flag value, then $EDITOR, then fallback.

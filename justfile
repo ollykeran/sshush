@@ -1,6 +1,7 @@
 build_dir := "build"
 binary := build_dir / "sshush"
 binaryd := build_dir / "sshushd"
+binary_gui := build_dir / "sshush-gui"
 version := env("VERSION", "dev")
 ldflags := "-X github.com/ollykeran/sshush/internal/version.Version=" + version
 
@@ -20,6 +21,41 @@ build-sshushd: deps
 build: build-sshushd
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary }} ./cmd/sshush
 
+# Quick check before a long Fyne compile; see docs/gui.md for install commands.
+check-gui-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v pkg-config >/dev/null 2>&1; then
+        echo 'GUI build: pkg-config not found in PATH.' >&2
+        echo '  Install: sudo apt install pkg-config   (Debian/Ubuntu)' >&2
+        echo '  Or see docs/gui.md' >&2
+        exit 1
+    fi
+    if ! pkg-config --exists x11 2>/dev/null; then
+        echo 'GUI build: pkg-config cannot find x11 (X11 development files).' >&2
+        echo '  Install: sudo apt install libx11-dev   (Debian/Ubuntu)' >&2
+        echo '  Or see docs/gui.md' >&2
+        exit 1
+    fi
+    if ! pkg-config --exists gl 2>/dev/null; then
+        echo 'GUI build: pkg-config cannot find gl (OpenGL/Mesa development files).' >&2
+        echo '  Install: sudo apt install libgl1-mesa-dev   (Debian/Ubuntu)' >&2
+        echo '  Or see docs/gui.md' >&2
+        exit 1
+    fi
+
+# Fyne desktop PoC (Linux + CGO + X11/Wayland dev libs). See docs/gui.md.
+build-gui: check-gui-deps deps build-sshushd
+    mkdir -p {{ build_dir }}
+    go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary_gui }} ./cmd/sshush-gui
+
+run-gui:
+    go run ./cmd/sshush-gui
+
+# Compiles internal/gui (same prerequisites as build-gui). Not suitable for headless CI without dev packages.
+test-gui:
+    go test ./internal/gui/... -count=1
+
 test pkg="./...":
     go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
 
@@ -27,8 +63,16 @@ test pkg="./...":
 doc:
     go doc -http
 
+# Excludes cmd/sshush-gui and internal/gui (Fyne needs system GUI dev packages).
 doc-check:
-    go build ./... && go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LDF='-X github.com/ollykeran/sshush/internal/version.Version={{ version }}'
+    go build -ldflags "$LDF" -o /dev/null ./cmd/sshush
+    go build -ldflags "$LDF" -o /dev/null ./cmd/sshushd
+    mapfile -t _gui_pkgs < <(go list ./internal/... | grep -vF '/internal/gui' || true)
+    if ((${#_gui_pkgs[@]})); then go build "${_gui_pkgs[@]}"; fi
+    go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config
 
 run:
     go run ./cmd/sshush

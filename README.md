@@ -15,6 +15,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 - **Agent**: Start, stop, list keys, add, remove. Uses a Unix socket; works with OpenSSH.
 - **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
 - **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
+- **Desktop GUI (PoC)**: Experimental [Fyne](https://fyne.io/) app for Linux (`just build-gui`, `just run-gui`). See [docs/gui.md](docs/gui.md).
 - **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `[agent].socket_path`, the daemon restarts.
 - **Config auto-setup**: On first run, if no config exists, sshush creates `~/.config/sshush/config.toml` with discovered keys and default socket path. You can write the same default file anytime with `sshush generate config` (optional path; use `--force` to overwrite).
 
@@ -69,6 +70,7 @@ Both binaries must be in `PATH`.
 - [Setup Guide](docs/setup.md) – eval, config creation, bashrc
 - [Config Reference](docs/config.md) – options, reload behavior
 - [TUI Architecture](docs/tui.md) – TUI structure and internals
+- [Desktop GUI (Fyne)](docs/gui.md) – optional `sshush-gui`, build prerequisites
 - [Architecture](docs/architecture.md) – package layout
 - [Godoc Guide](docs/godoc-guide.md) – adding godoc comments
 - [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API documentation
