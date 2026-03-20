@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,6 +50,84 @@ func TestRunCreate_invalidKeyType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported key type")
 	}
+}
+
+func TestRunCreate_rsaWeakBits(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "id_rsa")
+	err := runCreate("rsa", 1024, "x", out, false)
+	if err == nil {
+		t.Fatal("expected error for weak rsa key size")
+	}
+}
+
+func TestEffectiveBitsForCreate_positionalRsa(t *testing.T) {
+	cmd := newCreateCommand()
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"rsa", "2048"}, fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b != 2048 {
+		t.Fatalf("got %d, want 2048", b)
+	}
+}
+
+func TestEffectiveBitsForCreate_singleArgUsesFlagDefault(t *testing.T) {
+	cmd := newCreateCommand()
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"rsa"}, fb)
+	if err != nil || b != 4096 {
+		t.Fatalf("b=%d err=%v", b, err)
+	}
+}
+
+func TestEffectiveBitsForCreate_explicitBitsFlagOverridesPositional(t *testing.T) {
+	cmd := newCreateCommand()
+	if err := cmd.ParseFlags([]string{"-b", "2048"}); err != nil {
+		t.Fatal(err)
+	}
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"rsa", "4096"}, fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b != 2048 {
+		t.Fatalf("flag should win: got %d, want 2048", b)
+	}
+}
+
+func TestEffectiveBitsForCreate_ed25519RejectsSecondArg(t *testing.T) {
+	cmd := newCreateCommand()
+	_, err := effectiveBitsForCreate(cmd, []string{"ed25519", "256"}, 0)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestCreateCommand_positionalRsaWeakRejects(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "rsa")
+	cmd := newCreateCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"rsa", "1000", "-o", out, "--force"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for weak rsa bits from positional")
+	}
+}
+
+func TestCreateCommand_positionalRsa2048(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "rsa")
+	cmd := newCreateCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"rsa", "2048", "-o", out})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	assertKeyPairExists(t, out, 0o600, 0o644)
 }
 
 func TestRunCreate_existingFileNoForce(t *testing.T) {
