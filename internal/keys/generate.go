@@ -29,6 +29,14 @@ func Generate(keyType string, bits int, comment string) (privPEM []byte, pubAuth
 		if bits == 0 {
 			bits = 4096
 		}
+		if bits < 2048 {
+			return nil, nil, fmt.Errorf("unsupported rsa key size: %d (minimum 2048)", bits)
+		}
+		switch bits {
+		case 2048, 3072, 4096:
+		default:
+			return nil, nil, fmt.Errorf("unsupported rsa key size: %d (use 2048, 3072, or 4096)", bits)
+		}
 		priv, err := rsa.GenerateKey(rand.Reader, bits)
 		if err != nil {
 			return nil, nil, fmt.Errorf("generate rsa-%d: %w", bits, err)
@@ -44,7 +52,7 @@ func Generate(keyType string, bits int, comment string) (privPEM []byte, pubAuth
 		case 521:
 			curve = elliptic.P521()
 		default:
-			return nil, nil, fmt.Errorf("unsupported ecdsa curve size: %d", bits)
+			return nil, nil, fmt.Errorf("unsupported ecdsa curve size: %d (use 256, 384, or 521)", bits)
 		}
 		priv, err := ecdsa.GenerateKey(curve, rand.Reader)
 		if err != nil {

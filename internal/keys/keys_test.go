@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,30 @@ func TestGenerate(t *testing.T) {
 func TestGenerateUnsupportedType(t *testing.T) {
 	if _, _, err := Generate("dsa", 0, "x"); err == nil {
 		t.Fatal("expected error for unsupported key type")
+	}
+}
+
+func TestGenerate_rsaRejectsWeakOrNonstandardSize(t *testing.T) {
+	t.Parallel()
+	for _, bits := range []int{512, 1024, 1536, 8192} {
+		t.Run(fmt.Sprintf("bits_%d", bits), func(t *testing.T) {
+			_, _, err := Generate("rsa", bits, "x")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestGenerate_ecdsaRejectsInvalidCurveSize(t *testing.T) {
+	t.Parallel()
+	for _, bits := range []int{192, 512, 4096} {
+		t.Run(fmt.Sprintf("bits_%d", bits), func(t *testing.T) {
+			_, _, err := Generate("ecdsa", bits, "x")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
 	}
 }
 
