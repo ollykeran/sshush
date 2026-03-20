@@ -61,6 +61,54 @@ func TestRunCreate_rsaWeakBits(t *testing.T) {
 	}
 }
 
+func TestRunCreate_ecdsaInvalidBits(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "id_ecdsa")
+	err := runCreate("ecdsa", 192, "x", out, false)
+	if err == nil {
+		t.Fatal("expected error for invalid ecdsa curve size")
+	}
+}
+
+func TestEffectiveBitsForCreate_ecdsaSingleArgDefaultsP256(t *testing.T) {
+	cmd := newCreateCommand()
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"ecdsa"}, fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b != 0 {
+		t.Fatalf("want 0 (P256 default when -b omitted), got %d", b)
+	}
+}
+
+func TestEffectiveBitsForCreate_ecdsaPositional384(t *testing.T) {
+	cmd := newCreateCommand()
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"ecdsa", "384"}, fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b != 384 {
+		t.Fatalf("got %d, want 384", b)
+	}
+}
+
+func TestEffectiveBitsForCreate_ecdsaExplicitFlagOverridesPositional(t *testing.T) {
+	cmd := newCreateCommand()
+	if err := cmd.ParseFlags([]string{"-b", "521"}); err != nil {
+		t.Fatal(err)
+	}
+	fb, _ := cmd.Flags().GetInt("bits")
+	b, err := effectiveBitsForCreate(cmd, []string{"ecdsa", "256"}, fb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b != 521 {
+		t.Fatalf("flag should win: got %d, want 521", b)
+	}
+}
+
 func TestEffectiveBitsForCreate_positionalRsa(t *testing.T) {
 	cmd := newCreateCommand()
 	fb, _ := cmd.Flags().GetInt("bits")
@@ -128,6 +176,44 @@ func TestCreateCommand_positionalRsa2048(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertKeyPairExists(t, out, 0o600, 0o644)
+}
+
+func TestCreateCommand_ecdsaNoBitsUsesP256(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "id_ecdsa")
+	cmd := newCreateCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"ecdsa", "-o", out})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	assertKeyPairExists(t, out, 0o600, 0o644)
+}
+
+func TestCreateCommand_positionalEcdsa384(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "k")
+	cmd := newCreateCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"ecdsa", "384", "-o", out})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	assertKeyPairExists(t, out, 0o600, 0o644)
+}
+
+func TestCreateCommand_positionalEcdsaInvalidRejects(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "k")
+	cmd := newCreateCommand()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"ecdsa", "192", "-o", out, "--force"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error for invalid ecdsa curve from positional")
+	}
 }
 
 func TestRunCreate_existingFileNoForce(t *testing.T) {

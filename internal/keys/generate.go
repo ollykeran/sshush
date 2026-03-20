@@ -52,7 +52,7 @@ func Generate(keyType string, bits int, comment string) (privPEM []byte, pubAuth
 		case 521:
 			curve = elliptic.P521()
 		default:
-			return nil, nil, fmt.Errorf("unsupported ecdsa curve size: %d", bits)
+			return nil, nil, fmt.Errorf("unsupported ecdsa curve size: %d (use 256, 384, or 521)", bits)
 		}
 		priv, err := ecdsa.GenerateKey(curve, rand.Reader)
 		if err != nil {

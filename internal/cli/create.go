@@ -14,7 +14,10 @@ import (
 	ssh "golang.org/x/crypto/ssh"
 )
 
-const rsaBitsUsageHint = "use 2048, 3072, or 4096 (default 4096; set with --bits / -b)"
+const (
+	rsaBitsUsageHint   = "use 2048, 3072, or 4096 (default 4096; set with --bits / -b)"
+	ecdsaBitsUsageHint = "use 256 (nistp256), 384 (nistp384), or 521 (nistp521); default is 256 if --bits / -b is omitted"
+)
 
 func newCreateCommand() *cobra.Command {
 	var bits int
@@ -46,8 +49,13 @@ func newCreateCommand() *cobra.Command {
 
 // effectiveBitsForCreate applies optional positional [bits] when present. If --bits / -b was
 // explicitly set, the flag wins over the second argument. ed25519 must not take a bits argument.
+// For ecdsa with one argument and no explicit -b, bits 0 means P256 (the shared flag default is for rsa).
 func effectiveBitsForCreate(cmd *cobra.Command, args []string, flagBits int) (int, error) {
 	if len(args) < 2 {
+		kt := strings.ToLower(strings.TrimSpace(args[0]))
+		if kt == "ecdsa" && !cmd.Flags().Changed("bits") {
+			return 0, nil
+		}
 		return flagBits, nil
 	}
 	keyType := strings.ToLower(strings.TrimSpace(args[0]))
@@ -91,6 +99,17 @@ func runCreate(keyType string, bits int, comment, outputPath string, force bool)
 		}
 	}
 
+	if keyType == "ecdsa" {
+		switch bits {
+		case 0, 256, 384, 521:
+		default:
+			return style.NewOutput().
+				Error(fmt.Sprintf("unsupported ecdsa curve size: %d", bits)).
+				Info(ecdsaBitsUsageHint).
+				AsError()
+		}
+	}
+
 	if outputPath == "" {
 		outputPath = "~/.ssh/id_" + keyType
 	}
@@ -108,8 +127,11 @@ func runCreate(keyType string, bits int, comment, outputPath string, force bool)
 	privPEM, pubAuth, err := keys.Generate(keyType, bits, comment)
 	if err != nil {
 		out := style.NewOutput().Error(err.Error())
-		if keyType == "rsa" && strings.Contains(err.Error(), "unsupported rsa key size") {
+		switch {
+		case keyType == "rsa" && strings.Contains(err.Error(), "unsupported rsa key size"):
 			out.Info(rsaBitsUsageHint)
+		case keyType == "ecdsa" && strings.Contains(err.Error(), "unsupported ecdsa curve size"):
+			out.Info(ecdsaBitsUsageHint)
 		}
 		return out.AsError()
 	}

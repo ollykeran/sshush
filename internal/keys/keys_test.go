@@ -68,6 +68,18 @@ func TestGenerate_rsaRejectsWeakOrNonstandardSize(t *testing.T) {
 	}
 }
 
+func TestGenerate_ecdsaRejectsInvalidCurveSize(t *testing.T) {
+	t.Parallel()
+	for _, bits := range []int{192, 512, 4096} {
+		t.Run(fmt.Sprintf("bits_%d", bits), func(t *testing.T) {
+			_, _, err := Generate("ecdsa", bits, "x")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestSavePair(t *testing.T) {
 	dir := t.TempDir()
 	priv, pub, err := Generate("ed25519", 0, "save-test")
