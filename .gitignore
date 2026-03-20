@@ -8,4 +8,7 @@ openspec/
 ok/
 .vscode/
 .cursor/
-.github/
+.github/*
+!.github/workflows/
+!.github/workflows/**
+
