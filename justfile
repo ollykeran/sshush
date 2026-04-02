@@ -1,6 +1,9 @@
 build_dir := "build"
 binary := build_dir / "sshush"
 binaryd := build_dir / "sshushd"
+build_darwin_arm64_dir := build_dir / "darwin-arm64"
+binary_darwin_arm64 := build_darwin_arm64_dir / "sshush"
+binaryd_darwin_arm64 := build_darwin_arm64_dir / "sshushd"
 version := env("VERSION", "dev")
 ldflags := "-X github.com/ollykeran/sshush/internal/version.Version=" + version
 
@@ -19,6 +22,11 @@ build-sshushd: deps
 
 build: build-sshushd
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary }} ./cmd/sshush
+
+build-darwin-arm64: deps
+    mkdir -p {{ build_darwin_arm64_dir }}
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binaryd_darwin_arm64 }} ./cmd/sshushd
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary_darwin_arm64 }} ./cmd/sshush
 
 test:
     go test ./... -v -race
@@ -50,6 +58,9 @@ package: tarball deb rpm source archlinux
 
 tarball: build
     tar czf {{ build_dir }}/sshush-{{ version }}-linux-amd64.tar.gz -C {{ build_dir }} sshush sshushd
+
+tarball-darwin-arm64: build-darwin-arm64
+    tar czf {{ build_dir }}/sshush-{{ version }}-darwin-arm64.tar.gz -C {{ build_darwin_arm64_dir }} sshush sshushd
 
 deb: build
     VERSION={{ version }} nfpm pkg --packager deb --target {{ build_dir }}/sshush-{{ version }}-amd64.deb

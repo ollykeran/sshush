@@ -86,3 +86,5 @@ just build
 ```
 
 Produces `sshush` (CLI) and `sshushd` (daemon) in `build/`. Both must be in `PATH` or the same directory.
+
+On Apple Silicon, `just build` is already native darwin/arm64. For an explicit cross-compile or release layout, use `just build-darwin-arm64` (outputs under `build/darwin-arm64/`) and `just tarball-darwin-arm64` for `build/sshush-<version>-darwin-arm64.tar.gz`.
