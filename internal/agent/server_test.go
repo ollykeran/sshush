@@ -7,14 +7,28 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+func unixSocketTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestListenAndServe_ListKeys(t *testing.T) {
-	dir := t.TempDir()
+	dir := unixSocketTempDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 
 	keyring := sshagent.NewKeyring()
@@ -66,7 +80,7 @@ func TestListenAndServe_ListKeys(t *testing.T) {
 }
 
 func TestListenAndServe_Sign(t *testing.T) {
-	dir := t.TempDir()
+	dir := unixSocketTempDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 
 	keyring := sshagent.NewKeyring()
