@@ -8,7 +8,7 @@ An SSH agent with a styled CLI and TUI. Drop-in replacement for `ssh-agent`. Man
 eval $(sshush)
 ```
 
-That starts the daemon (if needed), loads keys from config, and exports `SSH_AUTH_SOCK`. Add it to `.bashrc` or `.bash_profile` for persistent setup. See [Setup Guide](docs/setup.md) for details.
+That starts the daemon (if needed), loads keys from config, and exports `SSH_AUTH_SOCK`. Add it to `.zshrc`, `.bashrc`, or `.bash_profile` for persistent setup. See [Setup Guide](docs/setup.md) for details.
 
 ## Features
 
@@ -16,7 +16,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 - **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
 - **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
 - **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `socket_path`, the daemon restarts.
-- **Config auto-setup**: On first run, if no config exists, sshush creates `~/.config/sshush/config.toml` with discovered keys and default socket path.
+- **Config auto-setup**: On first run, if no config exists, sshush creates the default config under `$XDG_CONFIG_HOME/sshush/` (or `~/.config/sshush/`) with discovered keys and a stable `socket_path` (`$XDG_RUNTIME_DIR/sshush.sock` when set, otherwise `~/.config/sshush/sshush.sock`).
 
 ## Commands
 
@@ -39,7 +39,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 | `version`        | Print version                             | `sshush version`                          |
 
 
-Config: `~/.config/sshush/config.toml` (override with `-c`). See [Config Reference](docs/config.md).
+Config: `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml` (override with `-c` / `$SSHUSH_CONFIG`). See [Config Reference](docs/config.md).
 
 ## Installation
 
@@ -52,7 +52,9 @@ Download from [GitHub Releases](https://github.com/ollykeran/sshush/releases):
 | **Debian/Ubuntu** (`.deb`) | `sudo dpkg -i sshush-*-amd64.deb` |
 | **RHEL/Fedora** (`.rpm`) | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch Linux** (`.pkg.tar.zst`) | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
-| **Binary tarball** | Extract `sshush` and `sshushd` from the `.tar.gz`, place in `PATH` |
+| **Linux binary tarball** | Extract `sshush` and `sshushd` from `sshush-*-linux-amd64.tar.gz`, place in `PATH` |
+| **macOS Apple Silicon** | Extract from `sshush-*-darwin-arm64.tar.gz`, place in `PATH` |
+| **macOS Intel** | Extract from `sshush-*-darwin-amd64.tar.gz`, place in `PATH` |
 
 ### From source
 
@@ -65,7 +67,7 @@ Both binaries must be in `PATH`.
 
 ## Docs
 
-- [Setup Guide](docs/setup.md) – eval, config creation, bashrc
+- [Setup Guide](docs/setup.md) – eval, config creation, shell rc files
 - [Config Reference](docs/config.md) – options, reload behavior
 - [TUI Architecture](docs/tui.md) – TUI structure and internals
 - [Architecture](docs/architecture.md) – package layout
@@ -87,4 +89,4 @@ just build
 
 Produces `sshush` (CLI) and `sshushd` (daemon) in `build/`. Both must be in `PATH` or the same directory.
 
-On Apple Silicon, `just build` is already native darwin/arm64. For an explicit cross-compile or release layout, use `just build-darwin-arm64` (outputs under `build/darwin-arm64/`) and `just tarball-darwin-arm64` for `build/sshush-<version>-darwin-arm64.tar.gz`.
+For macOS binaries in `build/sshush` and `build/sshushd`, use `just build-mac` (native arch on Darwin, or set `MAC_ARCH=amd64` when cross-compiling from Linux). Release tarballs use `just build-darwin arm64` and `just build-darwin amd64` under `build/darwin-arm64/` and `build/darwin-amd64/`; `just package` builds Linux artifacts plus both Darwin tarballs.

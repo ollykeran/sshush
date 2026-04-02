@@ -18,6 +18,8 @@ func TestExpandHomeDirectory(t *testing.T) {
 		want string
 	}{
 		{"home directory", "~/id_rsa", filepath.Join(homeDir, "id_rsa")},
+		{"tilde only", "~", homeDir},
+		{"tilde in middle unchanged", filepath.Join("a", "~", "b"), filepath.Join("a", "~", "b")},
 		{"relative path", "./id_rsa", "./id_rsa"},
 		{"absolute path", filepath.Join(homeDir, "id_rsa"), filepath.Join(homeDir, "id_rsa")},
 	}

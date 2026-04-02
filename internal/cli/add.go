@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -41,14 +44,20 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
 	for _, arg := range paths {
-		if err := agent.AddKeyToSocketFromPath(socketPath, arg); err == nil {
+		keyPath := utils.ExpandHomeDirectory(arg)
+		if err := agent.AddKeyToSocketFromPath(socketPath, keyPath); err == nil {
 			continue
+		} else if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+			return style.NewOutput().Error(err.Error()).AsError()
 		}
 		resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
 		if resolveErr != nil {
 			return style.NewOutput().Error("failed to resolve key path by comment").AsError()
 		}
 		if err := agent.AddKeyToSocketFromPath(socketPath, resolved); err != nil {
+			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+				return style.NewOutput().Error(err.Error()).AsError()
+			}
 			return style.NewOutput().Error("failed to add key to socket").AsError()
 		}
 	}

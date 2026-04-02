@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
 )
@@ -37,9 +40,12 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 	wantFP := make(map[string]bool)
 	for _, arg := range args {
-		if pubKey, _, _, err := agent.ParseKeyFromPath(arg); err == nil {
+		keyPath := utils.ExpandHomeDirectory(arg)
+		if pubKey, _, _, err := agent.ParseKeyFromPath(keyPath); err == nil {
 			wantFP[ssh.FingerprintSHA256(pubKey)] = true
 			continue
+		} else if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+			return style.NewOutput().Error(err.Error()).AsError()
 		}
 		matched := false
 		for _, key := range before {

@@ -1,8 +1,8 @@
 # Config Reference
 
-Config file: `~/.config/sshush/config.toml`. Override with `-c` / `--config` or set `SSHUSH_CONFIG`.
+Config file: `$XDG_CONFIG_HOME/sshush/config.toml` when `XDG_CONFIG_HOME` is set, otherwise `~/.config/sshush/config.toml`. Override with `-c` / `--config` or set `SSHUSH_CONFIG`.
 
-**Config path resolution** (CLI): `--config` flag, then `~/.config/sshush/config.toml`, then `$SSHUSH_CONFIG`, then `./config.toml`. Daemon uses `$SSHUSH_CONFIG` or `~/.config/sshush/config.toml`.
+**Config path resolution** (CLI): `--config` flag, then the default config path above if that file exists, then `$SSHUSH_CONFIG`, then `./config.toml`, else the default path. Daemon uses `$SSHUSH_CONFIG` or the same default path.
 
 ## Config Flow
 
@@ -32,13 +32,13 @@ See also: [Setup](setup.md) | [TUI](tui.md)
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `socket_path` | Unix socket for the agent | `"$XDG_RUNTIME_DIR/sshush.sock"` or `"~/.ssh/sshush.sock"` |
+| `socket_path` | Unix socket for the agent | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
 | `key_paths` | Paths to private keys to load | `["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]` |
 
 Example:
 
 ```toml
-socket_path = "~/.ssh/sshush.sock"
+socket_path = "~/.config/sshush/sshush.sock"
 key_paths   = ["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]
 ```
 

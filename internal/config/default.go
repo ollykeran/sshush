@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/openssh"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -58,16 +59,13 @@ func findDefaultKeys() []string {
 	return paths
 }
 
-// CreateDefaultConfig creates ~/.config/sshush/config.toml and writes an example
-// config if neither the directory nor the file exist yet.
+// CreateDefaultConfig creates the default config directory and config.toml if the file
+// does not exist yet.
 func CreateDefaultConfig() error {
-	const defaultConfigDir = "~/.config/sshush"
-	const defaultConfigFileName = "config.toml"
+	defaultConfigDir := platform.ConfigDir()
+	defaultConfigFile := platform.DefaultConfigPath()
 
-	defaultConfigDirExpanded := utils.ExpandHomeDirectory(defaultConfigDir)
-	defaultConfigFile := filepath.Join(defaultConfigDirExpanded, defaultConfigFileName)
-
-	if err := os.MkdirAll(defaultConfigDirExpanded, 0o755); err != nil {
+	if err := os.MkdirAll(defaultConfigDir, 0o755); err != nil {
 		return err
 	}
 
@@ -91,9 +89,8 @@ func CreateDefaultConfig() error {
 
 	keyPathLine := "key_paths = [" + strings.Join(quoted, ", ") + "]"
 
-	// Socket path
-	socketPath := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "sshush.sock")
-	socketPathLine := `socket_path = "` + socketPath + `"`
+	socketDisplay := utils.ContractHomeDirectory(platform.DefaultSocketPath())
+	socketPathLine := `socket_path = "` + escapeTOMLString(socketDisplay) + `"`
 
 	def := theme.DefaultTheme()
 	configLines := []string{
@@ -121,37 +118,61 @@ func CreateDefaultConfig() error {
 	return nil
 }
 
-// AddEvalToShell appends "eval $(sshush)" to ~/.bashrc. Fails if ~/.bashrc does not exist.
+func escapeTOMLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
+// AddEvalToShell appends eval $(sshush) to the preferred shell rc file (see platform.ShellRcPathForAutoSetup).
+// Creates the rc file if it does not exist.
 func AddEvalToShell() error {
-	const line = "eval $(sshush)\n"
-	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
-	if _, err := os.Stat(bashrcPath); err != nil {
-		return style.NewOutput().Error("~/.bashrc not found - cannot add eval $(sshush)").AsError()
+	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	if !ok {
+		return style.NewOutput().Error("cannot determine shell rc file (no home directory)").AsError()
 	}
 
-	bashrc, err := os.OpenFile(bashrcPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if _, err := os.Stat(rcPath); os.IsNotExist(err) {
+		header := "# sshush: start agent in new shells\n"
+		if err := os.WriteFile(rcPath, []byte(header+platform.EvalLine), 0o644); err != nil {
+			return style.NewOutput().Error("failed to create " + rcPath + ": " + err.Error()).AsError()
+		}
+		return nil
+	} else if err != nil {
+		return style.NewOutput().Error("cannot read " + rcPath + ": " + err.Error()).AsError()
+	}
+
+	f, err := os.OpenFile(rcPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return style.NewOutput().Error("Failed to open ~/.bashrc").AsError()
+		return style.NewOutput().Error("failed to open " + rcPath + ": " + err.Error()).AsError()
 	}
-	defer bashrc.Close()
+	defer f.Close()
 
-	bashrc.WriteString(line)
+	if _, err := f.WriteString(platform.EvalLine); err != nil {
+		return style.NewOutput().Error("failed to write " + rcPath + ": " + err.Error()).AsError()
+	}
 	return nil
 }
 
-// SetupConfig ensures default config exists and eval is added to bashrc if needed.
+// SetupConfig ensures default config exists and eval is added to the shell rc if needed.
 // Call from root PersistentPreRunE or main before loading config.
 func SetupConfig() {
-	const defaultConfigPath = "~/.config/sshush/config.toml"
-	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
+	expanded := platform.DefaultConfigPath()
 
 	if _, err := os.Stat(expanded); os.IsNotExist(err) {
 		_ = CreateDefaultConfig()
 	}
 
-	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
-	content, err := os.ReadFile(bashrcPath)
-	if err == nil && !strings.Contains(string(content), "eval $(sshush)") {
-		_ = AddEvalToShell()
+	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	if !ok {
+		return
 	}
+	content, err := os.ReadFile(rcPath)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if err == nil && strings.Contains(string(content), "eval $(sshush)") {
+		return
+	}
+	_ = AddEvalToShell()
 }
