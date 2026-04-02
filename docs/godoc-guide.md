@@ -31,7 +31,7 @@ Gaps: package-level comments, some exported types, `internal/agent`, `internal/k
 ```go
 // Package config loads and creates sshush configuration.
 // Config is read from TOML at ~/.config/sshush/config.toml (or $SSHUSH_CONFIG).
-// SetupConfig creates a default config and adds eval to bashrc on first run.
+// SetupConfig creates a default config and may append eval $(sshush) to the shell rc on first run.
 package config
 ```
 

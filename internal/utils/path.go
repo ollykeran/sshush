@@ -8,14 +8,22 @@ import (
 	"github.com/ollykeran/sshush/internal/openssh"
 )
 
-// ExpandHomeDirectory replaces ~ with the current user's home directory.
+// ExpandHomeDirectory expands a leading "~" or "~/" for the current user only.
+// Paths like "~otheruser/foo" are left unchanged.
 func ExpandHomeDirectory(path string) string {
-	if strings.Contains(path, "~") {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		return strings.ReplaceAll(path, "~", homeDir)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return path
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if path == "~" {
+		return homeDir
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(homeDir, path[2:])
 	}
 	return path
 }

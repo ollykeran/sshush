@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,18 +21,34 @@ func ParseKeyFromPath(path string) (ssh.PublicKey, string, interface{}, error) {
 	if err != nil {
 		return nil, "", nil, err
 	}
+	if block, _ := pem.Decode(data); block != nil {
+		if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
+			return nil, "", nil, openssh.ErrEncryptedPrivateKey
+		}
+	}
+	parsed, err := openssh.ParsePrivateKeyBlob(data)
+	if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+		return nil, "", nil, err
+	}
+	var openComment *openssh.ParsedKey
+	if err == nil {
+		openComment = parsed
+	}
 	key, err := ssh.ParseRawPrivateKey(data)
 	if err != nil {
+		var pm *ssh.PassphraseMissingError
+		if errors.As(err, &pm) {
+			return nil, "", nil, openssh.ErrEncryptedPrivateKey
+		}
 		return nil, "", nil, err
 	}
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	parsed, _ := openssh.ParsePrivateKeyBlob(data)
-	comment := parsed.Comment
-	if comment == "" {
-		comment = filepath.Base(path)
+	comment := filepath.Base(path)
+	if openComment != nil && openComment.Comment != "" {
+		comment = openComment.Comment
 	}
 	return signer.PublicKey(), comment, key, nil
 }

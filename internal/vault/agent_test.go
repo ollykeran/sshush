@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -15,6 +16,19 @@ import (
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
+
+func unixSocketTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 // setupExtendedAgent returns an ExtendedAgent and cleanup for the given backend.
 // Backend is "keyring" (in-memory) or "vault" (temp DB, Init, Unlock).
@@ -254,8 +268,8 @@ func TestVaultAgent_ServeAgent_ListAddSignRemove(t *testing.T) {
 			ext, cleanup := setupExtendedAgent(t, backend)
 			defer cleanup()
 
-			dir := t.TempDir()
-			socketPath := filepath.Join(dir, "agent.sock")
+			sockDir := unixSocketTempDir(t)
+			socketPath := filepath.Join(sockDir, "agent.sock")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			go func() {

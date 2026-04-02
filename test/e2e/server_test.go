@@ -59,7 +59,7 @@ func writeE2EConfigWithServer(t *testing.T, dir, socketPath, vaultPath string, k
 }
 
 func TestE2E_ServerStartStop(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
 	serverPort := 22402
@@ -131,7 +131,7 @@ func TestE2E_ServerStartStop(t *testing.T) {
 }
 
 func TestE2E_ServerConnectAgentAuth(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
 	serverPort := 22403
@@ -205,7 +205,7 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 }
 
 func TestE2E_ServerFileAuth(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "fileauth-key")
 	serverPort := 22404
@@ -276,7 +276,7 @@ func readSignerFromFile(path string) (ssh.Signer, error) {
 }
 
 func TestE2E_ServerHostKeyFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "hostkey-key")
 	serverPort := 22405
@@ -328,7 +328,7 @@ func TestE2E_ServerHostKeyFile(t *testing.T) {
 }
 
 func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
 	serverPort := 22406

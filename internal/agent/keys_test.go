@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/openssh"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -54,6 +56,26 @@ func TestAddKeyFromPath_missingFile(t *testing.T) {
 	err := AddKeyFromPath(keyring, filepath.Join(t.TempDir(), "nonexistent"))
 	if err == nil {
 		t.Fatal("want error for missing file")
+	}
+}
+
+func TestParseKeyFromPath_encryptedOpenSSH(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "c", []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = ParseKeyFromPath(path)
+	if !errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+		t.Fatalf("ParseKeyFromPath err = %v, want %v", err, openssh.ErrEncryptedPrivateKey)
 	}
 }
 

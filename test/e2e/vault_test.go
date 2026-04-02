@@ -207,7 +207,7 @@ func startE2ESSHServer(t *testing.T, authorizedKey ssh.PublicKey) (addr string, 
 }
 
 func TestE2E_VaultLifecycle(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
 
@@ -382,7 +382,7 @@ func TestE2E_VaultLifecycle(t *testing.T) {
 }
 
 func TestE2E_VaultFallbackToKeyPaths(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "nonexistent-vault.json") // does not exist
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "fallback-key")
@@ -416,7 +416,7 @@ func TestE2E_VaultFallbackToKeyPaths(t *testing.T) {
 }
 
 func TestE2E_VaultMissingNoKeys(t *testing.T) {
-	dir := t.TempDir()
+	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "nonexistent-vault.json") // does not exist
 	// no key_paths or invalid key_paths

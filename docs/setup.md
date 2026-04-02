@@ -26,25 +26,31 @@ Both are equivalent. The export line goes to stdout so `eval $(sshush)` works; o
 
 On every run, before loading config, sshush runs `SetupConfig()`. It does two things if needed:
 
-1. **CreateDefaultConfig** (when `~/.config/sshush/config.toml` does not exist):
-  - Renders that file from an embedded template (`internal/config/default_config.toml.tmpl`) so the layout stays easy to edit in the repo
-  - Creates `~/.config/sshush/` if needed
-  - Scans `~/.ssh` for valid private keys (skips dirs and `.pub` files)
-  - Writes `[agent].socket_path` = `$XDG_RUNTIME_DIR/sshush.sock` (when set)
-  - Writes `[agent].vault` = false and `[agent].key_paths` = discovered keys from `~/.ssh`
-  - Writes `[theme]` with `name = "default"` and commented custom colour hints
-  - Appends commented-out `[vault]` and `[server]` sections with example keys so you can enable them later
-  - Does not overwrite an existing config
-2. **AddEvalToShell** (when `~/.bashrc` exists and does not already contain `eval $(sshush)`):
-  - Appends `eval $(sshush)` to `~/.bashrc`
-  - Only modifies `~/.bashrc` (not `.bash_profile`); fails if `~/.bashrc` does not exist
+1. **CreateDefaultConfig** (when the default config file does not exist):
+   - Renders that file from an embedded template (`internal/config/default_config.toml.tmpl`) so the layout stays easy to edit in the repo
+   - Creates the config directory: `$XDG_CONFIG_HOME/sshush/` if `XDG_CONFIG_HOME` is set, otherwise `~/.config/sshush/`
+   - Scans `~/.ssh` for valid private keys (skips dirs and `.pub` files)
+   - Writes `[agent].socket_path` (shown with `~` when under your home directory):
+     - `$XDG_RUNTIME_DIR/sshush.sock` when `XDG_RUNTIME_DIR` is set (common on Linux desktops)
+     - otherwise `~/.config/sshush/sshush.sock` (stable on macOS and minimal Linux environments)
+   - Writes `[agent].vault` = false and `[agent].key_paths` = discovered keys from `~/.ssh`
+   - Writes `[theme]` with `name = "default"` and commented custom colour hints
+   - Appends commented-out `[vault]` and `[server]` sections with example keys so you can enable them later
+   - Does not overwrite an existing config
+2. **AddEvalToShell** (when your shell rc file does not already contain `eval $(sshush)`):
+   - Chooses the rc file from `$SHELL` when possible (`zsh` → `~/.zshrc`, `bash` → `~/.bashrc`)
+   - On macOS, defaults to `~/.zshrc` when `SHELL` is empty or not zsh/bash
+   - On other Unix systems, if neither rc file exists yet, sshush may create `~/.bashrc` and add the line
+   - If the rc file already exists, sshush appends the line
 
-## Shell startup (.bashrc / .bash_profile)
+## Shell startup (.zshrc / .bashrc / .bash_profile)
 
-Add this line to `.bashrc` or `.bash_profile` so each new shell gets the agent:
+Add this line so each new shell gets the agent:
 
 ```sh
 eval $(sshush)
 ```
 
-If you use bash and `~/.bashrc` exists, sshush may add it for you on first run (see AddEvalToShell above). Otherwise add it manually. For other shells or `.bash_profile`, add it yourself. On login, `sshush` will start the daemon if needed and export `SSH_AUTH_SOCK` so `ssh`, `git`, and other tools can use your keys.
+On macOS with zsh, put it in `~/.zshrc`. With bash, use `~/.bashrc` or `~/.bash_profile` as you prefer. If sshush auto-setup created or updated your rc file, you may already have this line.
+
+On login, `sshush` will start the daemon if needed and export `SSH_AUTH_SOCK` so `ssh`, `git`, and other tools can use your keys.

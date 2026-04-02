@@ -7,6 +7,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -67,6 +68,9 @@ func runAdd(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				if errors.Is(err, sshagent.ErrExtensionUnsupported) {
 					if err2 := agent.AddKeyToSocketFromPath(socketPath, path); err2 != nil {
+						if errors.Is(err2, openssh.ErrEncryptedPrivateKey) {
+							return style.NewOutput().Error(err2.Error()).AsError()
+						}
 						return style.NewOutput().Error("failed to add key to socket").AsError()
 					}
 					out.Warn("--auto has no effect (agent is not a vault)")
@@ -84,12 +88,18 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 		if err := agent.AddKeyToSocketFromPath(socketPath, path); err == nil {
 			continue
+		} else if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+			return style.NewOutput().Error(err.Error()).AsError()
 		}
 		resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
 		if resolveErr != nil {
 			return style.NewOutput().Error("failed to resolve key path by comment").AsError()
 		}
-		if err := agent.AddKeyToSocketFromPath(socketPath, utils.ExpandHomeDirectory(resolved)); err != nil {
+		resPath := utils.ExpandHomeDirectory(resolved)
+		if err := agent.AddKeyToSocketFromPath(socketPath, resPath); err != nil {
+			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
+				return style.NewOutput().Error(err.Error()).AsError()
+			}
 			return style.NewOutput().Error("failed to add key to socket").AsError()
 		}
 	}

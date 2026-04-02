@@ -10,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
+	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
 )
 
@@ -146,4 +148,40 @@ func writeTestSSHKeyFile(privPath string) error {
 		return err
 	}
 	return os.WriteFile(privPath, pem.EncodeToMemory(block), 0o600)
+}
+
+func TestCreateDefaultConfig_socketPathAbsoluteWithoutXDG(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	if err := CreateDefaultConfig(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(tmp, ".config")) })
+
+	data, err := os.ReadFile(filepath.Join(tmp, ".config", "sshush", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Agent struct {
+			SocketPath string `toml:"socket_path"`
+		} `toml:"agent"`
+	}
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		t.Fatal(err)
+	}
+	sp := doc.Agent.SocketPath
+	if sp == "" {
+		t.Fatal("empty [agent].socket_path")
+	}
+	if !strings.HasPrefix(sp, "~") {
+		t.Fatalf("expected contracted socket_path under home, got %q", sp)
+	}
+	expanded := utils.ExpandHomeDirectory(sp)
+	if !filepath.IsAbs(expanded) {
+		t.Fatalf("expanded socket_path not absolute: %q", expanded)
+	}
 }

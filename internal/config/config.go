@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/style"
@@ -136,6 +137,17 @@ func LoadConfig(path string) (Config, error) {
 	}
 
 	cfg.SocketPath = utils.ExpandHomeDirectory(cfg.SocketPath)
+	if cfg.SocketPath != "" {
+		absConfigPath, err := filepath.Abs(path)
+		if err != nil {
+			absConfigPath = path
+		}
+		// Relative socket_path (e.g. legacy "sshush.sock" when XDG was unset) must not
+		// depend on the process cwd; anchor it to the config file's directory.
+		if !filepath.IsAbs(cfg.SocketPath) {
+			cfg.SocketPath = filepath.Clean(filepath.Join(filepath.Dir(absConfigPath), cfg.SocketPath))
+		}
+	}
 	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
 	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
 	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)

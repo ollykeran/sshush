@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,11 +15,24 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+func unixSocketTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // startServerWithBackend starts ListenAndServe with keyring or vault backend,
 // adds one key with the given comment, and returns a connected client.
 func startServerWithBackend(t *testing.T, backend, keyComment string) (socketPath string, client sshagent.Agent) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := unixSocketTempDir(t)
 	socketPath = filepath.Join(dir, "agent.sock")
 	var ext sshagent.ExtendedAgent
 	switch backend {

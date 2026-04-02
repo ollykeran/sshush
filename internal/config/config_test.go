@@ -134,4 +134,28 @@ func TestLoad(t *testing.T) {
 			t.Errorf("ServerListenPort: got %d, want 2222", loaded.ServerListenPort)
 		}
 	})
+
+	t.Run("relative socket_path is resolved against config file directory", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgDir := filepath.Join(dir, "sshush")
+		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cfgPath := filepath.Join(cfgDir, "config.toml")
+		body := "[agent]\nsocket_path = \"sshush.sock\"\nkey_paths = [\"/tmp/dummy-key\"]\nvault = false\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(cfgDir, "sshush.sock")
+		if cfg.SocketPath != want {
+			t.Fatalf("SocketPath: got %q, want %q", cfg.SocketPath, want)
+		}
+		if !filepath.IsAbs(cfg.SocketPath) {
+			t.Fatalf("expected absolute socket path, got %q", cfg.SocketPath)
+		}
+	})
 }
