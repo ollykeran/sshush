@@ -13,7 +13,6 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newAddCommand() *cobra.Command {
@@ -21,10 +20,12 @@ func newAddCommand() *cobra.Command {
 		Use:     "add <key_paths...>",
 		Example: "sshush add ~/.ssh/id_ed25519 ~/.ssh/id_rsa",
 		Short:   "Add key(s) to the running agent",
-		Long:    "Add unencrypted OpenSSH private key(s) to sshushd by filepath",
-		RunE:    runAdd,
+		Long: "Add unencrypted OpenSSH private key(s) to sshushd by filepath. " +
+			"When the agent is a vault, keys are stored with autoload on by default so they load after daemon restart; " +
+			"use --no-autoload to keep the key only for this session.",
+		RunE: runAdd,
 	}
-	cmd.Flags().Bool("auto", false, "set autoload so the key is loaded when the daemon starts")
+	cmd.Flags().Bool("no-autoload", false, "when the agent is a vault, add the key without autoload (session-only until restart)")
 	return cmd
 }
 
@@ -44,63 +45,44 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if !sshushd.CheckAlreadyRunning(socketPath) {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
 	}
+	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
+	autoload := !noAutoload
+
+	mode, live := agent.LiveBackendMode(socketPath)
 	before, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
 		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
-	auto, _ := cmd.Flags().GetBool("auto")
 	out := style.NewOutput()
 	for _, arg := range paths {
 		path := utils.ExpandHomeDirectory(arg)
-		if auto {
-			if _, err := os.Stat(path); err != nil {
-				resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
-				if resolveErr != nil {
-					return resolveErr
-				}
-				path = utils.ExpandHomeDirectory(resolved)
+		if _, err := os.Stat(path); err != nil {
+			resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
+			if resolveErr != nil {
+				return resolveErr
 			}
-			payload, err := vault.BuildAddKeyOptsPayload(path, true)
-			if err != nil {
-				return style.NewOutput().Error("failed to read key: " + err.Error()).AsError()
-			}
-			_, err = agent.CallExtension(socketPath, vault.ExtensionAddKeyOpts, payload)
-			if err != nil {
-				if errors.Is(err, sshagent.ErrExtensionUnsupported) {
-					if err2 := agent.AddKeyToSocketFromPath(socketPath, path); err2 != nil {
-						if errors.Is(err2, openssh.ErrEncryptedPrivateKey) {
-							return style.NewOutput().Error(err2.Error()).AsError()
-						}
-						return style.NewOutput().Error("failed to add key to socket").AsError()
-					}
-					out.Warn("--auto has no effect (agent is not a vault)")
+			path = utils.ExpandHomeDirectory(resolved)
+		}
+		if live && mode == "vault" {
+			if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
+				msg := err.Error()
+				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.AgentVault && env.Config.VaultPath != "" {
+					msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
 				} else {
-					msg := err.Error()
-					if msg == "agent: generic extension failure" && env.Config != nil && env.Config.VaultPath != "" {
-						msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
-					} else {
-						msg = "failed to add key: " + msg
-					}
-					return style.NewOutput().Error(msg).AsError()
+					msg = "failed to add key: " + msg
 				}
+				return style.NewOutput().Error(msg).AsError()
 			}
 			continue
 		}
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err == nil {
-			continue
-		} else if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-			return style.NewOutput().Error(err.Error()).AsError()
-		}
-		resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
-		if resolveErr != nil {
-			return style.NewOutput().Error("failed to resolve key path by comment").AsError()
-		}
-		resPath := utils.ExpandHomeDirectory(resolved)
-		if err := agent.AddKeyToSocketFromPath(socketPath, resPath); err != nil {
+		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
 			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 				return style.NewOutput().Error(err.Error()).AsError()
 			}
 			return style.NewOutput().Error("failed to add key to socket").AsError()
+		}
+		if noAutoload {
+			out.Warn("--no-autoload has no effect (agent is not a vault)")
 		}
 	}
 	out.PrintErr()

@@ -12,7 +12,7 @@ func newLockCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "lock",
 		Short: "Lock the vault",
-		Long:  "Connect to the running agent and lock the vault (wipe master key from memory). Only applies when [vault].vault_path is set in config.",
+		Long:  "Connect to the running agent and lock the vault (wipe master key from memory). Only applies when [agent].vault = true and [vault].vault_path is set.",
 		Args:  cobra.NoArgs,
 		RunE:  runLock,
 	}
@@ -21,6 +21,11 @@ func newLockCommand() *cobra.Command {
 func runLock(cmd *cobra.Command, _ []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
+	}
+	if !env.Config.AgentVault || env.Config.VaultPath == "" {
+		return style.NewOutput().
+			Error("lock only applies when the agent uses a vault; set [agent].vault = true and [vault].vault_path").
+			AsError()
 	}
 	socketPath := env.Config.SocketPath
 	conn, err := net.Dial("unix", socketPath)

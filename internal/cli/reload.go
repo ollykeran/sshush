@@ -87,7 +87,7 @@ func runReload(cmd *cobra.Command, _ []string) error {
 }
 
 // desiredKeysFromConfig returns the set of keys that should be in the agent after reload:
-// key_paths (from disk) plus vault identities (when VaultPath is set). skipWarnings is populated for key_paths parse errors.
+// key_paths (from disk) plus vault identities when the agent uses the vault backend. skipWarnings is populated for key_paths parse errors.
 func desiredKeysFromConfig(newCfg config.Config) (after []diffEntry, configByFP map[string]keyInfo, skipWarnings []string) {
 	configByFP = make(map[string]keyInfo)
 	for _, path := range newCfg.KeyPaths {
@@ -100,8 +100,8 @@ func desiredKeysFromConfig(newCfg config.Config) (after []diffEntry, configByFP 
 		after = append(after, diffEntry{fp: fp, comment: comment, keyType: pubKey.Type()})
 		configByFP[fp] = keyInfo{fingerprint: fp, comment: comment, pubKey: pubKey, privKey: privKey}
 	}
-	if newCfg.VaultPath != "" {
-		resolved := vault.ResolveToFile(newCfg.VaultPath)
+	if vp := newCfg.VaultPathForAgent(); vp != "" {
+		resolved := vault.ResolveToFile(vp)
 		store, err := vault.Open(resolved)
 		if err != nil {
 			skipWarnings = append(skipWarnings, fmt.Sprintf("vault %s: %v", utils.DisplayPath(resolved), err))

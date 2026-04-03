@@ -24,9 +24,10 @@ type ThemeSection struct {
 // Config is the runtime view of the TOML file (flat fields for callers).
 // On disk the file uses [agent], [vault], [server], and [theme] sections.
 type Config struct {
-	KeyPaths   []string // From [agent].key_paths; ignored in vault mode for initial load semantics.
+	KeyPaths   []string // From [agent].key_paths; when AgentVault is false, keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
-	VaultPath  string   // From [vault].vault_path when [agent].vault is true.
+	AgentVault bool     // From [agent].vault; when true, sshushd uses VaultPath as the agent backend.
+	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentVault is false).
 	Theme      ThemeSection
 
 	ServerListenPort     int64  // From [server].listen_port.
@@ -72,7 +73,7 @@ func toDocument(cfg Config) configDocument {
 	a := agentSection{
 		SocketPath: cfg.SocketPath,
 		KeyPaths:   cfg.KeyPaths,
-		Vault:      cfg.VaultPath != "",
+		Vault:      cfg.AgentVault,
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -158,6 +159,22 @@ func LoadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
+// VaultPathForAgent returns the vault file path when the agent should use the vault backend; otherwise empty.
+func (c Config) VaultPathForAgent() string {
+	if !c.AgentVault || c.VaultPath == "" {
+		return ""
+	}
+	return c.VaultPath
+}
+
+// AgentBackendMode returns a short label for the agent storage backend: "vault" or "keys".
+func (c Config) AgentBackendMode() string {
+	if c.VaultPathForAgent() != "" {
+		return "vault"
+	}
+	return "keys"
+}
+
 func documentToConfig(doc *configDocument) (Config, error) {
 	if doc.Agent.SocketPath == "" {
 		return Config{}, style.NewOutput().
@@ -173,33 +190,25 @@ func documentToConfig(doc *configDocument) (Config, error) {
 				AsError()
 		}
 	} else {
-		if vaultPath != "" {
+		hasKeys := doc.Agent.KeyPaths != nil
+		hasVaultPath := vaultPath != ""
+		if !hasKeys && !hasVaultPath {
 			return Config{}, style.NewOutput().
-				Error("[vault].vault_path is set but [agent].vault is false; set [agent].vault = true or remove [vault]").
+				Error("config must set [agent].key_paths and/or [vault].vault_path when [agent].vault is false").
+				Info("Use key_paths for the agent; optional vault_path for sshush vault commands while the agent uses key_paths.").
 				AsError()
 		}
-	}
-
-	hasVault := doc.Agent.Vault && vaultPath != ""
-	hasKeys := doc.Agent.KeyPaths != nil
-	if !hasVault && !hasKeys {
-		return Config{}, style.NewOutput().
-			Error("config must set either [agent].vault = true with [vault].vault_path, or [agent].key_paths").
-			Info("Put key_paths under [agent]. Use [vault] only when using a vault.").
-			AsError()
 	}
 
 	cfg := Config{
 		SocketPath:           doc.Agent.SocketPath,
 		KeyPaths:             doc.Agent.KeyPaths,
+		AgentVault:           doc.Agent.Vault,
 		VaultPath:            vaultPath,
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
 		ServerHostKey:        doc.Server.HostKey,
-	}
-	if !doc.Agent.Vault {
-		cfg.VaultPath = ""
 	}
 	return cfg, nil
 }

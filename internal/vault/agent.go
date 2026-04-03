@@ -14,6 +14,14 @@ import (
 // Payload: 4-byte big-endian PEM length, PEM bytes, 1 byte autoload (0 or 1).
 const ExtensionAddKeyOpts = "add-key-opts"
 
+// ExtensionVaultSessionLoad loads a non-autoload identity into the current agent session
+// (see sessionAutoload0). Payload: UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
+const ExtensionVaultSessionLoad = "vault-session-load"
+
+// ExtensionVaultSetAutoload sets Identity.Autoload on disk. Payload: 4-byte big-endian
+// fingerprint length, UTF-8 fingerprint bytes, 1 byte (0 = off, 1 = on).
+const ExtensionVaultSetAutoload = "vault-set-autoload"
+
 // VaultAgent implements sshagent.ExtendedAgent, storing private keys encrypted
 // in a JSON vault. Master key is held in memory when unlocked and wiped on Lock().
 type VaultAgent struct {
@@ -114,6 +122,7 @@ func (a *VaultAgent) Remove(key ssh.PublicKey) error {
 		return errLocked
 	}
 	fp := fingerprint(key)
+	delete(a.sessionAutoload0, fp)
 	a.store.RemoveIdentity(fp)
 	return a.store.Save()
 }
@@ -126,6 +135,7 @@ func (a *VaultAgent) RemoveAll() error {
 		return errLocked
 	}
 	a.store.RemoveAllIdentities()
+	a.sessionAutoload0 = make(map[string]struct{})
 	return a.store.Save()
 }
 
@@ -231,7 +241,62 @@ func (a *VaultAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags sshagen
 // Response: one byte, 1 if locked (masterKey == nil), 0 if unlocked.
 const ExtensionVaultLocked = "vault-locked"
 
-// Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery" and "add-key-opts".
+// sessionLoad marks a non-autoload identity as visible in this session (until daemon restart).
+func (a *VaultAgent) sessionLoad(fp string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.masterKey == nil {
+		return errLocked
+	}
+	_, autoload, found := a.store.GetIdentity(fp)
+	if !found {
+		return errKeyNotFound
+	}
+	if autoload {
+		return nil
+	}
+	a.sessionAutoload0[fp] = struct{}{}
+	return nil
+}
+
+// setIdentityAutoload persists Autoload for an identity; clears sessionAutoload0 when enabling autoload.
+func (a *VaultAgent) setIdentityAutoload(fp string, on bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.masterKey == nil {
+		return errLocked
+	}
+	ids := a.store.AllIdentities()
+	var id Identity
+	ok := false
+	for i := range ids {
+		if ids[i].Fingerprint == fp {
+			id = ids[i]
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return errKeyNotFound
+	}
+	if id.Autoload == on {
+		return nil
+	}
+	id.Autoload = on
+	if err := a.store.AddOrReplaceIdentity(id); err != nil {
+		return err
+	}
+	if err := a.store.Save(); err != nil {
+		return err
+	}
+	if on {
+		delete(a.sessionAutoload0, fp)
+	}
+	return nil
+}
+
+// Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
+// "vault-session-load", and "vault-set-autoload".
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
 	if extensionType == ExtensionVaultLocked {
 		a.mu.RLock()
@@ -273,6 +338,35 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		}
 		addedKey := sshagent.AddedKey{PrivateKey: key, Comment: comment}
 		if err := a.addKeyWithAutoload(addedKey, autoload); err != nil {
+			return nil, err
+		}
+		return []byte("ok"), nil
+	}
+	if extensionType == ExtensionVaultSessionLoad {
+		fp := strings.TrimSpace(string(contents))
+		if fp == "" {
+			return nil, errExtensionPayload
+		}
+		if err := a.sessionLoad(fp); err != nil {
+			return nil, err
+		}
+		return []byte("ok"), nil
+	}
+	if extensionType == ExtensionVaultSetAutoload {
+		if len(contents) < 5 {
+			return nil, errExtensionPayload
+		}
+		fpLen64 := binary.BigEndian.Uint32(contents[:4])
+		if int(fpLen64)+5 != len(contents) {
+			return nil, errExtensionPayload
+		}
+		fpLen := int(fpLen64)
+		fp := string(contents[4 : 4+fpLen])
+		flag := contents[4+fpLen]
+		if flag != 0 && flag != 1 {
+			return nil, errExtensionPayload
+		}
+		if err := a.setIdentityAutoload(fp, flag == 1); err != nil {
 			return nil, err
 		}
 		return []byte("ok"), nil

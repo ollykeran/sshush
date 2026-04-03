@@ -153,7 +153,7 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 	}
 	// Add key
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "e2e-server-key")
-	_, _, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath, "--auto")
+	_, _, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath)
 	if code != 0 {
 		t.Fatalf("add: exit %d", code)
 	}
@@ -353,7 +353,7 @@ func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
 
 	// Add key after server is already running (agent has key, server uses agent auth)
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "added-later")
-	_, _, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath, "--auto")
+	_, _, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath)
 	if code != 0 {
 		t.Fatalf("add: exit %d", code)
 	}

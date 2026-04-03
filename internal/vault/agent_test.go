@@ -452,3 +452,113 @@ func TestExtension_AddKeyOpts(t *testing.T) {
 		t.Fatalf("after restart List: want 1 key, got %d", len(keys2))
 	}
 }
+
+func TestExtension_VaultSessionLoad(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("session-load-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "noload"}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	va2 := NewVaultAgent(store)
+	if err := va2.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := va2.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("before session-load: want 0 listed keys, got %d", len(keys))
+	}
+
+	signer, _ := ssh.NewSignerFromKey(priv)
+	fp := fingerprint(signer.PublicKey())
+	_, err = va2.Extension(ExtensionVaultSessionLoad, []byte(fp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys2, err := va2.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys2) != 1 {
+		t.Fatalf("after session-load: want 1 key, got %d", len(keys2))
+	}
+
+	// No-op for autoload identity
+	_, privB, _ := ed25519.GenerateKey(rand.Reader)
+	if err := va2.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: privB, Comment: "autoloaded"}, true); err != nil {
+		t.Fatal(err)
+	}
+	signerB, _ := ssh.NewSignerFromKey(privB)
+	fpB := fingerprint(signerB.PublicKey())
+	if _, err := va2.Extension(ExtensionVaultSessionLoad, []byte(fpB)); err != nil {
+		t.Fatalf("session-load autoload key should no-op: %v", err)
+	}
+}
+
+func TestExtension_VaultSetAutoload(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("set-autoload-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "toggle"}, false); err != nil {
+		t.Fatal(err)
+	}
+	signer, _ := ssh.NewSignerFromKey(priv)
+	fp := fingerprint(signer.PublicKey())
+
+	payload := BuildSetAutoloadPayload(fp, true)
+	if _, err := va.Extension(ExtensionVaultSetAutoload, payload); err != nil {
+		t.Fatal(err)
+	}
+
+	va2 := NewVaultAgent(store)
+	if err := va2.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := va2.List()
+	if len(keys) != 1 {
+		t.Fatalf("after set autoload on: want 1 key at restart, got %d", len(keys))
+	}
+
+	payloadOff := BuildSetAutoloadPayload(fp, false)
+	if _, err := va2.Extension(ExtensionVaultSetAutoload, payloadOff); err != nil {
+		t.Fatal(err)
+	}
+	va3 := NewVaultAgent(store)
+	if err := va3.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	keys3, _ := va3.List()
+	if len(keys3) != 0 {
+		t.Fatalf("after set autoload off: want 0 keys at restart, got %d", len(keys3))
+	}
+}

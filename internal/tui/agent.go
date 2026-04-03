@@ -16,6 +16,7 @@ import (
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -703,7 +704,8 @@ func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 
 func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 	return func() tea.Msg {
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		// Default autoload on for vault (same as CLI without --no-autoload).
+		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, true); err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}

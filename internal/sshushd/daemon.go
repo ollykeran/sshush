@@ -75,8 +75,8 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 		defer os.Remove(pidFilePath)
 	}
 	var ext sshagent.ExtendedAgent
-	if cfg.VaultPath != "" {
-		resolved := vault.ResolveToFile(cfg.VaultPath)
+	if vp := cfg.VaultPathForAgent(); vp != "" {
+		resolved := vault.ResolveToFile(vp)
 		if _, err := os.Stat(resolved); err != nil && os.IsNotExist(err) {
 			keyring := sshagent.NewKeyring()
 			if len(cfg.KeyPaths) > 0 {

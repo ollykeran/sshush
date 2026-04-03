@@ -135,6 +135,71 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("marshal roundtrip preserves AgentVault and VaultPath", func(t *testing.T) {
+		cfg := Config{
+			SocketPath: "/tmp/s.sock",
+			KeyPaths:   []string{"/tmp/k"},
+			AgentVault: true,
+			VaultPath:  "/tmp/v.json",
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+		}
+		if !got.AgentVault || got.VaultPath != "/tmp/v.json" {
+			t.Fatalf("got AgentVault=%v VaultPath=%q", got.AgentVault, got.VaultPath)
+		}
+	})
+
+	t.Run("AgentBackendMode", func(t *testing.T) {
+		cases := []struct {
+			name string
+			cfg  Config
+			want string
+		}{
+			{"vault agent", Config{AgentVault: true, VaultPath: "/v.json"}, "vault"},
+			{"keys only", Config{AgentVault: false, KeyPaths: []string{"/k"}, VaultPath: ""}, "keys"},
+			{"offline vault path keys agent", Config{AgentVault: false, KeyPaths: []string{"/k"}, VaultPath: "/v.json"}, "keys"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := tc.cfg.AgentBackendMode(); got != tc.want {
+					t.Fatalf("AgentBackendMode: got %q, want %q", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("vault_path with vault false keeps path for CLI", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[vault]\nvault_path = \"/tmp/vault.json\"\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AgentVault {
+			t.Fatal("expected AgentVault false")
+		}
+		if cfg.VaultPath != "/tmp/vault.json" {
+			t.Fatalf("VaultPath: got %q", cfg.VaultPath)
+		}
+		if cfg.VaultPathForAgent() != "" {
+			t.Fatalf("VaultPathForAgent: want empty, got %q", cfg.VaultPathForAgent())
+		}
+	})
+
 	t.Run("relative socket_path is resolved against config file directory", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgDir := filepath.Join(dir, "sshush")

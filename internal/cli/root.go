@@ -6,8 +6,10 @@ import (
 	"os"
 	stdruntime "runtime"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
+	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -34,6 +36,53 @@ func isThemeCmd(cmd *cobra.Command) bool {
 
 func isGenerateConfigCmd(cmd *cobra.Command) bool {
 	return cmd != nil && cmd.Name() == "config" && cmd.Parent() != nil && cmd.Parent().Name() == "generate"
+}
+
+func suppressAgentModeIndicator(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "tui", "theme", "help", "completion":
+			return true
+		}
+	}
+	return isGenerateConfigCmd(cmd)
+}
+
+func isTTYStderr() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// commandMayStartDaemon reports commands whose PreRun runs before the agent socket may exist.
+func commandMayStartDaemon(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	if cmd.Name() == "start" || cmd.Name() == "reload" {
+		return true
+	}
+	// Bare `sshush` uses root RunE to start the daemon.
+	return cmd.Root() == cmd
+}
+
+func printAgentModeIndicator(cmd *cobra.Command) {
+	if env.Config == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
+		return
+	}
+	configMode := env.Config.AgentBackendMode()
+	sock, sockErr := getSocketPath()
+	liveMode, liveOK := "", false
+	// Cold start / reload-before-socket: probing here falsely looks "unreachable".
+	skipProbe := sockErr != nil || sock == "" ||
+		(commandMayStartDaemon(cmd) && !sshushd.CheckAlreadyRunning(sock))
+	if !skipProbe {
+		liveMode, liveOK = agent.LiveBackendMode(sock)
+	}
+	line := style.AgentModeIndicatorLine(configMode, liveMode, liveOK, skipProbe && sockErr == nil && sock != "")
+	fmt.Fprintln(os.Stderr, line)
 }
 
 // argsNoneOrHelp rejects positional args like cobra.NoArgs, but treats
@@ -139,6 +188,7 @@ func NewRootCommand() *cobra.Command {
 
 			env.Config = &cfg
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))
+			printAgentModeIndicator(cmd)
 			return nil
 		},
 	}

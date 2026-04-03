@@ -241,7 +241,7 @@ func TestE2E_VaultLifecycle(t *testing.T) {
 
 	// add key
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "e2e-key")
-	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath, "--auto")
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "add", keyPath)
 	if code != 0 {
 		t.Fatalf("add: exit %d\nstderr: %s", code, stderr)
 	}
@@ -378,6 +378,148 @@ func TestE2E_VaultLifecycle(t *testing.T) {
 	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
 	if code != 0 {
 		t.Errorf("stop: exit %d\nstderr: %s", code, stderr)
+	}
+}
+
+func TestE2E_VaultSubcommandManage(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	vaultPath := filepath.Join(dir, "vault.json")
+	binDir := buildBins(t)
+	configPath := writeE2EConfig(t, dir, socketPath, vaultPath, nil)
+	runtimeDir := dir
+
+	initStdinFile := filepath.Join(dir, "init_stdin.txt")
+	if err := os.WriteFile(initStdinFile, []byte("e2epass\ne2epass\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initStdin, err := os.Open(initStdinFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initStdin.Close()
+	_, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, initStdin, "vault", "init", "--no-recovery")
+	if code != 0 {
+		t.Fatalf("vault init: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, strings.NewReader(e2ePassphrase), "start")
+	if code != 0 {
+		t.Fatalf("start: exit %d\nstderr: %s", code, stderr)
+	}
+
+	keyNoLoad := writeE2ETestKey(t, dir, "id_noload", "e2e-noload")
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "add", "--no-autoload", keyNoLoad)
+	if code != 0 {
+		t.Fatalf("vault add: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	if code != 0 {
+		t.Fatalf("stop: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, strings.NewReader(e2ePassphrase), "start")
+	if code != 0 {
+		t.Fatalf("start after stop: exit %d\nstderr: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "list")
+	if code != 0 {
+		t.Fatalf("list: exit %d\nstderr: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "e2e-noload") {
+		t.Errorf("after restart, agent list should not include non-autoload key; got: %s", stdout)
+	}
+
+	stdout, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "list")
+	if code != 0 {
+		t.Fatalf("vault list: exit %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "e2e-noload") {
+		t.Errorf("vault list should still show identity; got: %s", stdout)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "load", "e2e-noload")
+	if code != 0 {
+		t.Fatalf("vault load: exit %d\nstderr: %s", code, stderr)
+	}
+
+	stdout, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "list")
+	if code != 0 {
+		t.Fatalf("list after load: exit %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "e2e-noload") {
+		t.Errorf("after vault load, agent list should include key; got: %s", stdout)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "remove", "e2e-noload")
+	if code != 0 {
+		t.Fatalf("vault remove: exit %d\nstderr: %s", code, stderr)
+	}
+
+	stdout, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "list")
+	if code != 0 {
+		t.Fatalf("vault list after remove: exit %d\nstderr: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "e2e-noload") {
+		t.Errorf("vault list should be empty of removed key; got: %s", stdout)
+	}
+
+	// autoload toggle: add with default autoload on
+	keyAuto := writeE2ETestKey(t, dir, "id_auto", "e2e-autoload-toggle")
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "add", keyAuto)
+	if code != 0 {
+		t.Fatalf("vault add autoload on: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "autoload", "off", "e2e-autoload-toggle")
+	if code != 0 {
+		t.Fatalf("vault autoload off: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	if code != 0 {
+		t.Fatalf("stop: exit %d\nstderr: %s", code, stderr)
+	}
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, strings.NewReader(e2ePassphrase), "start")
+	if code != 0 {
+		t.Fatalf("start: exit %d\nstderr: %s", code, stderr)
+	}
+
+	stdout, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "list")
+	if code != 0 {
+		t.Fatalf("list: exit %d\nstderr: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "e2e-autoload-toggle") {
+		t.Errorf("after autoload off and restart, key should not list; got: %s", stdout)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "vault", "autoload", "on", "e2e-autoload-toggle")
+	if code != 0 {
+		t.Fatalf("vault autoload on: exit %d\nstderr: %s", code, stderr)
+	}
+
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	if code != 0 {
+		t.Fatalf("stop: exit %d\nstderr: %s", code, stderr)
+	}
+	_, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, strings.NewReader(e2ePassphrase), "start")
+	if code != 0 {
+		t.Fatalf("start: exit %d\nstderr: %s", code, stderr)
+	}
+
+	stdout, stderr, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "list")
+	if code != 0 {
+		t.Fatalf("list: exit %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "e2e-autoload-toggle") {
+		t.Errorf("after autoload on and restart, key should list; got: %s", stdout)
+	}
+
+	_, _, code = runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	if code != 0 {
+		t.Errorf("final stop: exit %d", code)
 	}
 }
 

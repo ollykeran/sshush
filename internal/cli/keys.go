@@ -27,14 +27,19 @@ func AppendKeysTo(keyring sshagent.Agent, out *style.Output, socketPath, vaultPa
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
-		if strings.TrimSpace(vaultPath) != "" && strings.TrimSpace(socketPath) != "" {
-			resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-			if err == nil && len(resp) == 1 && resp[0] == 1 {
-				out.Warn("Vault is locked. No keys are offered for signing; run sshush unlock.")
+	if len(keys) == 0 && strings.TrimSpace(socketPath) != "" {
+		// Detect vault-at-socket even when config omits vaultPath (e.g. stale config vs running daemon).
+		resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
+		if err == nil && len(resp) == 1 {
+			if resp[0] == 1 {
+				out.Warn("Vault is locked (identities stay on disk; run sshush unlock or enter passphrase on start).")
 				return nil
 			}
+			out.Warn("no keys loaded in vault (unlocked but empty).")
+			return nil
 		}
+	}
+	if len(keys) == 0 {
 		out.Warn("no keys loaded")
 		return nil
 	}

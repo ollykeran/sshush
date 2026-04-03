@@ -27,6 +27,7 @@ var (
 	textBold  lipgloss.Style
 	highlight lipgloss.Style
 	focus     lipgloss.Style
+	dim       lipgloss.Style
 )
 
 func rebuildStyles() {
@@ -37,6 +38,7 @@ func rebuildStyles() {
 	textBold = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Text))
 	highlight = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
 	focus = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Focus))
+	dim = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Text)).Faint(true)
 	box = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(currentTheme.Focus)).
@@ -67,6 +69,26 @@ func Highlight(s string) string { return highlight.Render(s) }
 func Focus(s string) string     { return focus.Render(s) }
 func Warn(s string) string      { return warn.Render(s) }
 func Err(s string) string       { return err.Render(s) }
+func Dim(s string) string       { return dim.Render(s) }
+
+// AgentModeIndicatorLine shows live backend when the socket is reachable; otherwise config with a note.
+// Secondary details use normal text colour so they stay readable (not faint dim).
+// If skipUnreachableNote is true (e.g. sshush start before the socket exists), omit "(agent not reachable)".
+func AgentModeIndicatorLine(configMode, liveMode string, liveReachable bool, skipUnreachableNote bool) string {
+	if liveReachable && liveMode != "" {
+		line := Focus("Agent: ") + Highlight(liveMode)
+		if liveMode != configMode {
+			line += Text(fmt.Sprintf("  (config: %s)", configMode))
+		}
+		return line
+	}
+	line := Focus("Agent: ") + Highlight(configMode)
+	if !skipUnreachableNote {
+		line += Text(" (agent not reachable)")
+	}
+	return line
+}
+
 func Box(s string) string {
 	return renderBox(s, effectiveBoxLimit(0))
 }
@@ -116,11 +138,11 @@ type Output struct {
 func NewOutput() *Output { return &Output{} }
 
 // Semantic append methods - encode color from theme, callers describe intent.
-func (o *Output) Success(s string) *Output { return o.add(success.Render(s)) }
-func (o *Output) Info(s string) *Output    { return o.add(text.Render(s)) }
+func (o *Output) Success(s string) *Output  { return o.add(success.Render(s)) }
+func (o *Output) Info(s string) *Output     { return o.add(text.Render(s)) }
 func (o *Output) InfoBold(s string) *Output { return o.add(textBold.Render(s)) }
-func (o *Output) Warn(s string) *Output    { return o.add(warn.Render(s)) }
-func (o *Output) Error(s string) *Output   { return o.add(err.Render(s)) }
+func (o *Output) Warn(s string) *Output     { return o.add(warn.Render(s)) }
+func (o *Output) Error(s string) *Output    { return o.add(err.Render(s)) }
 
 // Spacer appends a blank line for visual separation.
 func (o *Output) Spacer() *Output { return o.add("") }

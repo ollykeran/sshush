@@ -15,7 +15,7 @@ func newUnlockCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock",
 		Short: "Unlock the vault with passphrase",
-		Long:  "Connect to the running agent and unlock the vault using the master passphrase. Only applies when [vault].vault_path is set in config.",
+		Long:  "Connect to the running agent and unlock the vault using the master passphrase. Only applies when [agent].vault = true and [vault].vault_path is set.",
 		Args:  cobra.NoArgs,
 		RunE:  runUnlock,
 	}
@@ -25,15 +25,17 @@ func runUnlock(cmd *cobra.Command, _ []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	if env.Config.VaultPath == "" {
-		return style.NewOutput().Error("unlock only applies when using a vault; set [vault].vault_path in config and run 'sshush start'").AsError()
+	if !env.Config.AgentVault || env.Config.VaultPath == "" {
+		return style.NewOutput().
+			Error("unlock only applies when the agent uses a vault; set [agent].vault = true and [vault].vault_path, then run 'sshush start'").
+			AsError()
 	}
 	socketPath := env.Config.SocketPath
 	resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
 	if extErr != nil {
 		if errors.Is(extErr, sshagent.ErrExtensionUnsupported) {
 			return style.NewOutput().
-				Error("this agent does not support vault status; use a vault-backed sshushd ([vault].vault_path in config).").
+				Error("this agent does not support vault status; use [agent].vault = true with [vault].vault_path and run 'sshush start'.").
 				AsError()
 		}
 		return style.NewOutput().Error("vault status: " + extErr.Error()).AsError()

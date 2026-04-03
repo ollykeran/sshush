@@ -13,7 +13,7 @@ Options are grouped into TOML tables:
 | Section | Purpose |
 |---------|---------|
 | `[agent]` | Socket path, key paths, vault mode flag |
-| `[vault]` | Vault file path (when `[agent].vault` is true) |
+| `[vault]` | Vault file path; required when `[agent].vault` is true, optional when false (for `sshush vault` CLI while the agent uses `key_paths`) |
 | `[server]` | TCP SSH server listen port and related paths |
 | `[theme]` | Colours (preset or custom hex) |
 
@@ -57,6 +57,8 @@ name = "dracula"
 ```
 
 For vault-only use, set `[agent].vault = true`, put `vault_path` under `[vault]`, and omit or adjust `key_paths` as needed.
+
+To run the agent from `key_paths` but still point `sshush vault list` (and other vault commands) at a file, set `[agent].vault = false`, keep `key_paths`, and set `[vault].vault_path`. The daemon uses the keyring; vault commands use the file on disk.
 
 ## Config Flow
 

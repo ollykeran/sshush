@@ -60,7 +60,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 			defer conn.Close()
 			client := sshagent.NewClient(conn)
 			out.Spacer()
-			_ = AppendKeysTo(client, out, cfg.SocketPath, cfg.VaultPath)
+			_ = AppendKeysTo(client, out, cfg.SocketPath, cfg.VaultPathForAgent())
 		}
 		out.PrintErr()
 		return nil
@@ -75,8 +75,8 @@ func runStartDaemon(cmd *cobra.Command) error {
 			loadable++
 		}
 	}
-	if cfg.VaultPath != "" {
-		resolvedVault := vault.ResolveToFile(cfg.VaultPath)
+	if vp := cfg.VaultPathForAgent(); vp != "" {
+		resolvedVault := vault.ResolveToFile(vp)
 		if _, err := os.Stat(resolvedVault); err != nil && os.IsNotExist(err) {
 			if loadable > 0 {
 				displayPath := utils.DisplayPath(resolvedVault)
@@ -90,7 +90,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 			}
 		}
 	}
-	if loadable == 0 && cfg.VaultPath == "" {
+	if loadable == 0 && cfg.VaultPathForAgent() == "" {
 		out.Error("no keys will be loaded")
 	}
 
@@ -110,7 +110,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 
 // startSuccess prints the export line to stdout (for eval) only when stdout is
 // piped, and the pretty success message (and any prior warnings) to stderr.
-// If cfg has VaultPath set, prompts for passphrase and unlocks the vault before listing keys.
+// If the agent uses a vault, prompts for passphrase and unlocks before listing keys.
 func startSuccess(out *style.Output, cfg *config.Config) error {
 	socketPath := cfg.SocketPath
 	absSocket, _ := filepath.Abs(socketPath)
@@ -128,8 +128,8 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 	if err == nil {
 		defer conn.Close()
 		client := sshagent.NewClient(conn)
-		if cfg.VaultPath != "" {
-			resolvedVault := vault.ResolveToFile(cfg.VaultPath)
+		if vp := cfg.VaultPathForAgent(); vp != "" {
+			resolvedVault := vault.ResolveToFile(vp)
 			store, openErr := vault.Open(resolvedVault)
 			if openErr != nil {
 				out.Spacer()
@@ -152,7 +152,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 			}
 		}
 		out.Spacer()
-		_ = AppendKeysTo(client, out, socketPath, cfg.VaultPath)
+		_ = AppendKeysTo(client, out, socketPath, cfg.VaultPathForAgent())
 	}
 
 	out.PrintErr()
