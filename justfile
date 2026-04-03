@@ -25,6 +25,10 @@ build: build-sshushd
 check-gui-deps:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "$(uname -s)" != Linux ]]; then
+        echo 'check-gui-deps: skipped (X11/Mesa pkg-config checks are Linux-only)' >&2
+        exit 0
+    fi
     if ! command -v pkg-config >/dev/null 2>&1; then
         echo 'GUI build: pkg-config not found in PATH.' >&2
         echo '  Install: sudo apt install pkg-config   (Debian/Ubuntu)' >&2
@@ -45,7 +49,8 @@ check-gui-deps:
     fi
 
 # Fyne desktop PoC (Linux + CGO + X11/Wayland dev libs). See docs/gui.md.
-build-gui: check-gui-deps deps build-sshushd
+build-gui: deps build-sshushd
+    #check-gui-deps
     mkdir -p {{ build_dir }}
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary_gui }} ./cmd/sshush-gui
 
