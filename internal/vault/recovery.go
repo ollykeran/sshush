@@ -39,7 +39,7 @@ func EnableRecovery(store *VaultStore, masterKey []byte, mnemonic string) error 
 
 // EnableRecoveryWithPassphrase reads salt from the store, derives the master key
 // from passphrase, then enables recovery with the given mnemonic. Use right after
-// Init when creating a vault with --recovery.
+// Init when creating a vault without --no-recovery.
 func EnableRecoveryWithPassphrase(store *VaultStore, passphrase []byte, mnemonic string) error {
 	meta := store.GetMetadata()
 	if meta == nil || len(meta.Salt) == 0 {

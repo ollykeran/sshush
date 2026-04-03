@@ -10,3 +10,6 @@ ok/
 .vscode/
 .cursor/
 .github/
+notes
+config
+ssh

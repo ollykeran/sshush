@@ -32,12 +32,12 @@ func newVaultInitCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize a new vault",
-		Long:  "Create a new encrypted vault at the given path (or [vault].vault_path from config). Set a passphrase; optionally generate a recovery phrase.",
+		Long:  "Create a new encrypted vault at the given path (or [vault].vault_path from config). Set a passphrase; by default a 24-word recovery phrase is generated, shown, and written beside the vault as recovery.txt. Use --no-recovery to skip.",
 		Args:  cobra.NoArgs,
 		RunE:  runVaultInit,
 	}
 	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
-	cmd.Flags().Bool("no-recovery", true, "do not generate and display a 24-word recovery phrase")
+	cmd.Flags().Bool("no-recovery", false, "do not generate and display a 24-word recovery phrase")
 	cmd.Flags().String("recovery-file", "", "also write the recovery phrase to this file (mode 0600)")
 	return cmd
 }
@@ -79,8 +79,8 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 	if err := vault.Init(store, passphrase); err != nil {
 		return style.NewOutput().Error("init vault: " + err.Error()).AsError()
 	}
-	withRecovery, _ := cmd.Flags().GetBool("recovery")
-	if withRecovery {
+	noRecovery, _ := cmd.Flags().GetBool("no-recovery")
+	if !noRecovery {
 		mnemonic, err := vault.GenerateRecoveryMnemonic()
 		if err != nil {
 			return style.NewOutput().Error("generate recovery phrase: " + err.Error()).AsError()
@@ -259,7 +259,7 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		msg := err.Error()
 		if msg == "agent: generic extension failure" {
-			msg = "unlock failed: wrong phrase or vault was not initialized with --recovery. Use exactly 24 words, single spaces."
+			msg = "unlock failed: wrong phrase or vault was created with --no-recovery. Use exactly 24 words, single spaces."
 		} else {
 			msg = "unlock with recovery failed: " + msg
 		}
