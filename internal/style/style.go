@@ -67,11 +67,43 @@ func Highlight(s string) string { return highlight.Render(s) }
 func Focus(s string) string     { return focus.Render(s) }
 func Warn(s string) string      { return warn.Render(s) }
 func Err(s string) string       { return err.Render(s) }
-func Box(s string) string       { return box.Render(s) }
+func Box(s string) string {
+	return renderBox(s, effectiveBoxLimit(0))
+}
 
-// BoxWithMaxWidth renders content in the box with a maximum width (for wrapping long lines).
+// BoxWithMaxWidth renders content in a box with word wrapping when lines would
+// exceed the limit: min(terminal width, maxWidth) on a tty when maxWidth > 0,
+// otherwise terminal width; without a tty, maxWidth when maxWidth > 0.
+// When content fits, the box stays as narrow as the content (no full-width padding).
 func BoxWithMaxWidth(s string, maxWidth int) string {
-	return box.MaxWidth(maxWidth).Render(s)
+	if maxWidth <= 0 {
+		return box.Render(s)
+	}
+	return renderBox(s, effectiveBoxLimit(maxWidth))
+}
+
+func maxContentLineWidth(s string) int {
+	max := 0
+	for _, line := range strings.Split(s, "\n") {
+		if w := lipgloss.Width(line); w > max {
+			max = w
+		}
+	}
+	return max
+}
+
+// renderBox renders at natural width when the outer block fits within limit;
+// otherwise uses box.Width(limit) so long lines wrap on narrow terminals.
+func renderBox(s string, limit int) string {
+	if limit <= 0 {
+		return box.Render(s)
+	}
+	inner := maxContentLineWidth(s)
+	outerMin := inner + box.GetHorizontalFrameSize()
+	if outerMin <= limit {
+		return box.Render(s)
+	}
+	return box.Width(limit).Render(s)
 }
 
 // Output is a builder for styled terminal output. Append lines with semantic
@@ -104,8 +136,12 @@ func (o *Output) add(s string) *Output {
 // Len returns the number of lines added.
 func (o *Output) Len() int { return len(o.lines) }
 
-// Box renders all lines inside a rounded border box string.
-func (o *Output) Box() string { return box.Render(strings.Join(o.lines, "\n")) }
+// Box renders all lines inside a rounded border box string. On a tty, lines
+// wider than the terminal wrap inside the box; otherwise the box is only as wide
+// as the content.
+func (o *Output) Box() string {
+	return renderBox(strings.Join(o.lines, "\n"), effectiveBoxLimit(0))
+}
 
 // String renders all lines joined by newlines, without a border.
 func (o *Output) String() string { return strings.Join(o.lines, "\n") }
@@ -118,11 +154,17 @@ func (o *Output) Print() {
 }
 
 // PrintTo renders as a box to w.
-func (o *Output) PrintTo(w io.Writer) { fmt.Fprintln(w, o.Box()) }
+func (o *Output) PrintTo(w io.Writer) {
+	if o.Len() > 0 {
+		fmt.Fprintln(w, o.Box())
+	}
+}
 
 // PrintErr renders as a box to stderr.
 func (o *Output) PrintErr() {
-	fmt.Fprintln(os.Stderr, o.Box())
+	if o.Len() > 0 {
+		fmt.Fprintln(os.Stderr, o.Box())
+	}
 }
 
 // AsError wraps the Output in a StyledError for display at the Execute level.
