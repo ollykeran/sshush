@@ -87,7 +87,7 @@ func unlockVaultAgentIfLocked(socketPath, resolvedVaultPath string) {
 		_ = client.Unlock(passphrase)
 		conn.Close()
 	}
-	clearBytes(passphrase)
+	ClearBytes(passphrase)
 }
 
 func resolveVaultSelectorArg(store *vault.VaultStore, arg string) (vault.Identity, error) {
@@ -133,21 +133,14 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 	if fi, err := os.Stat(vaultPath); err == nil && !fi.IsDir() {
 		return style.NewOutput().Error("vault already exists at " + utils.DisplayPath(vaultPath)).AsError()
 	}
-	passphrase, err := readPassphrase("Passphrase: ")
+	passphrase, err := ReadPassphraseWithConfirm("Passphrase: ", "Confirm passphrase: ")
 	if err != nil {
+		if errors.Is(err, ErrPassphrasesDoNotMatch) {
+			return style.NewOutput().Error("passphrases do not match").AsError()
+		}
 		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 	}
-	defer func() { clearBytes(passphrase) }()
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr)
-	confirm, err := readPassphrase("Confirm passphrase: ")
-	if err != nil {
-		return style.NewOutput().Error("read confirmation: " + err.Error()).AsError()
-	}
-	defer func() { clearBytes(confirm) }()
-	if string(passphrase) != string(confirm) {
-		return style.NewOutput().Error("passphrases do not match").AsError()
-	}
+	defer ClearBytes(passphrase)
 	store, err := vault.Open(vaultPath)
 	if err != nil {
 		return style.NewOutput().Error("create vault: " + err.Error()).AsError()
@@ -628,10 +621,4 @@ func wordWrap(s string, maxLineLen int) []string {
 		lines = append(lines, line)
 	}
 	return lines
-}
-
-func clearBytes(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
 }

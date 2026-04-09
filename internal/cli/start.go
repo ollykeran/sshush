@@ -147,7 +147,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 						out.Spacer()
 						out.Error("unlock failed: " + err.Error())
 					}
-					clearBytes(passphrase)
+					ClearBytes(passphrase)
 				}
 			}
 		}
