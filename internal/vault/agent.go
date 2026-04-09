@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/ollykeran/sshush/internal/openssh"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -158,7 +159,7 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 	if meta == nil || len(meta.RecoverySalt) == 0 || len(meta.WrappedMasterKey) == 0 {
 		return errWrongPassphrase
 	}
-	recoveryKey := DeriveKey([]byte(mnemonic), meta.RecoverySalt)
+	recoveryKey := kdf.DeriveKey([]byte(mnemonic), meta.RecoverySalt)
 	defer wipe(recoveryKey)
 	masterKey, err := decryptBlob(recoveryKey, meta.WrappedMasterKey)
 	if err != nil {
@@ -179,9 +180,9 @@ func (a *VaultAgent) Unlock(passphrase []byte) error {
 	if meta == nil || len(meta.Salt) == 0 || len(meta.Canary) == 0 {
 		return errWrongPassphrase
 	}
-	masterKey := DeriveKey(passphrase, meta.Salt)
+	masterKey := kdf.DeriveKey(passphrase, meta.Salt)
 	canaryPlain, err := decryptBlob(masterKey, meta.Canary)
-	if err != nil || !ConstantTimeCompare(canaryPlain, []byte(canaryPlaintext)) {
+	if err != nil || !kdf.ConstantTimeCompare(canaryPlain, []byte(canaryPlaintext)) {
 		wipe(masterKey)
 		return errWrongPassphrase
 	}

@@ -1,4 +1,4 @@
-package vault
+package kdf
 
 import (
 	"crypto/rand"
@@ -11,12 +11,13 @@ const (
 	argon2Time    = 3
 	argon2Memory  = 64 * 1024 // 64 MiB
 	argon2Threads = 1
-	keyLen        = 32 // AES-256
+	// KeyLen is the byte length of DeriveKey output (AES-256).
+	KeyLen = 32
 )
 
 // DeriveKey derives a 32-byte key from passphrase and salt using Argon2id.
 func DeriveKey(passphrase, salt []byte) []byte {
-	return argon2.IDKey(passphrase, salt, argon2Time, argon2Memory, argon2Threads, keyLen)
+	return argon2.IDKey(passphrase, salt, argon2Time, argon2Memory, argon2Threads, KeyLen)
 }
 
 // GenerateSalt returns 16 random bytes for use as KDF salt.

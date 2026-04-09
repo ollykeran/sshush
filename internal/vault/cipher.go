@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+
+	"github.com/ollykeran/sshush/internal/kdf"
 )
 
 const (
@@ -15,7 +17,7 @@ const (
 // encryptBlob encrypts plain with AES-256-GCM using masterKey. A random IV is
 // prepended to the returned ciphertext (iv + ciphertext + tag).
 func encryptBlob(masterKey, plain []byte) ([]byte, error) {
-	if len(masterKey) != keyLen {
+	if len(masterKey) != kdf.KeyLen {
 		return nil, errors.New("vault: master key must be 32 bytes")
 	}
 	block, err := aes.NewCipher(masterKey)
@@ -36,7 +38,7 @@ func encryptBlob(masterKey, plain []byte) ([]byte, error) {
 
 // decryptBlob decrypts ciphertext (iv + ciphertext + tag) with masterKey.
 func decryptBlob(masterKey, ciphertext []byte) ([]byte, error) {
-	if len(masterKey) != keyLen {
+	if len(masterKey) != kdf.KeyLen {
 		return nil, errors.New("vault: master key must be 32 bytes")
 	}
 	if len(ciphertext) < gcmIVSize {

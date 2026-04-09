@@ -2,6 +2,8 @@ package vault
 
 import (
 	"time"
+
+	"github.com/ollykeran/sshush/internal/kdf"
 )
 
 // Init creates the vault: generates salt, derives master key from passphrase,
@@ -11,11 +13,11 @@ func Init(store *VaultStore, passphrase []byte) error {
 	if err := DefaultPassphrasePolicy.ValidateNew(passphrase); err != nil {
 		return err
 	}
-	salt, err := GenerateSalt()
+	salt, err := kdf.GenerateSalt()
 	if err != nil {
 		return err
 	}
-	masterKey := DeriveKey(passphrase, salt)
+	masterKey := kdf.DeriveKey(passphrase, salt)
 	defer wipe(masterKey)
 	canaryCipher, err := encryptBlob(masterKey, []byte(canaryPlaintext))
 	if err != nil {

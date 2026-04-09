@@ -38,7 +38,7 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 			if len(keyPaths) > 0 {
 				agent.LoadKeys(keyring, keyPaths, os.Stderr)
 			}
-			ext = keyring.(sshagent.ExtendedAgent)
+			ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 		} else {
 			store, err := vault.Open(resolved)
 			if err != nil {
@@ -51,7 +51,7 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 		if len(keyPaths) > 0 {
 			agent.LoadKeys(keyring, keyPaths, os.Stderr)
 		}
-		ext = keyring.(sshagent.ExtendedAgent)
+		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 	}
 	return agent.ListenAndServe(ctx, absSocket, ext)
 }
@@ -82,7 +82,7 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 			if len(cfg.KeyPaths) > 0 {
 				agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
 			}
-			ext = keyring.(sshagent.ExtendedAgent)
+			ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 		} else {
 			store, err := vault.Open(resolved)
 			if err != nil {
@@ -95,7 +95,7 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 		if len(cfg.KeyPaths) > 0 {
 			agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
 		}
-		ext = keyring.(sshagent.ExtendedAgent)
+		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 	}
 	defer os.Remove(socketPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

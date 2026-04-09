@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"net"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
@@ -14,10 +15,11 @@ import (
 func newUnlockCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock",
-		Short: "Unlock the vault with passphrase",
-		Long:  "Connect to the running agent and unlock the vault using the master passphrase. Only applies when [agent].vault = true and [vault].vault_path is set.",
-		Args:  cobra.NoArgs,
-		RunE:  runUnlock,
+		Short: "Unlock the agent with passphrase",
+		Long: "Connect to the running agent and unlock it. For a vault agent, use the master passphrase. " +
+			"For a keys-mode agent, use the passphrase you set when locking.",
+		Args: cobra.NoArgs,
+		RunE: runUnlock,
 	}
 }
 
@@ -25,12 +27,25 @@ func runUnlock(cmd *cobra.Command, _ []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	if !env.Config.AgentVault || env.Config.VaultPath == "" {
-		return style.NewOutput().
-			Error("unlock only applies when the agent uses a vault; set [agent].vault = true and [vault].vault_path, then run 'sshush start'").
-			AsError()
+	socketPath, err := getSocketPath()
+	if err != nil {
+		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	socketPath := env.Config.SocketPath
+	mode, live := agent.LiveBackendMode(socketPath)
+	if !live {
+		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
+	}
+	switch mode {
+	case "vault":
+		return runUnlockVault(socketPath)
+	case "keys":
+		return runUnlockKeys(socketPath)
+	default:
+		return style.NewOutput().Error("unexpected agent backend").AsError()
+	}
+}
+
+func runUnlockVault(socketPath string) error {
 	resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
 	if extErr != nil {
 		if errors.Is(extErr, sshagent.ErrExtensionUnsupported) {
@@ -58,10 +73,8 @@ func runUnlock(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 	}
+	defer ClearBytes(passphrase)
 	if err := client.Unlock(passphrase); err != nil {
-		for i := range passphrase {
-			passphrase[i] = 0
-		}
 		msg := err.Error()
 		if msg == "agent: failure" {
 			msg = "unlock failed: wrong passphrase, or the running agent is not a vault (run 'sshush start' after setting [vault].vault_path in config)"
@@ -70,9 +83,33 @@ func runUnlock(cmd *cobra.Command, _ []string) error {
 		}
 		return style.NewOutput().Error(msg).AsError()
 	}
-	for i := range passphrase {
-		passphrase[i] = 0
-	}
 	style.NewOutput().Success("Vault unlocked.").PrintErr()
+	return nil
+}
+
+func runUnlockKeys(socketPath string) error {
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
+	}
+	defer conn.Close()
+	client := sshagent.NewClient(conn)
+	passphrase, err := readPassphrase("Passphrase: ")
+	if err != nil {
+		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
+	}
+	defer ClearBytes(passphrase)
+	if err := client.Unlock(passphrase); err != nil {
+		msg := err.Error()
+		if msg == "agent: not locked" {
+			style.NewOutput().Info("Agent is already unlocked.").PrintErr()
+			return nil
+		}
+		if strings.Contains(msg, "incorrect passphrase") {
+			return style.NewOutput().Error("unlock failed: wrong passphrase").AsError()
+		}
+		return style.NewOutput().Error("unlock failed: " + msg).AsError()
+	}
+	style.NewOutput().Success("Agent unlocked.").PrintErr()
 	return nil
 }

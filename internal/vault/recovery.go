@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/tyler-smith/go-bip39"
 )
 
@@ -17,11 +18,11 @@ func GenerateRecoveryMnemonic() (string, error) {
 // can restore access. The vault must already be initialized. masterKey is the
 // current unlocked master key (not copied; caller keeps ownership).
 func EnableRecovery(store *VaultStore, masterKey []byte, mnemonic string) error {
-	recoverySalt, err := GenerateSalt()
+	recoverySalt, err := kdf.GenerateSalt()
 	if err != nil {
 		return err
 	}
-	recoveryKey := DeriveKey([]byte(mnemonic), recoverySalt)
+	recoveryKey := kdf.DeriveKey([]byte(mnemonic), recoverySalt)
 	defer wipe(recoveryKey)
 	wrapped, err := encryptBlob(recoveryKey, masterKey)
 	if err != nil {
@@ -45,7 +46,7 @@ func EnableRecoveryWithPassphrase(store *VaultStore, passphrase []byte, mnemonic
 	if meta == nil || len(meta.Salt) == 0 {
 		return errWrongPassphrase
 	}
-	masterKey := DeriveKey(passphrase, meta.Salt)
+	masterKey := kdf.DeriveKey(passphrase, meta.Salt)
 	defer wipe(masterKey)
 	return EnableRecovery(store, masterKey, mnemonic)
 }
