@@ -13,3 +13,7 @@ ok/
 notes
 config
 ssh
+.github/*
+!.github/workflows/
+!.github/workflows/**
+
