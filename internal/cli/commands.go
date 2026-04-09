@@ -19,6 +19,9 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newThemeCommand())
 	root.AddCommand(newFindCommand())
 	root.AddCommand(newCompletionCommand())
-	// root.AddCommand(newLockCommand())
-	// root.AddCommand(newUnlockCommand())
+	root.AddCommand(newLockCommand())
+	root.AddCommand(newUnlockCommand())
+	root.AddCommand(newVaultCommand())
+	root.AddCommand(newServerCommand())
+	root.AddCommand(newGenerateCommand())
 }

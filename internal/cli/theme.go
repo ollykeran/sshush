@@ -34,7 +34,7 @@ func newThemeListCommand() *cobra.Command {
 
 func runThemeList(cmd *cobra.Command, _ []string) error {
 	path, _ := runtime.ResolveConfigPath(cmd.Root())
-	tildePath := utils.ContractHomeDirectory(path)
+	tildePath := utils.DisplayPath(path)
 	th := config.LoadThemeFromPath(path)
 	currentName := presetNameForTheme(th)
 	isCustom := currentName == ""

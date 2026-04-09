@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/runtime"
 )
@@ -140,9 +141,9 @@ func TestEditCommentWithEditor_success(t *testing.T) {
 	dir := t.TempDir()
 	editorPath := writeFakeEditor(t, dir, "editor.sh", "edited-by-script")
 
-	result, err := editCommentWithEditor("old-comment", editorPath)
+	result, err := editcomment.EditCommentWithEditor("old-comment", editorPath)
 	if err != nil {
-		t.Fatalf("editCommentWithEditor: %v", err)
+		t.Fatalf("EditCommentWithEditor: %v", err)
 	}
 	if result != "edited-by-script" {
 		t.Errorf("got %q, want %q", result, "edited-by-script")
@@ -154,11 +155,11 @@ func TestEditCommentWithEditor_exitWithoutSaving(t *testing.T) {
 	dir := t.TempDir()
 	editorPath := writeNoOpEditor(t, dir, "noop-editor.sh")
 
-	_, err := editCommentWithEditor("old-comment", editorPath)
+	_, err := editcomment.EditCommentWithEditor("old-comment", editorPath)
 	if err == nil {
 		t.Fatal("expected ErrExitedWithoutSaving when editor exits without saving")
 	}
-	if !errors.Is(err, ErrExitedWithoutSaving) {
+	if !errors.Is(err, editcomment.ErrExitedWithoutSaving) {
 		t.Errorf("expected ErrExitedWithoutSaving, got: %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestEditCommentWithEditor_editorFails(t *testing.T) {
 	dir := t.TempDir()
 	editorPath := writeFailingEditor(t, dir, "bad-editor.sh")
 
-	_, err := editCommentWithEditor("old-comment", editorPath)
+	_, err := editcomment.EditCommentWithEditor("old-comment", editorPath)
 	if err == nil {
 		t.Fatal("expected error when editor exits non-zero")
 	}

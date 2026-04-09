@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -46,12 +47,28 @@ func writeTestKey(t *testing.T, dir, filename, comment string) string {
 	return privPath
 }
 
+// unixSocketTempDir returns a temp directory with a short path so Unix socket
+// paths fit sockaddr_un (e.g. macOS limits sun_path to 103 bytes; t.TempDir()
+// under /var/folders/... often exceeds that).
+func unixSocketTempDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return t.TempDir()
+	}
+	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // startTestAgent starts an in-process SSH agent on a temp unix socket.
 // Returns the socket path and an agent client. The agent is shut down
 // when the test completes.
 func startTestAgent(t *testing.T) (socketPath string, client sshagent.ExtendedAgent) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := unixSocketTempDir(t)
 	socketPath = filepath.Join(dir, "agent.sock")
 
 	keyring := sshagent.NewKeyring()

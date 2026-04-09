@@ -12,7 +12,8 @@ How to add and maintain godoc comments in sshush. Godoc is Go's built-in documen
 ## Current State
 
 Many internal packages already have good doc comments:
-- `internal/config/default.go`: CreateDefaultConfig, SetupConfig, AddEvalToShell
+- `internal/config/default.go`: StandardConfigFile, WriteDefaultConfigFile, CreateDefaultConfig, SetupConfig, AddEvalToShell
+- `internal/utils/path.go`: ExpandHomeDirectory, ContractHomeDirectory, DisplayPath (use `DisplayPath` for any path shown to users)
 - `internal/runtime/runtime.go`: ResolveConfigPath, ResolveDaemonConfigPath, PidFilePath, ResolveSocketPath
 - `internal/cli/root.go`: LoadMergedConfig, LoadOverrides
 
@@ -30,7 +31,7 @@ Gaps: package-level comments, some exported types, `internal/agent`, `internal/k
 ```go
 // Package config loads and creates sshush configuration.
 // Config is read from TOML at ~/.config/sshush/config.toml (or $SSHUSH_CONFIG).
-// SetupConfig creates a default config and adds eval to bashrc on first run.
+// SetupConfig creates a default config and may append eval $(sshush) to the shell rc on first run.
 package config
 ```
 

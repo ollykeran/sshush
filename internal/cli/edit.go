@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
@@ -23,10 +23,11 @@ func newEditCommand() *cobra.Command {
 	var outputFlag string
 
 	cmd := &cobra.Command{
-		Use: "edit <private-key-filepath>",
+		Use:   "edit <private-key-filepath>",
+		Short: "Edit comment on a private key file",
+		Long:  "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
 		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'
 sshush edit ~/.ssh/id_rsa`,
-		Long: "Edit an SSH private key comment, overwrite the key file or copy to a new file.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				cmd.Help()
@@ -49,7 +50,7 @@ sshush edit ~/.ssh/id_rsa`,
 func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outputFlag string) error {
 	privateKeyPath = utils.ExpandHomeDirectory(privateKeyPath)
 	if _, err := os.Stat(privateKeyPath); err != nil {
-		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", privateKeyPath)).AsError()
+		return style.NewOutput().Error(fmt.Sprintf("key file not found: %s", utils.DisplayPath(privateKeyPath))).AsError()
 	}
 
 	if copyFlag && strings.TrimSpace(outputFlag) == "" {
@@ -69,10 +70,10 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 
 	comment := commentFlag
 	if strings.TrimSpace(comment) == "" {
-		comment, err = editCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
+		comment, err = editcomment.EditCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
-			if errors.Is(err, ErrExitedWithoutSaving) {
-				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.ContractHomeDirectory(privateKeyPath))).Print()
+			if errors.Is(err, editcomment.ErrExitedWithoutSaving) {
+				style.NewOutput().Info(fmt.Sprintf("no changes made to %s", utils.DisplayPath(privateKeyPath))).Print()
 				return nil
 			}
 			return style.NewOutput().Error(err.Error()).AsError()
@@ -114,53 +115,11 @@ func runEdit(privateKeyPath, editorFlag, commentFlag string, copyFlag bool, outp
 	out := style.NewOutput().
 		Success("updated key comment").
 		Info("fingerprint: " + ssh.FingerprintSHA256(signer.PublicKey())).
-		Info("path: " + destPath)
+		Info("path: " + utils.DisplayPath(destPath))
 
 	if copyFlag {
-		out.Info("source: " + privateKeyPath)
+		out.Info("source: " + utils.DisplayPath(privateKeyPath))
 	}
 	out.Print()
 	return nil
-}
-
-// ErrExitedWithoutSaving is returned when the user exits the editor without saving changes.
-var ErrExitedWithoutSaving = errors.New("exited without saving")
-
-func editCommentWithEditor(currentComment, editor string) (string, error) {
-	tmp, err := os.CreateTemp("", "sshush-comment-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	defer tmp.Close()
-
-	if _, err := tmp.WriteString(currentComment + "\n"); err != nil {
-		return "", fmt.Errorf("write temp comment: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp file: %w", err)
-	}
-
-	editorParts := strings.Fields(editor)
-	if len(editorParts) == 0 {
-		return "", fmt.Errorf("invalid editor command")
-	}
-	cmd := exec.Command(editorParts[0], append(editorParts[1:], tmpPath)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("editor failed: %w", err)
-	}
-
-	edited, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("read edited comment: %w", err)
-	}
-	trimmed := strings.TrimSpace(string(edited))
-	if trimmed == strings.TrimSpace(currentComment) {
-		return "", ErrExitedWithoutSaving
-	}
-	return trimmed, nil
 }

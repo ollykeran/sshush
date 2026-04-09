@@ -33,7 +33,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		th = config.LoadThemeFromPath(configPath)
 	}
 
-	m := tui.NewTUI(configPath, socketPath, th)
+	mode := "keys"
+	if env.Config != nil {
+		mode = env.Config.AgentBackendMode()
+	}
+	m := tui.NewTUI(configPath, socketPath, th, mode)
 	_, err := tea.NewProgram(m).Run()
 	return err
 }

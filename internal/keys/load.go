@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,12 +17,19 @@ func LoadKeyMaterial(path string) (*openssh.ParsedKey, interface{}, ssh.Signer, 
 	}
 
 	parsed, err := openssh.ParsePrivateKeyBlob(data)
-	if err != nil {
+	if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 		return nil, nil, nil, fmt.Errorf("encrypted keys not supported")
+	}
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("not an unencrypted OpenSSH private key file")
 	}
 
 	rawKey, err := ssh.ParseRawPrivateKey(data)
 	if err != nil {
+		var pm *ssh.PassphraseMissingError
+		if errors.As(err, &pm) {
+			return nil, nil, nil, fmt.Errorf("encrypted keys not supported")
+		}
 		return nil, nil, nil, fmt.Errorf("parse key: %w", err)
 	}
 

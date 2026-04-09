@@ -8,14 +8,22 @@ import (
 	"github.com/ollykeran/sshush/internal/openssh"
 )
 
-// ExpandHomeDirectory replaces ~ with the current user's home directory.
+// ExpandHomeDirectory expands a leading "~" or "~/" for the current user only.
+// Paths like "~otheruser/foo" are left unchanged.
 func ExpandHomeDirectory(path string) string {
-	if strings.Contains(path, "~") {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		return strings.ReplaceAll(path, "~", homeDir)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return path
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if path == "~" {
+		return homeDir
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(homeDir, path[2:])
 	}
 	return path
 }
@@ -33,6 +41,19 @@ func ContractHomeDirectory(path string) string {
 		return "~" + string(filepath.Separator) + path[len(homeDir)+1:]
 	}
 	return path
+}
+
+// DisplayPath formats a path for user-visible output: it is made absolute when
+// possible, then ContractHomeDirectory is applied so paths under $HOME use ~.
+func DisplayPath(path string) string {
+	if path == "" {
+		return path
+	}
+	p := path
+	if abs, err := filepath.Abs(path); err == nil {
+		p = abs
+	}
+	return ContractHomeDirectory(p)
 }
 
 // DiscoverKeyPaths finds valid private key files in searchDirs.

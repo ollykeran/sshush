@@ -1,4 +1,5 @@
 build/
+tools/
 sshush.pid
 id_*
 *.toml
@@ -8,6 +9,10 @@ openspec/
 ok/
 .vscode/
 .cursor/
+.github/
+notes
+config
+ssh
 .github/*
 !.github/workflows/
 !.github/workflows/**
