@@ -1,3 +1,5 @@
+//go:build gui
+
 // Package gui is a Fyne proof-of-concept desktop UI that reuses the same internal
 // packages as the TUI (agent, sshushd, config, keys, etc.).
 package gui

@@ -1,4 +1,6 @@
-// sshush-gui is an optional Fyne desktop UI (Linux PoC). Build with: just build-gui
+//go:build gui
+
+// sshush-gui is an optional Fyne desktop UI (Linux PoC). Build with: just build-gui (-tags=gui).
 package main
 
 import (

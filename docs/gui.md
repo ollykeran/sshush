@@ -4,7 +4,9 @@ Optional windowed UI in `cmd/sshush-gui` and `internal/gui`. It calls the same p
 
 ## Prerequisites (build)
 
-Fyne uses **CGO**, **`pkg-config`**, and X11 / OpenGL **development** headers. Without them, `just build-gui` fails (same as plain `go build`).
+Fyne uses **CGO**, **`pkg-config`**, and X11 / OpenGL **development** headers. Without them, `just build-gui` fails.
+
+The GUI is behind the **`gui` build tag**: `go build -tags=gui ./cmd/sshush-gui` (or `just build-gui`). Default `go build ./...` and `go test ./...` **omit** Fyne so headless CI does not need Mesa/X11 dev packages.
 
 ### Debian / Ubuntu (and most derivatives)
 
@@ -35,15 +37,15 @@ WSL2: use WSLg or an X server; you still need the dev packages above on the Linu
 
 From the repo root (see `justfile`):
 
-- `just build-gui` — produces `build/sshush-gui`
-- `just run-gui` — `go run ./cmd/sshush-gui`
+- `just build-gui` — produces `build/sshush-gui` (`-tags=gui`)
+- `just run-gui` — `go run -tags=gui ./cmd/sshush-gui`
 
-Default `just build` only builds `sshush` and `sshushd`; the GUI is opt-in.
+Default `just build` only builds `sshush` and `sshushd`; the GUI is opt-in and requires `-tags=gui`.
 
 ## Tests
 
-- `just test-gui` runs `go test` for `internal/gui` (currently the hex colour helper). **Building `internal/gui` still requires the same Fyne/CGO toolchain as `build-gui`.**
-- Headless CI often has no GPU/X11 dev libraries; compiling the GUI target there is optional. Add a dedicated workflow job if you want to gate on `build-gui`.
+- `just test-gui` runs `go test -tags=gui ./internal/gui/...` (theme helpers and Fyne wiring). **Requires the same Fyne/CGO toolchain as `build-gui`.**
+- CI uses the default tag set (`go test ./...`), which skips `internal/gui` Fyne code; use a dedicated job with `-tags=gui` and apt-installed dev libs if you want to gate on the GUI in CI.
 
 ## Manual PoC checklist
 

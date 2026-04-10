@@ -48,18 +48,18 @@ check-gui-deps:
         exit 1
     fi
 
-# Fyne desktop PoC (Linux + CGO + X11/Wayland dev libs). See docs/gui.md.
+# Fyne desktop PoC (Linux + CGO + X11/Wayland dev libs). See docs/gui.md. Requires -tags=gui.
 build-gui: deps build-sshushd
     #check-gui-deps
     mkdir -p {{ build_dir }}
-    go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary_gui }} ./cmd/sshush-gui
+    go build -tags=gui -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binary_gui }} ./cmd/sshush-gui
 
 run-gui:
-    go run ./cmd/sshush-gui
+    go run -tags=gui ./cmd/sshush-gui
 
-# Compiles internal/gui (same prerequisites as build-gui). Not suitable for headless CI without dev packages.
+# Compiles internal/gui with Fyne (same prerequisites as build-gui).
 test-gui:
-    go test ./internal/gui/... -count=1
+    go test -tags=gui ./internal/gui/... -count=1
 
 test pkg="./...":
     go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
@@ -92,15 +92,12 @@ build-mac:
 doc:
     go doc -http
 
-# Excludes cmd/sshush-gui and internal/gui (Fyne needs system GUI dev packages).
+# Default build omits Fyne (use -tags=gui for GUI); same as CI.
 doc-check:
     #!/usr/bin/env bash
     set -euo pipefail
     LDF='-X github.com/ollykeran/sshush/internal/version.Version={{ version }}'
-    go build -ldflags "$LDF" -o /dev/null ./cmd/sshush
-    go build -ldflags "$LDF" -o /dev/null ./cmd/sshushd
-    mapfile -t _gui_pkgs < <(go list ./internal/... | grep -vF '/internal/gui' || true)
-    if ((${#_gui_pkgs[@]})); then go build "${_gui_pkgs[@]}"; fi
+    go build -ldflags "$LDF" -o /dev/null ./...
     go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config
 
 run:
