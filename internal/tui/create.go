@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/keys"
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 type keyGenDoneMsg struct {
@@ -502,7 +503,7 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 
 	fullPath := filepath.Join(s.dirInput.Value(), s.filenameIn.Value())
 	if _, err := os.Stat(fullPath); err == nil {
-		sections = append(sections, st.WarnStyle.Render("  ⚠ File exists: "+fullPath))
+		sections = append(sections, st.WarnStyle.Render("  ⚠ File exists: "+utils.DisplayPath(fullPath)))
 	}
 
 	sections = append(sections, " "+s.saveBtn.View(st))
@@ -527,8 +528,8 @@ func (s *CreateScreen) viewResultPanel(w int) string {
 	var sections []string
 
 	sections = append(sections, st.SectionBox("Public Key", st.AccentStyle.Render(s.genResult.pubKeyStr), w, false))
-	sections = append(sections, st.SectionBox("Private Key", st.AccentStyle.Render(s.genResult.privPath), w, false))
-	sections = append(sections, st.SectionBox("Public Key File", st.AccentStyle.Render(s.genResult.pubPath), w, false))
+	sections = append(sections, st.SectionBox("Private Key", st.AccentStyle.Render(utils.DisplayPath(s.genResult.privPath)), w, false))
+	sections = append(sections, st.SectionBox("Public Key File", st.AccentStyle.Render(utils.DisplayPath(s.genResult.pubPath)), w, false))
 
 	return strings.Join(sections, "\n")
 }
