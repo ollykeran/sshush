@@ -1,0 +1,72 @@
+# Opens a PR when open Dependabot alerts are high/critical.
+# Uses just update-security (govulncheck bumps). CI runs just test on that PR.
+# Release stays tag-only (release.yml) — this workflow never tags or packages.
+
+name: Security bump
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check high/critical Dependabot alerts
+        id: alerts
+        env:
+          GH_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          if ! gh api \
+            "repos/${{ github.repository }}/dependabot/alerts?state=open&per_page=100" \
+            >"$tmp"; then
+            echo "::error::Failed to list Dependabot alerts. If 403, set DEPENDABOT_ALERTS_TOKEN (Dependabot alerts: read)."
+            cat "$tmp" >&2 || true
+            exit 1
+          fi
+          count="$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' "$tmp")"
+          echo "high_or_critical=${count}" >> "$GITHUB_OUTPUT"
+          if [[ "$count" -eq 0 ]]; then
+            echo "No open high/critical Dependabot alerts."
+          else
+            echo "Found ${count} open high/critical Dependabot alert(s)."
+            jq -r '.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical") | "- \(.security_advisory.severity): \(.dependency.package.name) (\(.security_advisory.ghsa_id // "n/a"))"' "$tmp"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.alerts.outputs.high_or_critical != '0'
+        with:
+          go-version: "1.26"
+
+      - uses: extractions/setup-just@v3
+        if: steps.alerts.outputs.high_or_critical != '0'
+
+      - name: Bump vulnerable modules
+        if: steps.alerts.outputs.high_or_critical != '0'
+        run: just update-security
+
+      - name: Create pull request
+        if: steps.alerts.outputs.high_or_critical != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/security-bumps
+          delete-branch: true
+          title: "chore(deps): security bumps for high/critical alerts"
+          labels: |
+            security
+            dependencies
+          body: |
+            Automated security dependency bumps (`just update-security`) after open Dependabot alerts at high or critical severity.
+
+            CI runs `just test` on this PR. Merge manually — no release/tag from this workflow.
+          commit-message: "chore(deps): security bumps for high/critical alerts"

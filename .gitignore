@@ -8,4 +8,4 @@ openspec/
 ok/
 .vscode/
 .cursor/
-.github/
+.github/events/push-tag.json
