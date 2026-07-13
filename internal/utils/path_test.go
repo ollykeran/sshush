@@ -18,6 +18,8 @@ func TestExpandHomeDirectory(t *testing.T) {
 		want string
 	}{
 		{"home directory", "~/id_rsa", filepath.Join(homeDir, "id_rsa")},
+		{"tilde only", "~", homeDir},
+		{"tilde in middle unchanged", filepath.Join("a", "~", "b"), filepath.Join("a", "~", "b")},
 		{"relative path", "./id_rsa", "./id_rsa"},
 		{"absolute path", filepath.Join(homeDir, "id_rsa"), filepath.Join(homeDir, "id_rsa")},
 	}
@@ -53,5 +55,21 @@ func TestContractHomeDirectory(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDisplayPath(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absUnderHome := filepath.Join(homeDir, "foo", "bar")
+	got := DisplayPath(absUnderHome)
+	want := filepath.Join("~", "foo", "bar")
+	if got != want {
+		t.Errorf("under home: got %q, want %q", got, want)
+	}
+	if got := DisplayPath(""); got != "" {
+		t.Errorf("empty: got %q", got)
 	}
 }
