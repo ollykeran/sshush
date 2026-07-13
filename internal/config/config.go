@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/style"
@@ -19,11 +21,96 @@ type ThemeSection struct {
 	Warning string `toml:"warning"`
 }
 
-// Config holds socket path, key paths, and optional theme from the TOML config file.
+// Config is the runtime view of the TOML file (flat fields for callers).
+// On disk the file uses [agent], [vault], [server], and [theme] sections.
 type Config struct {
-	KeyPaths   []string    `toml:"key_paths"`   // Paths to private keys to load into the agent.
-	SocketPath string      `toml:"socket_path"` // Unix socket path for the agent.
-	Theme      ThemeSection `toml:"theme"`      // Optional theme (preset name or hex keys).
+	KeyPaths   []string // From [agent].key_paths; when AgentVault is false, keys load from these paths.
+	SocketPath string   // From [agent].socket_path.
+	AgentVault bool     // From [agent].vault; when true, sshushd uses VaultPath as the agent backend.
+	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentVault is false).
+	Theme      ThemeSection
+
+	ServerListenPort     int64  // From [server].listen_port.
+	ServerAuthorizedKeys string // From [server].authorized_keys.
+	ServerHostKey        string // From [server].host_key.
+}
+
+// configDocument matches the on-disk TOML layout.
+type configDocument struct {
+	Agent  agentSection  `toml:"agent"`
+	Vault  vaultSection  `toml:"vault"`
+	Server serverSection `toml:"server"`
+	Theme  ThemeSection  `toml:"theme"`
+}
+
+type agentSection struct {
+	SocketPath string   `toml:"socket_path"`
+	KeyPaths   []string `toml:"key_paths"`
+	Vault      bool     `toml:"vault"`
+}
+
+type vaultSection struct {
+	VaultPath string `toml:"vault_path"`
+}
+
+type serverSection struct {
+	ListenPort     int64  `toml:"listen_port"`
+	AuthorizedKeys string `toml:"authorized_keys"`
+	HostKey        string `toml:"host_key"`
+}
+
+// configDocumentThemePreset is used when encoding theme preset-only (avoid empty hex keys in file).
+type configDocumentThemePreset struct {
+	Agent  agentSection  `toml:"agent"`
+	Vault  vaultSection  `toml:"vault"`
+	Server serverSection `toml:"server"`
+	Theme  struct {
+		Name string `toml:"name"`
+	} `toml:"theme"`
+}
+
+func toDocument(cfg Config) configDocument {
+	a := agentSection{
+		SocketPath: cfg.SocketPath,
+		KeyPaths:   cfg.KeyPaths,
+		Vault:      cfg.AgentVault,
+	}
+	if a.KeyPaths == nil {
+		a.KeyPaths = []string{}
+	}
+	doc := configDocument{Agent: a, Theme: cfg.Theme}
+	if cfg.VaultPath != "" {
+		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
+	}
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" {
+		doc.Server = serverSection{
+			ListenPort:     cfg.ServerListenPort,
+			AuthorizedKeys: cfg.ServerAuthorizedKeys,
+			HostKey:        cfg.ServerHostKey,
+		}
+	}
+	return doc
+}
+
+func (d configDocument) toPresetDocument(name string) configDocumentThemePreset {
+	return configDocumentThemePreset{
+		Agent:  d.Agent,
+		Vault:  d.Vault,
+		Server: d.Server,
+		Theme: struct {
+			Name string `toml:"name"`
+		}{Name: name},
+	}
+}
+
+// MarshalConfig serializes cfg to canonical sectioned TOML bytes.
+func MarshalConfig(cfg Config) ([]byte, error) {
+	doc := toDocument(cfg)
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // EnsureSSHDirectory creates ~/.ssh with mode 0700 if it does not exist.
@@ -40,23 +127,89 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 
-	cfg := Config{}
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	var doc configDocument
+	if _, err := toml.Decode(string(data), &doc); err != nil {
+		return Config{}, err
+	}
+
+	cfg, err := documentToConfig(&doc)
+	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.SocketPath = utils.ExpandHomeDirectory(cfg.SocketPath)
+	if cfg.SocketPath != "" {
+		absConfigPath, err := filepath.Abs(path)
+		if err != nil {
+			absConfigPath = path
+		}
+		// Relative socket_path (e.g. legacy "sshush.sock" when XDG was unset) must not
+		// depend on the process cwd; anchor it to the config file's directory.
+		if !filepath.IsAbs(cfg.SocketPath) {
+			cfg.SocketPath = filepath.Clean(filepath.Join(filepath.Dir(absConfigPath), cfg.SocketPath))
+		}
+	}
+	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
+	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
+	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)
 	for i, p := range cfg.KeyPaths {
 		cfg.KeyPaths[i] = utils.ExpandHomeDirectory(p)
 	}
 
-	if cfg.KeyPaths == nil {
-		return Config{}, style.NewOutput().Error("key_paths is required").AsError()
+	return cfg, nil
+}
+
+// VaultPathForAgent returns the vault file path when the agent should use the vault backend; otherwise empty.
+func (c Config) VaultPathForAgent() string {
+	if !c.AgentVault || c.VaultPath == "" {
+		return ""
 	}
-	if cfg.SocketPath == "" {
-		return Config{}, style.NewOutput().Error("socket_path is required").AsError()
+	return c.VaultPath
+}
+
+// AgentBackendMode returns a short label for the agent storage backend: "vault" or "keys".
+func (c Config) AgentBackendMode() string {
+	if c.VaultPathForAgent() != "" {
+		return "vault"
+	}
+	return "keys"
+}
+
+func documentToConfig(doc *configDocument) (Config, error) {
+	if doc.Agent.SocketPath == "" {
+		return Config{}, style.NewOutput().
+			Error("[agent].socket_path is required").
+			AsError()
 	}
 
+	vaultPath := doc.Vault.VaultPath
+	if doc.Agent.Vault {
+		if vaultPath == "" {
+			return Config{}, style.NewOutput().
+				Error("when [agent].vault is true, [vault].vault_path must be set").
+				AsError()
+		}
+	} else {
+		hasKeys := doc.Agent.KeyPaths != nil
+		hasVaultPath := vaultPath != ""
+		if !hasKeys && !hasVaultPath {
+			return Config{}, style.NewOutput().
+				Error("config must set [agent].key_paths and/or [vault].vault_path when [agent].vault is false").
+				Info("Use key_paths for the agent; optional vault_path for sshush vault commands while the agent uses key_paths.").
+				AsError()
+		}
+	}
+
+	cfg := Config{
+		SocketPath:           doc.Agent.SocketPath,
+		KeyPaths:             doc.Agent.KeyPaths,
+		AgentVault:           doc.Agent.Vault,
+		VaultPath:            vaultPath,
+		Theme:                doc.Theme,
+		ServerListenPort:     doc.Server.ListenPort,
+		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
+		ServerHostKey:        doc.Server.HostKey,
+	}
 	return cfg, nil
 }
 
@@ -89,11 +242,15 @@ func LoadThemeFromPath(path string) theme.Theme {
 	if err != nil {
 		return theme.DefaultTheme()
 	}
-	var structWithTheme struct {
-		Theme ThemeSection `toml:"theme"`
-	}
-	if err := toml.Unmarshal(data, &structWithTheme); err != nil {
+	var doc configDocument
+	if _, err := toml.Decode(string(data), &doc); err != nil {
 		return theme.DefaultTheme()
 	}
-	return ResolveThemeFromSection(structWithTheme.Theme)
+	return ResolveThemeFromSection(doc.Theme)
+}
+
+func decodeConfigDocument(data []byte) (configDocument, error) {
+	var doc configDocument
+	_, err := toml.Decode(string(data), &doc)
+	return doc, err
 }
