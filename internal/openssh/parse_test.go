@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"testing"
 
 	ssh "golang.org/x/crypto/ssh"
@@ -122,6 +123,25 @@ func TestParsePrivateKeyBlob_and_CommentFromParsedKey(t *testing.T) {
 	}
 	if parsed.Comment != wantComment {
 		t.Errorf("parsed.Comment = %q, want %q", parsed.Comment, wantComment)
+	}
+}
+
+func TestParsePrivateKeyBlob_EncryptedOpenSSHReturnsErrEncryptedPrivateKey(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "c", []byte("secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := pem.EncodeToMemory(block)
+	parsed, err := ParsePrivateKeyBlob(data)
+	if !errors.Is(err, ErrEncryptedPrivateKey) {
+		t.Fatalf("ParsePrivateKeyBlob err = %v, want %v", err, ErrEncryptedPrivateKey)
+	}
+	if parsed != nil {
+		t.Errorf("parsed = %v, want nil", parsed)
 	}
 }
 

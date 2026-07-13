@@ -52,6 +52,7 @@ type Skeleton struct {
 	themeBeforePicker       theme.Theme // restored on Esc so we don't save
 	themeMessage            string      // footer message: session only, saved, save failed
 	themeMessageGeneration  int         // incremented each time message is set, so timeout only clears if still current
+	agentBackendMode        string      // "vault" or "keys"; shown in footer (from config at TUI start)
 }
 
 // Styles returns the current styles (derived from theme). Use for all TUI rendering.
@@ -952,26 +953,29 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 	themeWidgetMarked := zone.Mark("footer-theme", themeWidget)
 	helpWidgetMarked := zone.Mark("footer-help", rightContent)
 
-	leftW := lipgloss.Width(leftContent)
-	rightContentW := lipgloss.Width(rightContent)
-	themeWidgetW := lipgloss.Width(themeWidget)
-	sizeInfoW := lipgloss.Width(sizeInfo)
+	suffix := themeWidgetMarked + bc.Render("─") + helpWidgetMarked + bc.Render("─╯")
+	modeSeg := ""
+	if m := strings.TrimSpace(s.agentBackendMode); m != "" {
+		modeSeg = " " + st.DimStyle.Render(m) + " "
+	}
+	rightBlock := sizeInfo + bc.Render("─") + suffix
+	if modeSeg != "" {
+		rightBlock = sizeInfo + bc.Render("─") + modeSeg + bc.Render("─") + suffix
+	}
 
-	// ╰─(2) + leftContent + fill + sizeInfo + ─(1) + theme + rightContent + ─╯(2) = w
-	fillW := w - leftW - rightContentW - themeWidgetW - sizeInfoW - 6
+	leftPrefix := bc.Render("╰─") + leftContent
+	fillW := w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
+	if fillW < 1 && modeSeg != "" {
+		rightBlock = sizeInfo + bc.Render("─") + suffix
+		fillW = w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
+	}
 	if fillW < 1 {
 		fillW = 1
 	}
 
-	return bc.Render("╰─") +
-		leftContent +
+	return leftPrefix +
 		bc.Render(strings.Repeat("─", fillW)) +
-		sizeInfo +
-		bc.Render("─") +
-		themeWidgetMarked +
-		bc.Render("─") +
-		helpWidgetMarked +
-		bc.Render("─╯")
+		rightBlock
 }
 
 func (s *Skeleton) View() tea.View {

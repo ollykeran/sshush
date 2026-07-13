@@ -10,6 +10,7 @@ import (
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/version"
 )
 
@@ -21,19 +22,20 @@ func main() {
 		fmt.Printf("sshushd %s (%s)\n", version.Version, stdruntime.Version())
 		os.Exit(0)
 	}
-	configPath := runtime.ResolveDaemonConfigPath()
 
+	configPath := runtime.ResolveDaemonConfigPath()
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		style.NewOutput().Error("sshushd: load config: " + err.Error()).PrintErr()
 		os.Exit(1)
 	}
+
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
-		style.NewOutput().Error("sshushd: agent already running at " + cfg.SocketPath).PrintErr()
+		style.NewOutput().Error("sshushd: agent already running at " + utils.DisplayPath(cfg.SocketPath)).PrintErr()
 		os.Exit(1)
 	}
 	pidFilePath := runtime.PidFilePath()
-	if err := sshushd.RunDaemonOnly(cfg.SocketPath, cfg.KeyPaths, pidFilePath); err != nil {
+	if err := sshushd.RunDaemonOnly(cfg, pidFilePath); err != nil {
 		style.NewOutput().Error("sshushd: " + err.Error()).PrintErr()
 		os.Exit(1)
 	}

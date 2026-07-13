@@ -35,7 +35,11 @@ func runFind(noDefaults, recursive bool, findPaths ...string) error {
 	out := style.NewOutput()
 
 	if len(paths) == 0 {
-		out.Error("no keys found in: " + strings.Join(findPaths, ", ")).Print()
+		display := make([]string, len(findPaths))
+		for i, p := range findPaths {
+			display[i] = utils.DisplayPath(p)
+		}
+		out.Error("no keys found in: " + strings.Join(display, ", ")).Print()
 		return nil
 	}
 	out.Success("* Found " + strconv.Itoa(len(paths)) + " keys")
@@ -46,16 +50,16 @@ func runFind(noDefaults, recursive bool, findPaths ...string) error {
 	}
 	if cwd {
 		cwd, _ := os.Getwd()
-		searchPathsDisplay = append(searchPathsDisplay, utils.ContractHomeDirectory(cwd))
+		searchPathsDisplay = append(searchPathsDisplay, cwd)
 	}
-	contracted := make([]string, len(searchPathsDisplay))
+	displaySearch := make([]string, len(searchPathsDisplay))
 	for i, p := range searchPathsDisplay {
-		contracted[i] = utils.ContractHomeDirectory(p)
+		displaySearch[i] = utils.DisplayPath(p)
 	}
-	out.Info("search paths: " + strings.Join(contracted, " "))
+	out.Info("search paths: " + strings.Join(displaySearch, " "))
 	out.Spacer()
 	for _, path := range paths {
-		out.Info(utils.ContractHomeDirectory(path))
+		out.Info(utils.DisplayPath(path))
 	}
 	out.Print()
 	return nil

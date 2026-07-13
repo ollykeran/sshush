@@ -12,7 +12,11 @@ import (
 const openssh_auth_magic = "openssh-key-v1\x00"
 
 // ErrNotOpenSSHKey is returned by ParsePrivateKeyBlob when the data is not an unencrypted OpenSSH private key.
+// Encrypted OpenSSH keys return [ErrEncryptedPrivateKey] instead.
 var ErrNotOpenSSHKey = errors.New("openssh: not an unencrypted OpenSSH private key")
+
+// ErrEncryptedPrivateKey is returned when the file is a passphrase-protected private key.
+var ErrEncryptedPrivateKey = errors.New("encrypted private key (passphrase-protected); sshush only supports unencrypted keys")
 
 // ParsedKey holds parsed OpenSSH key metadata.
 type ParsedKey struct {
@@ -46,7 +50,7 @@ func ParsePrivateKeyBlob(data []byte) (*ParsedKey, error) {
 		return nil, ErrNotOpenSSHKey
 	}
 	if outer.CipherName != "none" {
-		return nil, ErrNotOpenSSHKey
+		return nil, ErrEncryptedPrivateKey
 	}
 
 	var pk struct {

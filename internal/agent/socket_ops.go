@@ -17,6 +17,17 @@ func withSocketClient(socketPath string, fn func(client sshagent.ExtendedAgent) 
 	return fn(sshagent.NewClient(conn))
 }
 
+// CallExtension calls the agent extension and returns the response or error.
+func CallExtension(socketPath, extensionType string, payload []byte) ([]byte, error) {
+	var result []byte
+	err := withSocketClient(socketPath, func(client sshagent.ExtendedAgent) error {
+		var e error
+		result, e = client.Extension(extensionType, payload)
+		return e
+	})
+	return result, err
+}
+
 // AddKeyToSocketFromPath adds a key file to the running agent socket.
 func AddKeyToSocketFromPath(socketPath, path string) error {
 	return withSocketClient(socketPath, func(client sshagent.ExtendedAgent) error {

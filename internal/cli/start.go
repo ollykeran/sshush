@@ -6,9 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -31,8 +34,6 @@ func runStart(cmd *cobra.Command, _ []string) error {
 }
 
 // runStartDaemon resolves config, starts the sshushd binary with SSHUSH_CONFIG, and waits for the socket.
-// On success the export line goes to stdout (for eval) and all other output goes to stderr.
-// Used by both start and serve commands.
 func runStartDaemon(cmd *cobra.Command) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
@@ -53,12 +54,13 @@ func runStartDaemon(cmd *cobra.Command) error {
 			fmt.Fprintln(os.Stdout, "export SSH_AUTH_SOCK='"+absSocket+"'")
 		}
 		out := style.NewOutput().
-			Success("* sshushd running at " + absSocket)
+			Success("* sshushd running at " + utils.DisplayPath(absSocket))
 		conn, err := net.Dial("unix", cfg.SocketPath)
 		if err == nil {
 			defer conn.Close()
+			client := sshagent.NewClient(conn)
 			out.Spacer()
-			AppendKeysTo(sshagent.NewClient(conn), out)
+			_ = AppendKeysTo(client, out, cfg.SocketPath, cfg.VaultPathForAgent())
 		}
 		out.PrintErr()
 		return nil
@@ -68,19 +70,34 @@ func runStartDaemon(cmd *cobra.Command) error {
 	loadable := 0
 	for _, kp := range cfg.KeyPaths {
 		if _, err := os.Stat(kp); err != nil {
-			out.Warn("key not found: " + kp)
+			out.Warn("key not found: " + utils.DisplayPath(kp))
 		} else {
 			loadable++
 		}
 	}
-	if loadable == 0 {
+	if vp := cfg.VaultPathForAgent(); vp != "" {
+		resolvedVault := vault.ResolveToFile(vp)
+		if _, err := os.Stat(resolvedVault); err != nil && os.IsNotExist(err) {
+			if loadable > 0 {
+				displayPath := utils.DisplayPath(resolvedVault)
+				out.Warn("[vault].vault_path is set but vault file not found at " + displayPath + "; starting with [agent].key_paths instead")
+			} else {
+				displayPath := utils.DisplayPath(resolvedVault)
+				return style.NewOutput().
+					Error("[vault].vault_path is set but vault file not found at " + displayPath).
+					Info("Run 'sshush vault init' to create it.").
+					AsError()
+			}
+		}
+	}
+	if loadable == 0 && cfg.VaultPathForAgent() == "" {
 		out.Error("no keys will be loaded")
 	}
 
 	pidFilePath := runtime.PidFilePath()
 	if _, err := os.Stat(pidFilePath); err == nil {
 		return style.NewOutput().
-			Error("sshushd already running (pidfile " + pidFilePath + " exists)").
+			Error("sshushd already running (pidfile " + utils.DisplayPath(pidFilePath) + " exists)").
 			Info("use 'sshush reload' to apply config changes").
 			AsError()
 	}
@@ -88,12 +105,14 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	return startSuccess(out, cfg.SocketPath)
+	return startSuccess(out, &cfg)
 }
 
 // startSuccess prints the export line to stdout (for eval) only when stdout is
 // piped, and the pretty success message (and any prior warnings) to stderr.
-func startSuccess(out *style.Output, socketPath string) error {
+// If the agent uses a vault, prompts for passphrase and unlocks before listing keys.
+func startSuccess(out *style.Output, cfg *config.Config) error {
+	socketPath := cfg.SocketPath
 	absSocket, _ := filepath.Abs(socketPath)
 
 	if !isTTY(os.Stdout) {
@@ -103,13 +122,37 @@ func startSuccess(out *style.Output, socketPath string) error {
 	if out.Len() > 0 {
 		out.Spacer()
 	}
-	out.Success("* sshushd started with socket: " + absSocket)
+	out.Success("* sshushd started with socket: " + utils.DisplayPath(absSocket))
 
 	conn, err := net.Dial("unix", socketPath)
 	if err == nil {
 		defer conn.Close()
+		client := sshagent.NewClient(conn)
+		if vp := cfg.VaultPathForAgent(); vp != "" {
+			resolvedVault := vault.ResolveToFile(vp)
+			store, openErr := vault.Open(resolvedVault)
+			if openErr != nil {
+				out.Spacer()
+				out.Error("vault: " + openErr.Error())
+			} else if store.GetMetadata() == nil {
+				// Vault file missing or uninitialized; daemon fell back to key_paths or empty
+				// Do not prompt for passphrase
+			} else {
+				passphrase, err := readPassphrase("Passphrase: ")
+				if err != nil {
+					out.Spacer()
+					out.Error("unlock skipped: " + err.Error())
+				} else {
+					if err := client.Unlock(passphrase); err != nil {
+						out.Spacer()
+						out.Error("unlock failed: " + err.Error())
+					}
+					ClearBytes(passphrase)
+				}
+			}
+		}
 		out.Spacer()
-		AppendKeysTo(sshagent.NewClient(conn), out)
+		_ = AppendKeysTo(client, out, socketPath, cfg.VaultPathForAgent())
 	}
 
 	out.PrintErr()
