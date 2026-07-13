@@ -17,6 +17,7 @@ import (
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.BoolVar(showVersion, "v", false, "print version and exit")
+	serverMode := flag.Bool("server", false, "run TCP SSH server daemon only")
 	flag.Parse()
 	if *showVersion {
 		fmt.Printf("sshushd %s (%s)\n", version.Version, stdruntime.Version())
@@ -28,6 +29,15 @@ func main() {
 	if err != nil {
 		style.NewOutput().Error("sshushd: load config: " + err.Error()).PrintErr()
 		os.Exit(1)
+	}
+
+	if *serverMode {
+		serverPidFilePath := runtime.ServerPidFilePath()
+		if err := sshushd.RunServerOnly(cfg, serverPidFilePath); err != nil {
+			style.NewOutput().Error("sshushd: " + err.Error()).PrintErr()
+			os.Exit(1)
+		}
+		return
 	}
 
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
