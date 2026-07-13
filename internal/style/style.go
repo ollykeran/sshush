@@ -2,6 +2,7 @@ package style
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"os"
 	"strings"
@@ -23,8 +24,10 @@ var (
 	err       lipgloss.Style
 	box       lipgloss.Style
 	text      lipgloss.Style
+	textBold  lipgloss.Style
 	highlight lipgloss.Style
 	focus     lipgloss.Style
+	dim       lipgloss.Style
 )
 
 func rebuildStyles() {
@@ -32,8 +35,10 @@ func rebuildStyles() {
 	warn = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 	err = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
 	text = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Text))
+	textBold = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Text))
 	highlight = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Accent))
 	focus = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Focus))
+	dim = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Text)).Faint(true)
 	box = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(currentTheme.Focus)).
@@ -46,6 +51,17 @@ func SetTheme(t theme.Theme) {
 	rebuildStyles()
 }
 
+// StylesForInput returns the box, focus, and blurred lipgloss styles for use by input components (e.g. passphrase prompt).
+// Use focusStyle for focused state, blurredStyle for unfocused (e.g. placeholder/secondary text).
+func StylesForInput() (boxStyle, focusStyle, blurredStyle lipgloss.Style) {
+	return box, focus, text
+}
+
+// InputCursorColor returns the theme focus color for the text input cursor (e.g. Cursor.Color).
+func InputCursorColor() color.Color {
+	return lipgloss.Color(currentTheme.Focus)
+}
+
 // Standalone style functions - all driven by the current theme (SetTheme).
 func Success(s string) string   { return success.Render(s) }
 func Text(s string) string      { return text.Render(s) }
@@ -53,7 +69,64 @@ func Highlight(s string) string { return highlight.Render(s) }
 func Focus(s string) string     { return focus.Render(s) }
 func Warn(s string) string      { return warn.Render(s) }
 func Err(s string) string       { return err.Render(s) }
-func Box(s string) string       { return box.Render(s) }
+func Dim(s string) string       { return dim.Render(s) }
+
+// AgentModeIndicatorLine shows live backend when the socket is reachable; otherwise config with a note.
+// Secondary details use normal text colour so they stay readable (not faint dim).
+// If skipUnreachableNote is true (e.g. sshush start before the socket exists), omit "(agent not reachable)".
+func AgentModeIndicatorLine(configMode, liveMode string, liveReachable bool, skipUnreachableNote bool) string {
+	if liveReachable && liveMode != "" {
+		line := Focus("Agent: ") + Highlight(liveMode)
+		if liveMode != configMode {
+			line += Text(fmt.Sprintf("  (config: %s)", configMode))
+		}
+		return line
+	}
+	line := Focus("Agent: ") + Highlight(configMode)
+	if !skipUnreachableNote {
+		line += Text(" (agent not reachable)")
+	}
+	return line
+}
+
+func Box(s string) string {
+	return renderBox(s, effectiveBoxLimit(0))
+}
+
+// BoxWithMaxWidth renders content in a box with word wrapping when lines would
+// exceed the limit: min(terminal width, maxWidth) on a tty when maxWidth > 0,
+// otherwise terminal width; without a tty, maxWidth when maxWidth > 0.
+// When content fits, the box stays as narrow as the content (no full-width padding).
+func BoxWithMaxWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return box.Render(s)
+	}
+	return renderBox(s, effectiveBoxLimit(maxWidth))
+}
+
+func maxContentLineWidth(s string) int {
+	max := 0
+	for _, line := range strings.Split(s, "\n") {
+		if w := lipgloss.Width(line); w > max {
+			max = w
+		}
+	}
+	return max
+}
+
+// renderBox renders at natural width when the outer block fits within limit;
+// otherwise uses box.Width(limit) so long lines wrap on narrow terminals.
+func renderBox(s string, limit int) string {
+	if limit <= 0 {
+		return box.Render(s)
+	}
+	inner := maxContentLineWidth(s)
+	outerMin := inner + box.GetHorizontalFrameSize()
+	if outerMin <= limit {
+		return box.Render(s)
+	}
+	return box.Width(limit).Render(s)
+}
 
 // Output is a builder for styled terminal output. Append lines with semantic
 // level methods (Success/Info/Warn/Error), then flush with Print() or AsError().
@@ -65,10 +138,11 @@ type Output struct {
 func NewOutput() *Output { return &Output{} }
 
 // Semantic append methods - encode color from theme, callers describe intent.
-func (o *Output) Success(s string) *Output { return o.add(success.Render(s)) }
-func (o *Output) Info(s string) *Output    { return o.add(text.Render(s)) }
-func (o *Output) Warn(s string) *Output    { return o.add(warn.Render(s)) }
-func (o *Output) Error(s string) *Output   { return o.add(err.Render(s)) }
+func (o *Output) Success(s string) *Output  { return o.add(success.Render(s)) }
+func (o *Output) Info(s string) *Output     { return o.add(text.Render(s)) }
+func (o *Output) InfoBold(s string) *Output { return o.add(textBold.Render(s)) }
+func (o *Output) Warn(s string) *Output     { return o.add(warn.Render(s)) }
+func (o *Output) Error(s string) *Output    { return o.add(err.Render(s)) }
 
 // Spacer appends a blank line for visual separation.
 func (o *Output) Spacer() *Output { return o.add("") }
@@ -84,8 +158,12 @@ func (o *Output) add(s string) *Output {
 // Len returns the number of lines added.
 func (o *Output) Len() int { return len(o.lines) }
 
-// Box renders all lines inside a rounded border box string.
-func (o *Output) Box() string { return box.Render(strings.Join(o.lines, "\n")) }
+// Box renders all lines inside a rounded border box string. On a tty, lines
+// wider than the terminal wrap inside the box; otherwise the box is only as wide
+// as the content.
+func (o *Output) Box() string {
+	return renderBox(strings.Join(o.lines, "\n"), effectiveBoxLimit(0))
+}
 
 // String renders all lines joined by newlines, without a border.
 func (o *Output) String() string { return strings.Join(o.lines, "\n") }
@@ -98,11 +176,17 @@ func (o *Output) Print() {
 }
 
 // PrintTo renders as a box to w.
-func (o *Output) PrintTo(w io.Writer) { fmt.Fprintln(w, o.Box()) }
+func (o *Output) PrintTo(w io.Writer) {
+	if o.Len() > 0 {
+		fmt.Fprintln(w, o.Box())
+	}
+}
 
 // PrintErr renders as a box to stderr.
 func (o *Output) PrintErr() {
-	fmt.Fprintln(os.Stderr, o.Box())
+	if o.Len() > 0 {
+		fmt.Fprintln(os.Stderr, o.Box())
+	}
 }
 
 // AsError wraps the Output in a StyledError for display at the Execute level.
