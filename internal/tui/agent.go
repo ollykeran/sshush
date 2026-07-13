@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/table"
@@ -17,6 +16,7 @@ import (
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -600,7 +600,7 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			linePrefix = "> "
 		}
-		rendered := style.Render(linePrefix + visible[i])
+		rendered := style.Render(linePrefix + utils.DisplayPath(visible[i]))
 		rendered = zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), rendered)
 		lines = append(lines, rendered)
 	}
@@ -704,10 +704,11 @@ func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 
 func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 	return func() tea.Msg {
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		// Default autoload on for vault (same as CLI without --no-autoload).
+		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, true); err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
-		return agentStatusMsg{text: "key added: " + filepath.Base(path)}
+		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}
 	}
 }
 
