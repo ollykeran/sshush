@@ -194,22 +194,31 @@ check-artifacts ver="dev":
     echo "$pass passed, $fail failed"
     [ "$fail" -eq 0 ]
 
-# Create a GitHub release (creates tag, triggers CI to build packages)
-release ver:
-    gh release create v{{ ver }} --generate-notes --latest
+# Create a GitHub release (tag at branch tip if missing; triggers CI on tag push)
+release ver branch:
+    gh release create "v{{ ver }}" --generate-notes --latest --target "{{ branch }}"
 
 # List jobs in the release workflow (via act)
 act-list:
     act -l push -e .github/events/push-tag.json -W .github/workflows/release.yml
 
-# Run the release workflow locally (via act); Release step is skipped
-act-release ver:
+# Write .github/events/push-tag.json: tag ref + `after` = branch tip SHA (sets github.sha for act; --defaultbranch alone does not).
+[private]
+act-push-tag-json ver branch:
     #!/usr/bin/env bash
-    echo '{"ref": "refs/tags/v{{ ver }}"}' > .github/events/push-tag.json
-    act push -e .github/events/push-tag.json -W .github/workflows/release.yml
+    set -euo pipefail
+    br="{{ branch }}"
+    ver="{{ ver }}"
+    if git show-ref --verify --quiet "refs/heads/$br"; then
+      sha=$(git rev-parse "refs/heads/$br")
+    elif git show-ref --verify --quiet "refs/remotes/origin/$br"; then
+      sha=$(git rev-parse "refs/remotes/origin/$br")
+    else
+      echo "act-push-tag-json: unknown branch '$br' (need refs/heads/$br or refs/remotes/origin/$br)" >&2
+      exit 1
+    fi
+    printf '{"ref":"refs/tags/v%s","before":"0000000000000000000000000000000000000000","after":"%s"}\n' "$ver" "$sha" > .github/events/push-tag.json
 
-# Dry-run the release workflow locally (via act)
-act-release-dry ver:
-    #!/usr/bin/env bash
-    echo '{"ref": "refs/tags/v{{ ver }}"}' > .github/events/push-tag.json
-    act -n push -e .github/events/push-tag.json -W .github/workflows/release.yml
+# Run the release workflow locally (via act); Release step is skipped
+act-release ver branch: (act-push-tag-json ver branch)
+    act push -e .github/events/push-tag.json -W .github/workflows/release.yml --defaultbranch "{{ branch }}"

@@ -1,6 +1,16 @@
 # sshush
 
-An SSH agent with a styled CLI and TUI. Drop-in replacement for `ssh-agent`. Manages keys via a Unix socket, compatible with OpenSSH (`ssh`, `ssh-add`, etc.).
+OpenSSH compatible agent over a Unix socket (`SSH_AUTH_SOCK`, same agent protocol as `ssh-agent`) with a TUI, themes, and a config file. I wanted the agent to stay out of the way for normal `ssh` use but still be easy to inspect and reload from dotfiles, without piling on shell wrapper scripts. Optional passphrase vault stores derived keys in one file.
+
+## Compared to `ssh-agent`
+
+Stock agent is minimal: good for some workflows, easy to make invisible. sshush adds a `config.toml` with `sshush reload` to match the live agent to that file, plus `sshush tui` and a styled CLI. Optional vault and lock/unlock for encrypted at-rest key material in one place, instead of only relying on file permissions. Everything else: Unix socket, `ssh-add` / `ssh` work as usual.
+
+**Tradeoff:** more surface area than a stock agent, so keep an eye on [issues](https://github.com/ollykeran/sshush/issues) if something surprises you on your OS or shell.
+
+## Demo
+
+[Asciinema recording](https://asciinema.org/a/917054) (click through for the player)
 
 ## Quick Start
 
@@ -8,58 +18,51 @@ An SSH agent with a styled CLI and TUI. Drop-in replacement for `ssh-agent`. Man
 eval $(sshush)
 ```
 
-That starts the daemon (if needed), loads keys from config, and exports `SSH_AUTH_SOCK`. Add it to `.zshrc`, `.bashrc`, or `.bash_profile` for persistent setup. See [Setup Guide](docs/setup.md) for details.
+Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For shell rc and edge cases, see [Setup guide](docs/setup.md).
 
 ## Features
 
-- **Agent**: Start, stop, list keys, add, remove. Uses a Unix socket; works with OpenSSH.
-- **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
-- **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
+- **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
+- **Keys**: create, edit comment, find, export public key.
+- **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`). See [Config Reference](docs/config.md) `[server]` section.
-- **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `[agent].socket_path`, the daemon restarts.
-- **Config auto-setup**: On first run, if no config exists, sshush creates the default config under `$XDG_CONFIG_HOME/sshush/` (or `~/.config/sshush/`) with discovered keys and a stable `socket_path` (`$XDG_RUNTIME_DIR/sshush.sock` when set, otherwise `~/.config/sshush/sshush.sock`). You can write the same default file anytime with `sshush generate config` (optional path; use `--force` to overwrite).
+- **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
+- **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 
-## Commands
+## Common commands
 
+| | |
+| --- | --- |
+| `eval $(sshush)` or `sshush start` | start daemon, export `SSH_AUTH_SOCK` |
+| `sshush stop` | stop daemon |
+| `sshush list` / `add` / `remove` | manage loaded keys |
+| `sshush reload` | match agent to `config.toml` |
+| `sshush tui` | interactive UI |
+| `sshush create` / `edit` / `export` / `find` | key file operations |
+| `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
+| `sshush server` | optional TCP SSH server |
+| `sshush theme` / `completion` / `version` | theming, shell completion, build info |
 
-| Sub Command      | Description                               | Example                                   |
-| ---------------- | ----------------------------------------- | ----------------------------------------- |
-| (none) / `start` | Start daemon, export `SSH_AUTH_SOCK`      | `eval $(sshush)`                          |
-| `stop`           | Stop the daemon                           | `sshush stop`                             |
-| `list`           | List keys in the agent                    | `sshush list`                             |
-| `add`            | Add key(s) to the agent                   | `sshush add ~/.ssh/id_ed25519`            |
-| `remove`         | Remove key(s) by path or comment          | `sshush remove id_ed25519`                |
-| `reload`         | Reconcile agent to config file            | `sshush reload`                           |
-| `create`         | Generate a new keypair                    | `sshush create rsa 2048 -o ~/.ssh/id_rsa` |
-| `edit`           | Edit key comment                          | `sshush edit ~/.ssh/id_ed25519`           |
-| `export`         | Export public key                         | `sshush export ~/.ssh/id_ed25519`         |
-| `find`           | Find private keys (defaults: cwd, ~/.ssh) | `sshush find` or `sshush find /path`      |
-| `generate config`| Write default `config.toml` (optional path) | `sshush generate config`                |
-| `tui`            | Start the TUI                             | `sshush tui`                              |
-| `theme`          | Show or set colour theme                  | `sshush theme show`, `sshush theme list`, `sshush theme set dracula` |
-| `completion`     | Shell completion script                   | `sshush completion bash`                  |
-| `version`        | Print version                             | `sshush version`                          |
+For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
-
-Config: `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml` (override with `-c` / `$SSHUSH_CONFIG`). See [Config Reference](docs/config.md).
+**Config file:** `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml`, or override with `-c` / `SSHUSH_CONFIG`. Reference: [Config](docs/config.md).
 
 **Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before merging this branch into your setup.
 
 ## Installation
 
-### From releases
+`sshush` and `sshushd` need to be visible together: either a directory on your `PATH`, or run them with explicit paths (same idea as a normal `ssh-agent` + client setup).
 
-Download from [GitHub Releases](https://github.com/ollykeran/sshush/releases):
+### Releases
 
-| Package | Install |
-|---------|---------|
-| **Debian/Ubuntu** (`.deb`) | `sudo dpkg -i sshush-*-amd64.deb` |
-| **RHEL/Fedora** (`.rpm`) | `sudo rpm -i sshush-*-amd64.rpm` |
-| **Arch Linux** (`.pkg.tar.zst`) | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
-| **Linux binary tarball** | Extract `sshush` and `sshushd` from `sshush-*-linux-amd64.tar.gz`, place in `PATH` |
-| **macOS Apple Silicon** | Extract from `sshush-*-darwin-arm64.tar.gz`, place in `PATH` |
-| **macOS Intel** | Extract from `sshush-*-darwin-amd64.tar.gz`, place in `PATH` |
+[GitHub Releases](https://github.com/ollykeran/sshush/releases): `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `tar.gz` (Linux and macOS arm/amd on the release page). Release archives ship both binaries; install or unpack as usual.
+
+| Package | |
+| --- | --- |
+| **Debian/Ubuntu** | `sudo dpkg -i sshush-*-amd64.deb` |
+| **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
+| **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
 
 ### From source
 
@@ -68,31 +71,32 @@ go install github.com/ollykeran/sshush/cmd/sshush@latest
 go install github.com/ollykeran/sshush/cmd/sshushd@latest
 ```
 
-Both binaries must be in `PATH`.
+Binaries go to `$(go env GOBIN)` (or `GOPATH/bin`).
+
+Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
+
+## Security
+
+`sshushd` speaks the same agent protocol as `ssh-agent` over a local socket; private keys live in the agent process. Report vulnerabilities as described in [SECURITY.md](SECURITY.md) (not via public issues).
 
 ## Docs
 
-- [Setup Guide](docs/setup.md) – eval, config creation, shell rc files
-- [Config Reference](docs/config.md) – options, reload behavior, flat TOML migration
-- [Vault](docs/vault.md) – encrypted vault mode, recovery, commands
-- [TUI Architecture](docs/tui.md) – TUI structure and internals
-- [Architecture](docs/architecture.md) – package layout
-- [Godoc Guide](docs/godoc-guide.md) – adding godoc comments
-- [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API documentation
+- [Setup](docs/setup.md) – shell, eval, config path
+- [Config](docs/config.md) – options, reload, flat TOML migration
+- [Vault](docs/vault.md) – optional vault
+- [TUI](docs/tui.md) – TUI structure
+- [Architecture](docs/architecture.md) – packages
+- [Godoc guide](docs/godoc-guide.md) – exported API comments
+- [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API
 
-### Developer docs
-
-- [Contributing](CONTRIBUTING.md) – how to contribute
-- [Internal Boundary Report](docs/internal-boundary-report.md) – package call graph (auto-generated)
+**Developers:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Internal boundary report](docs/internal-boundary-report.md) (auto-generated)
 
 ## Build
 
-Go 1.26+:
+Go 1.26+, [`just`](https://github.com/casey/just) optional but recommended.
 
 ```sh
 just build
 ```
 
-Produces `sshush` (CLI) and `sshushd` (daemon) in `build/`. Both must be in `PATH` or the same directory.
-
-For macOS binaries in `build/sshush` and `build/sshushd`, use `just build-mac` (native arch on Darwin, or set `MAC_ARCH=amd64` when cross-compiling from Linux). Release tarballs use `just build-darwin arm64` and `just build-darwin amd64` under `build/darwin-arm64/` and `build/darwin-amd64/`; `just package` builds Linux artifacts plus both Darwin tarballs.
+Outputs `build/sshush` and `build/sshushd`. From the repo, run e.g. `./build/sshush` and `./build/sshushd` or install the artifacts the same way you do other static binaries. macOS: `just build-mac`. Release layout and packaging: `just package`, `just build-darwin arm64`, etc. (see [justfile](justfile)).
