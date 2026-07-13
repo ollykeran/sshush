@@ -5,7 +5,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/ollykeran/sshush/internal/theme"
+	"github.com/ollykeran/sshush/internal/version"
 )
+
+// daemonStatusWidgetID is the footer left label for daemon state (e.g. "sshushd v1.2.3").
+func daemonStatusWidgetID() string {
+	return "sshushd v" + version.Version
+}
 
 // ButtonFlashDoneMsg is sent when a button press flash animation completes.
 type ButtonFlashDoneMsg struct{}
@@ -65,6 +71,6 @@ func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode strin
 	s.AddPage("create", "Create", NewCreateScreen(s))
 	s.AddPage("edit", "Edit", NewEditScreen(s, socketPath))
 	s.AddPage("export", "Export", NewExportScreen(s, socketPath))
-	s.AddWidget("sshushd", "stopped")
+	s.AddWidget(daemonStatusWidgetID(), "stopped")
 	return s
 }
