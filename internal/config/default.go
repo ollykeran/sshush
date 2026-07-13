@@ -1,16 +1,38 @@
 package config
 
 import (
+	"bytes"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/ollykeran/sshush/internal/openssh"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 )
+
+//go:embed default_config.toml.tmpl
+var defaultConfigTemplateFS embed.FS
+
+var defaultConfigTemplate = template.Must(
+	template.ParseFS(defaultConfigTemplateFS, "default_config.toml.tmpl"),
+)
+
+// defaultConfigTemplateData is input for default_config.toml.tmpl.
+type defaultConfigTemplateData struct {
+	SocketPath   string
+	KeyPathsTOML string
+	ThemeText    string
+	ThemeFocus   string
+	ThemeAccent  string
+	ThemeError   string
+	ThemeWarning string
+}
 
 func findDefaultKeys() []string {
 	const sshHome = "~/.ssh"
@@ -58,28 +80,11 @@ func findDefaultKeys() []string {
 	return paths
 }
 
-// CreateDefaultConfig creates ~/.config/sshush/config.toml and writes an example
-// config if neither the directory nor the file exist yet.
-func CreateDefaultConfig() error {
-	const defaultConfigDir = "~/.config/sshush"
-	const defaultConfigFileName = "config.toml"
-
-	defaultConfigDirExpanded := utils.ExpandHomeDirectory(defaultConfigDir)
-	defaultConfigFile := filepath.Join(defaultConfigDirExpanded, defaultConfigFileName)
-
-	if err := os.MkdirAll(defaultConfigDirExpanded, 0o755); err != nil {
-		return err
+// keyPathsToTOMLArray formats discovered key paths as a TOML array literal (tilde-prefixed when under $HOME).
+func keyPathsToTOMLArray(keyPaths []string) string {
+	if len(keyPaths) == 0 {
+		return "[]"
 	}
-
-	// Do not overwrite existing config.
-	if _, err := os.Stat(defaultConfigFile); err == nil {
-		return nil
-	}
-
-	// Discover keys.
-	keyPaths := findDefaultKeys()
-
-	// Convert to "~" form for nicer config.
 	home, _ := os.UserHomeDir()
 	quoted := make([]string, len(keyPaths))
 	for i, p := range keyPaths {
@@ -88,70 +93,119 @@ func CreateDefaultConfig() error {
 		}
 		quoted[i] = `"` + p + `"`
 	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
 
-	keyPathLine := "key_paths = [" + strings.Join(quoted, ", ") + "]"
-
-	// Socket path
-	socketPath := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "sshush.sock")
-	socketPathLine := `socket_path = "` + socketPath + `"`
-
-	def := theme.DefaultTheme()
-	configLines := []string{
-		"# Example config.toml",
-		socketPathLine,
-		keyPathLine,
-		"",
-		"[theme]",
-		`name = "default"`,
-		"# text = \"" + def.Text + "\"",
-		"# focus = \"" + def.Focus + "\"",
-		"# accent = \"" + def.Accent + "\"",
-		"# error = \"" + def.Error + "\"",
-		"# warning = \"" + def.Warning + "\"",
-		"",
+// renderDefaultConfigBytes renders the embedded default config template. Exposed for tests.
+func renderDefaultConfigBytes(socketPath string, keyPaths []string, def theme.Theme) ([]byte, error) {
+	data := defaultConfigTemplateData{
+		SocketPath:   socketPath,
+		KeyPathsTOML: keyPathsToTOMLArray(keyPaths),
+		ThemeText:    def.Text,
+		ThemeFocus:   def.Focus,
+		ThemeAccent:  def.Accent,
+		ThemeError:   def.Error,
+		ThemeWarning: def.Warning,
 	}
+	var buf bytes.Buffer
+	if err := defaultConfigTemplate.Execute(&buf, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
-	config := strings.Join(configLines, "\n")
+// StandardConfigFile returns the absolute path to the default config file.
+func StandardConfigFile() string {
+	return platform.DefaultConfigPath()
+}
 
-	if err := os.WriteFile(defaultConfigFile, []byte(config), 0o644); err != nil {
+// WriteDefaultConfigFile renders the default config template and writes it to path.
+// Parent directories are created as needed. If overwrite is false and path already
+// exists, it returns an error.
+func WriteDefaultConfigFile(path string, overwrite bool) error {
+	if _, err := os.Stat(path); err == nil && !overwrite {
+		return style.NewOutput().
+			Error("config file already exists: " + utils.DisplayPath(path)).
+			Info("use --force to overwrite").
+			AsError()
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	keyPaths := findDefaultKeys()
+	socketDisplay := utils.ContractHomeDirectory(platform.DefaultSocketPath())
+	def := theme.DefaultTheme()
+	data, err := renderDefaultConfigBytes(socketDisplay, keyPaths, def)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
 
+// CreateDefaultConfig creates the default config directory and config.toml if the file
+// does not exist yet.
+func CreateDefaultConfig() error {
+	p := platform.DefaultConfigPath()
+	if _, err := os.Stat(p); err == nil {
+		return nil
+	}
+	if err := WriteDefaultConfigFile(p, false); err != nil {
+		return err
+	}
 	fmt.Println("Default config created")
 	return nil
 }
 
-// AddEvalToShell appends "eval $(sshush)" to ~/.bashrc. Fails if ~/.bashrc does not exist.
+// AddEvalToShell appends eval $(sshush) to the preferred shell rc file (see platform.ShellRcPathForAutoSetup).
+// Creates the rc file if it does not exist.
 func AddEvalToShell() error {
-	const line = "eval $(sshush)\n"
-	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
-	if _, err := os.Stat(bashrcPath); err != nil {
-		return style.NewOutput().Error("~/.bashrc not found - cannot add eval $(sshush)").AsError()
+	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	if !ok {
+		return style.NewOutput().Error("cannot determine shell rc file (no home directory)").AsError()
 	}
 
-	bashrc, err := os.OpenFile(bashrcPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if _, err := os.Stat(rcPath); os.IsNotExist(err) {
+		header := "# sshush: start agent in new shells\n"
+		if err := os.WriteFile(rcPath, []byte(header+platform.EvalLine), 0o644); err != nil {
+			return style.NewOutput().Error("failed to create " + rcPath + ": " + err.Error()).AsError()
+		}
+		return nil
+	} else if err != nil {
+		return style.NewOutput().Error("cannot read " + rcPath + ": " + err.Error()).AsError()
+	}
+
+	f, err := os.OpenFile(rcPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return style.NewOutput().Error("Failed to open ~/.bashrc").AsError()
+		return style.NewOutput().Error("failed to open " + rcPath + ": " + err.Error()).AsError()
 	}
-	defer bashrc.Close()
+	defer f.Close()
 
-	bashrc.WriteString(line)
+	if _, err := f.WriteString(platform.EvalLine); err != nil {
+		return style.NewOutput().Error("failed to write " + rcPath + ": " + err.Error()).AsError()
+	}
 	return nil
 }
 
-// SetupConfig ensures default config exists and eval is added to bashrc if needed.
+// SetupConfig ensures default config exists and eval is added to the shell rc if needed.
 // Call from root PersistentPreRunE or main before loading config.
 func SetupConfig() {
-	const defaultConfigPath = "~/.config/sshush/config.toml"
-	expanded := utils.ExpandHomeDirectory(defaultConfigPath)
+	expanded := platform.DefaultConfigPath()
 
 	if _, err := os.Stat(expanded); os.IsNotExist(err) {
 		_ = CreateDefaultConfig()
 	}
 
-	bashrcPath := utils.ExpandHomeDirectory("~/.bashrc")
-	content, err := os.ReadFile(bashrcPath)
-	if err == nil && !strings.Contains(string(content), "eval $(sshush)") {
-		_ = AddEvalToShell()
+	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	if !ok {
+		return
 	}
+	content, err := os.ReadFile(rcPath)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if err == nil && strings.Contains(string(content), "eval $(sshush)") {
+		return
+	}
+	_ = AddEvalToShell()
 }
