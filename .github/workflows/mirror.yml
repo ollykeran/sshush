@@ -1,0 +1,24 @@
+name: Mirror to GitLab
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+
+jobs:
+  to_gitlab:
+    runs-on: ubuntu-latest
+    environment: gitlab
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+      - name: Mirror to GitLab
+        run: |
+          GITLAB_URL="https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/ollykeran/sshush.git"
+          
+          # Force push all branches and tags to the GitLab mirror
+          git push --prune "$GITLAB_URL" +refs/remotes/origin/*:refs/heads/* +refs/tags/*:refs/tags/*

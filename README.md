@@ -16,6 +16,7 @@ That starts the daemon (if needed), loads keys from config, and exports `SSH_AUT
 - **Create/Edit/Export**: Generate keys (`create`), edit comments (`edit`), export public keys (`export`).
 - **TUI**: Interactive terminal UI to manage keys, generate, edit, and export. Run `sshush tui`.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
+- **SSH server**: Optional TCP SSH server (`sshush server`). See [Config Reference](docs/config.md) `[server]` section.
 - **Reload**: `sshush reload` reconciles the agent to the config file. Keys not in config are removed; keys in config are added. If you change `[agent].socket_path`, the daemon restarts.
 - **Config auto-setup**: On first run, if no config exists, sshush creates the default config under `$XDG_CONFIG_HOME/sshush/` (or `~/.config/sshush/`) with discovered keys and a stable `socket_path` (`$XDG_RUNTIME_DIR/sshush.sock` when set, otherwise `~/.config/sshush/sshush.sock`). You can write the same default file anytime with `sshush generate config` (optional path; use `--force` to overwrite).
 
