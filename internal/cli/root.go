@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	stdruntime "runtime"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
@@ -154,7 +153,7 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if cmd.Flags().Changed("version") {
-				fmt.Printf("sshush %s (%s)\n", version.Version, stdruntime.Version())
+				fmt.Println(version.Line("sshush"))
 				os.Exit(0)
 			}
 			if isGenerateConfigCmd(cmd) {

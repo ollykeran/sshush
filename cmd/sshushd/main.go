@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	stdruntime "runtime"
 
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -20,7 +19,7 @@ func main() {
 	serverMode := flag.Bool("server", false, "run TCP SSH server daemon only")
 	flag.Parse()
 	if *showVersion {
-		fmt.Printf("sshushd %s (%s)\n", version.Version, stdruntime.Version())
+		fmt.Println(version.Line("sshushd"))
 		os.Exit(0)
 	}
 

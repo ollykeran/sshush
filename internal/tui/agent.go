@@ -178,7 +178,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.running {
 				state = "running"
 			}
-			s.sk.UpdateWidgetValue("sshushd", state)
+			s.sk.UpdateWidgetValue(daemonStatusWidgetID(), state)
 		}
 		return s, nil
 
@@ -225,7 +225,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.status = msg.text
 		s.statusErr = msg.isErr
 		if s.sk != nil {
-			s.sk.UpdateWidgetValue("sshushd", msg.text)
+			s.sk.UpdateWidgetValue(daemonStatusWidgetID(), msg.text)
 		}
 		if !msg.isErr {
 			return s, tea.Batch(
