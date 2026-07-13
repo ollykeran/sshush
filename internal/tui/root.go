@@ -51,11 +51,13 @@ func themeMessageTimeoutCmd(generation int) tea.Cmd {
 // NewTUI builds the TUI skeleton with agent, create, edit, and export tabs.
 // Theme is used for all TUI colours; pass theme.DefaultTheme() or from config.
 // configPath is used by the theme picker to persist theme changes.
-func NewTUI(configPath, socketPath string, t theme.Theme) *Skeleton {
+// agentBackendMode is "vault" or "keys" (from config.AgentBackendMode); shown in the footer.
+func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode string) *Skeleton {
 	s := NewSkeleton()
 	s.theme = t
 	s.styles = BuildStyles(t)
 	s.configPath = configPath
+	s.agentBackendMode = agentBackendMode
 	s.KeyMap.SwitchTabLeft = []string{"left", "h"}
 	s.KeyMap.SwitchTabRight = []string{"right", "l"}
 

@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -16,10 +19,25 @@ func ListKeys(keyring sshagent.Agent) error {
 }
 
 // AppendKeysTo appends the keyring's key lines to an existing Output builder.
-func AppendKeysTo(keyring sshagent.Agent, out *style.Output) error {
+// When socketPath and vaultPath are set and the agent reports the vault locked via
+// the vault-locked extension, shows a vault-specific message instead of the generic
+// empty key list.
+func AppendKeysTo(keyring sshagent.Agent, out *style.Output, socketPath, vaultPath string) error {
 	keys, err := keyring.List()
 	if err != nil {
 		return err
+	}
+	if len(keys) == 0 && strings.TrimSpace(socketPath) != "" {
+		// Detect vault-at-socket even when config omits vaultPath (e.g. stale config vs running daemon).
+		resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
+		if err == nil && len(resp) == 1 {
+			if resp[0] == 1 {
+				out.Warn("Vault is locked (identities stay on disk; run sshush unlock or enter passphrase on start).")
+				return nil
+			}
+			out.Warn("no keys loaded in vault (unlocked but empty).")
+			return nil
+		}
 	}
 	if len(keys) == 0 {
 		out.Warn("no keys loaded")
