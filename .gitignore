@@ -1,4 +1,5 @@
 build/
+tools/
 sshush.pid
 id_*
 *.toml
@@ -8,4 +9,3 @@ openspec/
 ok/
 .vscode/
 .cursor/
-.github/events/push-tag.json
