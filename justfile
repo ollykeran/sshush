@@ -13,6 +13,49 @@ update:
     go mod tidy
     go mod download
 
+# Bump only modules with known vulns (govulncheck). Unlike `update`, does not upgrade unrelated deps.
+update-security:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$(go env GOPATH)/bin:$PATH"
+    if ! command -v govulncheck >/dev/null 2>&1; then
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+    fi
+    bumped=0
+    for _ in $(seq 1 20); do
+        tmp="$(mktemp)"
+        status=0
+        # govulncheck exits 3 when vulns found; still emit JSON for fixes
+        govulncheck -json ./... >"$tmp" || status=$?
+        if [[ "$status" -ne 0 && "$status" -ne 3 ]]; then
+            rm -f "$tmp"
+            exit "$status"
+        fi
+        modules=()
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && modules+=("$line")
+        done < <(python3 scripts/govulncheck-bumps.py "$tmp")
+        rm -f "$tmp"
+        if [[ ${#modules[@]} -eq 0 ]]; then
+            if [[ "$bumped" -eq 0 ]]; then
+                echo "No vulnerable third-party modules to bump."
+            else
+                echo "Security bumps complete ($bumped)."
+            fi
+            go mod tidy
+            go mod download
+            exit 0
+        fi
+        # One module per round so MVS can raise transitive floors (e.g. crypto
+        # pulling a newer x/sys) without a later lower floor downgrading it.
+        spec="${modules[0]}"
+        echo "Security bump: $spec"
+        go get "$spec"
+        bumped=$((bumped + 1))
+    done
+    echo "update-security: still vulnerable after $bumped bumps; re-run or inspect govulncheck" >&2
+    exit 1
+
 build-sshushd: deps
     mkdir -p {{ build_dir }}
     go build -ldflags '-X github.com/ollykeran/sshush/internal/version.Version={{ version }}' -o {{ binaryd }} ./cmd/sshushd
