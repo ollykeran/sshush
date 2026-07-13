@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/config"
 )
 
@@ -103,12 +102,11 @@ func TestLoadMergedConfig_missingFileWithKeyOverride_usesEmptyConfig(t *testing.
 
 func writeConfig(t *testing.T, path string, c config.Config) {
 	t.Helper()
-	f, err := os.Create(path)
+	data, err := config.MarshalConfig(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	if err := toml.NewEncoder(f).Encode(c); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

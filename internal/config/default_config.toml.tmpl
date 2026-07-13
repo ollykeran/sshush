@@ -1,0 +1,21 @@
+# Example config.toml
+[agent]
+socket_path = {{ printf "%q" .SocketPath }}
+vault = false
+key_paths = {{ .KeyPathsTOML }}
+
+# [vault]
+# vault_path = "~/.config/sshush/vault.json"
+#
+# [server]
+# listen_port = 2222
+# authorized_keys = "~/.ssh/authorized_keys"
+# host_key = "~/.ssh/sshush_host_ed25519"
+
+[theme]
+name = "default"
+# text = {{ printf "%q" .ThemeText }}
+# focus = {{ printf "%q" .ThemeFocus }}
+# accent = {{ printf "%q" .ThemeAccent }}
+# error = {{ printf "%q" .ThemeError }}
+# warning = {{ printf "%q" .ThemeWarning }}
