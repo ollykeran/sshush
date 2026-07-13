@@ -22,5 +22,6 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newLockCommand())
 	root.AddCommand(newUnlockCommand())
 	root.AddCommand(newVaultCommand())
+	root.AddCommand(newServerCommand())
 	root.AddCommand(newGenerateCommand())
 }
