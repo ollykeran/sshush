@@ -145,6 +145,26 @@ func TestLoadKeyMaterialAndSaveWithComment(t *testing.T) {
 	}
 }
 
+func TestLoadKeyMaterial_setsFilepath(t *testing.T) {
+	dir := t.TempDir()
+	priv, pub, err := Generate("ed25519", 0, "filepath-test")
+	if err != nil {
+		t.Fatalf("Generate(): %v", err)
+	}
+	if err := SavePair(dir, "id_ed25519", priv, pub); err != nil {
+		t.Fatalf("SavePair(): %v", err)
+	}
+
+	keyPath := filepath.Join(dir, "id_ed25519")
+	parsed, _, _, err := LoadKeyMaterial(keyPath)
+	if err != nil {
+		t.Fatalf("LoadKeyMaterial(): %v", err)
+	}
+	if parsed.Filepath != keyPath {
+		t.Fatalf("parsed.Filepath = %q, want %q", parsed.Filepath, keyPath)
+	}
+}
+
 func TestFormatPublicKey(t *testing.T) {
 	priv, _, err := Generate("ed25519", 0, "fmt")
 	if err != nil {
