@@ -15,7 +15,7 @@ func newVersionCommand() *cobra.Command {
 		Short:   "Print the sshush version",
 		Args:    argsNoneOrHelp,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println(version.Line("sshush"))
+			fmt.Fprintln(cmd.OutOrStdout(), version.Line("sshush"))
 		},
 	}
 }
