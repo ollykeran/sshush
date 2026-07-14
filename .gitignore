@@ -6,6 +6,7 @@ id_*
 .bash*
 openspec/
 .actrc
+.github/events/push-tag.json
 ok/
 .vscode/
 .cursor/
