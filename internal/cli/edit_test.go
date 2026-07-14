@@ -11,6 +11,8 @@ import (
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/runtime"
+	ssh "golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestRunEdit_commentFlag(t *testing.T) {
@@ -18,7 +20,7 @@ func TestRunEdit_commentFlag(t *testing.T) {
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "old-comment")
 
-	err := runEdit(privPath, "", "new-comment", false, "")
+	err := runEdit(privPath, "", "new-comment", false, "", "")
 	if err != nil {
 		t.Fatalf("runEdit: %v", err)
 	}
@@ -33,7 +35,7 @@ func TestRunEdit_copyToNewPath(t *testing.T) {
 	privPath := writeTestKey(t, dir, "id_ed25519", "original")
 	copyPath := filepath.Join(dir, "copy_key")
 
-	err := runEdit(privPath, "", "copied-comment", true, copyPath)
+	err := runEdit(privPath, "", "copied-comment", true, copyPath, "")
 	if err != nil {
 		t.Fatalf("runEdit: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestRunEdit_copyWithoutOutput(t *testing.T) {
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "test")
 
-	err := runEdit(privPath, "", "x", true, "")
+	err := runEdit(privPath, "", "x", true, "", "")
 	if err == nil {
 		t.Fatal("expected error when --copy without --output")
 	}
@@ -65,7 +67,7 @@ func TestRunEdit_outputWithoutCopy(t *testing.T) {
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "test")
 
-	err := runEdit(privPath, "", "x", false, "/tmp/somewhere")
+	err := runEdit(privPath, "", "x", false, "/tmp/somewhere", "")
 	if err == nil {
 		t.Fatal("expected error when --output without --copy")
 	}
@@ -73,7 +75,7 @@ func TestRunEdit_outputWithoutCopy(t *testing.T) {
 
 func TestRunEdit_missingFile(t *testing.T) {
 	t.Parallel()
-	err := runEdit(filepath.Join(t.TempDir(), "nonexistent"), "", "x", false, "")
+	err := runEdit(filepath.Join(t.TempDir(), "nonexistent"), "", "x", false, "", "")
 	if err == nil {
 		t.Fatal("expected error for missing key file")
 	}
@@ -85,7 +87,7 @@ func TestRunEdit_notOpenSSHKey(t *testing.T) {
 	badPath := filepath.Join(dir, "bad_key")
 	os.WriteFile(badPath, []byte("not a key"), 0o600)
 
-	err := runEdit(badPath, "", "x", false, "")
+	err := runEdit(badPath, "", "x", false, "", "")
 	if err == nil {
 		t.Fatal("expected error for non-OpenSSH key")
 	}
@@ -98,7 +100,7 @@ func TestRunEdit_emptyComment(t *testing.T) {
 	// Use a fake editor that writes whitespace-only content
 	editorPath := writeFakeEditor(t, dir, "empty-editor.sh", "   ")
 
-	err := runEdit(privPath, editorPath, "", false, "")
+	err := runEdit(privPath, editorPath, "", false, "", "")
 	if err == nil {
 		t.Fatal("expected error for empty comment")
 	}
@@ -109,7 +111,7 @@ func TestRunEdit_pubFileUpdated(t *testing.T) {
 	dir := t.TempDir()
 	privPath := writeTestKey(t, dir, "id_ed25519", "before")
 
-	err := runEdit(privPath, "", "after", false, "")
+	err := runEdit(privPath, "", "after", false, "", "")
 	if err != nil {
 		t.Fatalf("runEdit: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestRunEdit_noPubFile(t *testing.T) {
 	privPath := writeTestKey(t, dir, "id_ed25519", "only-priv")
 	os.Remove(privPath + ".pub")
 
-	err := runEdit(privPath, "", "updated", false, "")
+	err := runEdit(privPath, "", "updated", false, "", "")
 	if err != nil {
 		t.Fatalf("runEdit: %v", err)
 	}
@@ -209,7 +211,7 @@ func TestRunEdit_editorFlow(t *testing.T) {
 	editorPath := writeFakeEditor(t, dir, "editor.sh", "editor-comment")
 
 	// empty commentFlag triggers editor path
-	err := runEdit(privPath, editorPath, "", false, "")
+	err := runEdit(privPath, editorPath, "", false, "", "")
 	if err != nil {
 		t.Fatalf("runEdit with editor: %v", err)
 	}
@@ -223,7 +225,7 @@ func TestRunEdit_editorFailsReportsError(t *testing.T) {
 	privPath := writeTestKey(t, dir, "id_ed25519", "old-comment")
 	editorPath := writeFailingEditor(t, dir, "bad-editor.sh")
 
-	err := runEdit(privPath, editorPath, "", false, "")
+	err := runEdit(privPath, editorPath, "", false, "", "")
 	if err == nil {
 		t.Fatal("expected error when editor fails")
 	}
@@ -235,7 +237,7 @@ func TestRunEdit_exitWithoutSaving_keyNotModified(t *testing.T) {
 	privPath := writeTestKey(t, dir, "id_ed25519", "original-comment")
 	editorPath := writeNoOpEditor(t, dir, "noop-editor.sh")
 
-	err := runEdit(privPath, editorPath, "", false, "")
+	err := runEdit(privPath, editorPath, "", false, "", "")
 	if err != nil {
 		t.Fatalf("runEdit with no-save should succeed with no error: %v", err)
 	}
@@ -269,5 +271,93 @@ func assertPubKeyComment(t *testing.T, pubPath, wantComment string) {
 	line := strings.TrimSpace(string(data))
 	if !strings.HasSuffix(line, wantComment) {
 		t.Errorf("pub key line should end with %q: %s", wantComment, line)
+	}
+}
+
+// --- resolveEditPath tests ---
+
+func TestResolveEditPath_directFilepath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "test")
+
+	got, err := resolveEditPath(privPath, "")
+	if err != nil {
+		t.Fatalf("resolveEditPath: %v", err)
+	}
+	if got != privPath {
+		t.Fatalf("got %q, want %q", got, privPath)
+	}
+}
+
+func TestResolveEditPath_filepathFlagOverride(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "test")
+
+	// Even with a bogus argument, --filepath should win
+	got, err := resolveEditPath("nonexistent-arg", privPath)
+	if err != nil {
+		t.Fatalf("resolveEditPath with --filepath: %v", err)
+	}
+	if got != privPath {
+		t.Fatalf("got %q, want %q", got, privPath)
+	}
+}
+
+func TestResolveEditPath_filepathFlagNotFound(t *testing.T) {
+	t.Parallel()
+	_, err := resolveEditPath("anything", "/nonexistent/path")
+	if err == nil {
+		t.Fatal("expected error for nonexistent --filepath")
+	}
+}
+
+func TestResolveEditPath_notFound(t *testing.T) {
+	t.Parallel()
+	_, err := resolveEditPath("completely-unknown-key", "")
+	if err == nil {
+		t.Fatal("expected error for unknown key")
+	}
+}
+
+func TestResolveEditPath_fingerprintFromAgent(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv
+	socketPath, client := startTestAgent(t)
+
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "agent-key")
+
+	// Load key into agent
+	keyData, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawKey, err := ssh.ParseRawPrivateKey(keyData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Add(sshagent.AddedKey{PrivateKey: rawKey, Comment: "agent-key"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get fingerprint
+	signer, err := ssh.NewSignerFromKey(rawKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := ssh.FingerprintSHA256(signer.PublicKey())
+
+	// Point SSH_AUTH_SOCK to our test agent so resolveEditPath can reach it
+	t.Setenv("SSH_AUTH_SOCK", socketPath)
+
+	// The fingerprint won't be in the registry (added via client.Add, not AddKeyFromPath),
+	// and the key isn't in cfg.KeyPaths, so this should error gracefully.
+	_, err = resolveEditPath(fp, "")
+	if err == nil {
+		t.Fatal("expected error for fingerprint not in registry or config")
+	}
+	if !strings.Contains(err.Error(), "use --filepath") {
+		t.Fatalf("error should hint about --filepath, got: %v", err)
 	}
 }

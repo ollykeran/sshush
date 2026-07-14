@@ -38,5 +38,7 @@ func LoadKeyMaterial(path string) (*openssh.ParsedKey, interface{}, ssh.Signer, 
 		return nil, nil, nil, fmt.Errorf("keys: create signer for %s: %w", path, err)
 	}
 
+	parsed.Filepath = path
+
 	return parsed, rawKey, signer, nil
 }

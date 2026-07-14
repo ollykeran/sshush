@@ -241,7 +241,7 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 	}
 
 	out := style.NewOutput()
-	out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %s", "FINGERPRINT", "LOADED", "AUTOLOAD", "COMMENT", "TYPE")))
+	out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-10s  %s", "FINGERPRINT", "LOADED", "AUTOLOAD", "COMMENT", "TYPE", "FILEPATH")))
 	maxTypeLen := 0
 	for _, id := range identities {
 		if len(id.KeyType) > maxTypeLen {
@@ -265,7 +265,11 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 		if len(comment) > 20 {
 			comment = comment[:17] + "..."
 		}
-		out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-*s", id.Fingerprint, loaded, autoload, comment, maxTypeLen, id.KeyType)))
+		filepath := id.Filepath
+		if filepath == "" {
+			filepath = "-"
+		}
+		out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-*s  %s", id.Fingerprint, loaded, autoload, comment, maxTypeLen, id.KeyType, filepath)))
 	}
 	out.PrintTo(os.Stdout)
 	return nil
