@@ -2,6 +2,7 @@ package vault
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,7 +56,7 @@ type VaultStore struct {
 func Open(path string) (*VaultStore, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create directory %s: %w", dir, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -66,11 +67,11 @@ func Open(path string) (*VaultStore, error) {
 				identities: []Identity{},
 			}, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("vault: read %s: %w", path, err)
 	}
 	var f VaultFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: parse %s: %w", path, err)
 	}
 	if f.Identities == nil {
 		f.Identities = []Identity{}
@@ -93,31 +94,34 @@ func (s *VaultStore) Save() error {
 	}
 	data, err := json.MarshalIndent(f, "", "    ")
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: marshal JSON: %w", err)
 	}
 	tmpPath := s.path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		return err
+		return fmt.Errorf("vault: write temp file %s: %w", tmpPath, err)
 	}
 	fh, err := os.Open(tmpPath)
 	if err != nil {
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("vault: open temp file %s: %w", tmpPath, err)
 	}
 	if err := fh.Sync(); err != nil {
 		fh.Close()
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("vault: sync temp file %s: %w", tmpPath, err)
 	}
 	if err := fh.Close(); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("vault: close temp file %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("vault: rename %s to %s: %w", tmpPath, s.path, err)
 	}
-	return os.Chmod(s.path, 0600)
+	if err := os.Chmod(s.path, 0600); err != nil {
+		return fmt.Errorf("vault: chmod %s: %w", s.path, err)
+	}
+	return nil
 }
 
 // GetMetadata returns a copy of the vault metadata, or nil if not initialized.

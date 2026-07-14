@@ -32,11 +32,11 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 	before, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: list keys from socket: %w", err)
 	}
 	wantFP := make(map[string]bool)
 	for _, arg := range args {

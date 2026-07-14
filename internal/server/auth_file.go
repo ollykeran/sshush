@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/subtle"
+	"fmt"
 	"os"
 	"strings"
 
@@ -21,7 +22,7 @@ type FileAuth struct {
 func NewFileAuth(path string) (*FileAuth, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("server: read authorized_keys %s: %w", path, err)
 	}
 	var blobs [][]byte
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -37,7 +38,7 @@ func NewFileAuth(path string) (*FileAuth, error) {
 		blobs = append(blobs, pub.Marshal())
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("server: scan authorized_keys %s: %w", path, err)
 	}
 	return &FileAuth{blobs: blobs}, nil
 }

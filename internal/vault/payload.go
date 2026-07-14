@@ -2,6 +2,7 @@ package vault
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 )
 
@@ -22,7 +23,7 @@ func BuildSetAutoloadPayload(fingerprint string, autoload bool) []byte {
 func BuildAddKeyOptsPayload(path string, autoload bool) ([]byte, error) {
 	pem, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: read key file %s: %w", path, err)
 	}
 	payload := make([]byte, 4+len(pem)+1)
 	binary.BigEndian.PutUint32(payload[:4], uint32(len(pem)))

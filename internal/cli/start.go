@@ -41,11 +41,11 @@ func runStartDaemon(cmd *cobra.Command) error {
 
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: resolve config path: %w", err)
 	}
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: resolve absolute config path: %w", err)
 	}
 	cfg := *env.Config
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {

@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
+	"fmt"
 
 	ssh "golang.org/x/crypto/ssh"
 )
@@ -19,11 +20,11 @@ func marshalPrivateKey(key interface{}) ([]byte, error) {
 		if k != nil {
 			return k.Seed(), nil
 		}
-		return nil, errors.New("nil ed25519 private key")
+		return nil, errors.New("vault: nil ed25519 private key")
 	default:
 		b, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: marshal PKCS8 key: %w", err)
 		}
 		return b, nil
 	}
@@ -34,13 +35,13 @@ func marshalPrivateKey(key interface{}) ([]byte, error) {
 func unmarshalPrivateKey(seed []byte, keyType string) (interface{}, error) {
 	if keyType == "ssh-ed25519" {
 		if len(seed) != ed25519.SeedSize {
-			return nil, errors.New("invalid ed25519 seed length")
+			return nil, fmt.Errorf("vault: invalid ed25519 seed length %d (expected %d)", len(seed), ed25519.SeedSize)
 		}
 		return ed25519.NewKeyFromSeed(seed), nil
 	}
 	key, err := x509.ParsePKCS8PrivateKey(seed)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: parse PKCS8 key: %w", err)
 	}
 	return key, nil
 }

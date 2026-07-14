@@ -25,11 +25,11 @@ type PassphrasePolicy struct {
 
 // DefaultPassphrasePolicy is the policy applied by Init for new vaults.
 var DefaultPassphrasePolicy = PassphrasePolicy{
-	MinLen:           1,
-	RequireUpper:     false,
-	RequireLower:     false,
-	RequireDigit:     false,
-	RequireSpecial:   false,
+	MinLen:         8,
+	RequireUpper:   false,
+	RequireLower:   false,
+	RequireDigit:   false,
+	RequireSpecial: false,
 }
 
 // ErrPassphraseEmpty is returned when the passphrase is empty or whitespace-only.
