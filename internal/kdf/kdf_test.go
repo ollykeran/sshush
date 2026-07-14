@@ -1,6 +1,10 @@
 package kdf
 
-import "testing"
+import (
+	"testing"
+
+	"golang.org/x/crypto/argon2"
+)
 
 func TestDeriveKey(t *testing.T) {
 	salt := make([]byte, 16)
@@ -54,6 +58,32 @@ func TestGenerateSalt(t *testing.T) {
 	}
 	if same {
 		t.Error("two salts are identical (astronomically unlikely)")
+	}
+}
+
+func BenchmarkArgon2IDKey_Raw(b *testing.B) {
+	passphrase := []byte("benchmark-passphrase-for-kdf")
+	salt := make([]byte, 16)
+	for i := range salt {
+		salt[i] = byte(i)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = argon2.IDKey(passphrase, salt, argon2Time, argon2Memory, argon2Threads, KeyLen)
+	}
+}
+
+func BenchmarkDeriveKey_Sshush(b *testing.B) {
+	passphrase := []byte("benchmark-passphrase-for-kdf")
+	salt := make([]byte, 16)
+	for i := range salt {
+		salt[i] = byte(i)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		DeriveKey(passphrase, salt)
 	}
 }
 

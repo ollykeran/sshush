@@ -126,6 +126,35 @@ func TestParsePrivateKeyBlob_and_CommentFromParsedKey(t *testing.T) {
 	}
 }
 
+func BenchmarkParsePrivateKeyBlob(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		gen  func() []byte
+	}{
+		{"Ed25519", func() []byte {
+			_, priv, _ := ed25519.GenerateKey(rand.Reader)
+			return marshalOpenSSHWithComment(priv, "bench")
+		}},
+		{"RSA-2048", func() []byte {
+			priv, _ := rsa.GenerateKey(rand.Reader, 2048)
+			return marshalOpenSSHWithComment(priv, "bench")
+		}},
+		{"ECDSA-P256", func() []byte {
+			priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			return marshalOpenSSHWithComment(priv, "bench")
+		}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			data := tc.gen()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = ParsePrivateKeyBlob(data)
+			}
+		})
+	}
+}
+
 func TestParsePrivateKeyBlob_EncryptedOpenSSHReturnsErrEncryptedPrivateKey(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

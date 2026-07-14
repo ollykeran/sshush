@@ -68,6 +68,25 @@ func TestKDFLockedKeyring_doubleLock(t *testing.T) {
 	}
 }
 
+func BenchmarkKDFUnlock_Sshush(b *testing.B) {
+	inner := sshagent.NewKeyring().(sshagent.ExtendedAgent)
+	k := NewKDFLockedKeyring(inner)
+	passphrase := []byte("benchmark-passphrase")
+	if err := k.Lock(passphrase); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := k.Unlock(passphrase); err != nil {
+			b.Fatal(err)
+		}
+		if err := k.Lock(passphrase); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestKDFLockedKeyring_unlockWhenNotLocked(t *testing.T) {
 	inner := sshagent.NewKeyring().(sshagent.ExtendedAgent)
 	k := NewKDFLockedKeyring(inner)

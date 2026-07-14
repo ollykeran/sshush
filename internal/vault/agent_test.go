@@ -2,8 +2,11 @@ package vault
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/keys"
+	"golang.org/x/crypto/argon2"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -56,6 +60,137 @@ func setupExtendedAgent(t *testing.T, backend string) (ext sshagent.ExtendedAgen
 	default:
 		t.Fatalf("unknown backend %q", backend)
 		return nil, nil
+	}
+}
+
+// setupBenchAgent returns an unlocked vault ExtendedAgent for benchmarks.
+func setupBenchAgent(b *testing.B) (sshagent.ExtendedAgent, func()) {
+	b.Helper()
+	dir := b.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	passphrase := []byte("bench-passphrase")
+	if err := Init(store, passphrase); err != nil {
+		b.Fatal(err)
+	}
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		b.Fatal(err)
+	}
+	return va, func() {}
+}
+
+func BenchmarkUnlockChain_Raw(b *testing.B) {
+	dir := b.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	passphrase := []byte("bench-unlock-pass")
+	if err := Init(store, passphrase); err != nil {
+		b.Fatal(err)
+	}
+	meta := store.GetMetadata()
+	salt := meta.Salt
+	canary := meta.Canary
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		masterKey := argon2.IDKey(passphrase, salt, 3, 64*1024, 1, 32)
+		block, _ := aes.NewCipher(masterKey)
+		aead, _ := cipher.NewGCM(block)
+		iv, ct := canary[:gcmIVSize], canary[gcmIVSize:]
+		canaryPlain, _ := aead.Open(nil, iv, ct, nil)
+		_ = subtle.ConstantTimeCompare(canaryPlain, []byte(canaryPlaintext))
+		wipe(masterKey)
+		wipe(canaryPlain)
+	}
+}
+
+func BenchmarkVaultUnlock_Sshush(b *testing.B) {
+	dir := b.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	passphrase := []byte("bench-unlock-pass")
+	if err := Init(store, passphrase); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		va := NewVaultAgent(store)
+		if err := va.Unlock(passphrase); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSignChain_Raw(b *testing.B) {
+	dir := b.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	passphrase := []byte("bench-sign-pass")
+	if err := Init(store, passphrase); err != nil {
+		b.Fatal(err)
+	}
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		b.Fatal(err)
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	sshPub, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := va.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "bench-sign"}); err != nil {
+		b.Fatal(err)
+	}
+	fp := fingerprint(sshPub.PublicKey())
+	encrypted, _, _ := store.GetIdentity(fp)
+	masterKey := va.masterKey
+	data := []byte("benchmark data to sign for SSH agent performance test")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		plain, _ := decryptBlob(masterKey, encrypted)
+		priv, _ := unmarshalPrivateKey(plain, "ssh-ed25519")
+		signer, _ := ssh.NewSignerFromKey(priv)
+		_, _ = signer.Sign(nil, data)
+		wipe(plain)
+	}
+}
+
+func BenchmarkVaultSign_Sshush(b *testing.B) {
+	ext, _ := setupBenchAgent(b)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	sshPub, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := ext.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "bench-sign"}); err != nil {
+		b.Fatal(err)
+	}
+	data := []byte("benchmark data to sign for SSH agent performance test")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ext.Sign(sshPub.PublicKey(), data)
 	}
 }
 
