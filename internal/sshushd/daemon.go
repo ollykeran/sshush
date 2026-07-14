@@ -53,6 +53,7 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 		}
 		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 	}
+	os.Setenv("SSH_AUTH_SOCK", absSocket)
 	return agent.ListenAndServe(ctx, absSocket, ext)
 }
 
@@ -100,6 +101,7 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 	defer os.Remove(socketPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	os.Setenv("SSH_AUTH_SOCK", socketPath)
 	err = agent.ListenAndServe(ctx, socketPath, ext)
 	if err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
