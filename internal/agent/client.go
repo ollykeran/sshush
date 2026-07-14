@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"net"
 
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -10,7 +11,7 @@ import (
 func ListKeysFromSocket(socketPath string) ([]*sshagent.Key, error) {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("agent: dial socket %s: %w", socketPath, err)
 	}
 	defer conn.Close()
 	return sshagent.NewClient(conn).List()

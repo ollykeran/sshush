@@ -131,14 +131,14 @@ func WriteDefaultConfigFile(path string, overwrite bool) error {
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("config: create directory %s: %w", dir, err)
 	}
 	keyPaths := findDefaultKeys()
 	socketDisplay := utils.ContractHomeDirectory(platform.DefaultSocketPath())
 	def := theme.DefaultTheme()
 	data, err := renderDefaultConfigBytes(socketDisplay, keyPaths, def)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: render default config: %w", err)
 	}
 	return os.WriteFile(path, data, 0o644)
 }
@@ -151,7 +151,7 @@ func CreateDefaultConfig() error {
 		return nil
 	}
 	if err := WriteDefaultConfigFile(p, false); err != nil {
-		return err
+		return fmt.Errorf("config: write default config: %w", err)
 	}
 	fmt.Println("Default config created")
 	return nil

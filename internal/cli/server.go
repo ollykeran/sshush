@@ -50,10 +50,10 @@ func runServer(cmd *cobra.Command, _ []string) error {
 	}
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: resolve config path: %w", err)
 	}
 	if err := sshushd.StartServerDaemon(configPath, int(cfg.ServerListenPort)); err != nil {
-		if err.Error() == "already running" {
+		if err.Error() == "sshushd: server already running on port "+fmt.Sprint(cfg.ServerListenPort) {
 			style.NewOutput().Success("SSH server is already running on port " + fmt.Sprint(cfg.ServerListenPort)).PrintErr()
 			return nil
 		}
@@ -76,11 +76,11 @@ func newServerStatusCommand() *cobra.Command {
 func runServerStatus(cmd *cobra.Command, _ []string) error {
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: resolve config path: %w", err)
 	}
 	cfg, err := LoadMergedConfig(configPath, LoadOverrides{})
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: load merged config: %w", err)
 	}
 	if cfg.ServerListenPort <= 0 {
 		style.NewOutput().

@@ -35,7 +35,7 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 
 	out := style.NewOutput()

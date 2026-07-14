@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/ollykeran/sshush/internal/kdf"
@@ -22,15 +23,15 @@ func encryptBlob(masterKey, plain []byte) ([]byte, error) {
 	}
 	block, err := aes.NewCipher(masterKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create AES cipher: %w", err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create GCM: %w", err)
 	}
 	iv := make([]byte, gcmIVSize)
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: generate IV: %w", err)
 	}
 	ciphertext := aead.Seal(iv, iv, plain, nil)
 	return ciphertext, nil
@@ -46,16 +47,16 @@ func decryptBlob(masterKey, ciphertext []byte) ([]byte, error) {
 	}
 	block, err := aes.NewCipher(masterKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create AES cipher: %w", err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create GCM: %w", err)
 	}
 	iv, ct := ciphertext[:gcmIVSize], ciphertext[gcmIVSize:]
 	plain, err := aead.Open(nil, iv, ct, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: decrypt: %w", err)
 	}
 	return plain, nil
 }
@@ -71,8 +72,7 @@ const canaryPlaintext = "SSHUSH_VALID"
 
 var (
 	errNotImplemented  = errors.New("vault: not implemented")
-	errLocked          = errors.New("vault is locked")
+	errLocked          = errors.New("vault: vault is locked")
 	errWrongPassphrase = errors.New("vault: wrong passphrase")
 	errKeyNotFound     = errors.New("vault: key not found")
-	errExtensionPayload = errors.New("vault: invalid extension payload")
 )

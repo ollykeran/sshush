@@ -2,6 +2,7 @@ package vault
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -26,10 +27,10 @@ const ExtensionVaultSetAutoload = "vault-set-autoload"
 // VaultAgent implements sshagent.ExtendedAgent, storing private keys encrypted
 // in a JSON vault. Master key is held in memory when unlocked and wiped on Lock().
 type VaultAgent struct {
-	store             *VaultStore
-	mu                sync.RWMutex
-	masterKey         []byte              // nil when locked; wiped on Lock()
-	sessionAutoload0  map[string]struct{}  // fingerprints added this run with autoload=0 (visible until restart)
+	store            *VaultStore
+	mu               sync.RWMutex
+	masterKey        []byte             // nil when locked; wiped on Lock()
+	sessionAutoload0 map[string]struct{} // fingerprints added this run with autoload=0 (visible until restart)
 }
 
 // NewVaultAgent returns a VaultAgent that uses the given store. The vault is
@@ -57,7 +58,7 @@ func (a *VaultAgent) List() ([]*sshagent.Key, error) {
 	}
 	rows, err := a.store.ListIdentitiesForAgent(sessionSet)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: list identities: %w", err)
 	}
 	keys := make([]*sshagent.Key, len(rows))
 	for i := range rows {
@@ -79,7 +80,7 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool) er
 	defer a.mu.Unlock()
 	signer, err := ssh.NewSignerFromKey(key.PrivateKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: create signer: %w", err)
 	}
 	pub := signer.PublicKey()
 	pubBlob := pub.Marshal()
@@ -89,11 +90,11 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool) er
 	}
 	plain, err := marshalPrivateKey(key.PrivateKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: marshal private key: %w", err)
 	}
 	encrypted, err := encryptBlob(a.masterKey, plain)
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: encrypt key blob: %w", err)
 	}
 	wipe(plain)
 	id := Identity{
@@ -104,10 +105,10 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool) er
 		Autoload:      autoload,
 	}
 	if err := a.store.AddOrReplaceIdentity(id); err != nil {
-		return err
+		return fmt.Errorf("vault: store identity: %w", err)
 	}
 	if err := a.store.Save(); err != nil {
-		return err
+		return fmt.Errorf("vault: save store: %w", err)
 	}
 	if !autoload {
 		a.sessionAutoload0[fp] = struct{}{}
@@ -125,7 +126,10 @@ func (a *VaultAgent) Remove(key ssh.PublicKey) error {
 	fp := fingerprint(key)
 	delete(a.sessionAutoload0, fp)
 	a.store.RemoveIdentity(fp)
-	return a.store.Save()
+	if err := a.store.Save(); err != nil {
+		return fmt.Errorf("vault: save store: %w", err)
+	}
+	return nil
 }
 
 // RemoveAll deletes all identities.
@@ -137,7 +141,10 @@ func (a *VaultAgent) RemoveAll() error {
 	}
 	a.store.RemoveAllIdentities()
 	a.sessionAutoload0 = make(map[string]struct{})
-	return a.store.Save()
+	if err := a.store.Save(); err != nil {
+		return fmt.Errorf("vault: save store: %w", err)
+	}
+	return nil
 }
 
 // Lock wipes the master key from memory; Sign will fail until Unlock.
@@ -163,7 +170,7 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 	defer wipe(recoveryKey)
 	masterKey, err := decryptBlob(recoveryKey, meta.WrappedMasterKey)
 	if err != nil {
-		return errWrongPassphrase
+		return fmt.Errorf("vault: decrypt with recovery key: %w", err)
 	}
 	if a.masterKey != nil {
 		wipe(a.masterKey)
@@ -214,16 +221,16 @@ func (a *VaultAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error
 	}
 	plain, err := decryptBlob(a.masterKey, encrypted)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: decrypt key for signing: %w", err)
 	}
 	defer wipe(plain)
 	priv, err := unmarshalPrivateKey(plain, key.Type())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: unmarshal private key: %w", err)
 	}
 	signer, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("vault: create signer: %w", err)
 	}
 	return signer.Sign(nil, data)
 }
@@ -285,10 +292,10 @@ func (a *VaultAgent) setIdentityAutoload(fp string, on bool) error {
 	}
 	id.Autoload = on
 	if err := a.store.AddOrReplaceIdentity(id); err != nil {
-		return err
+		return fmt.Errorf("vault: store identity: %w", err)
 	}
 	if err := a.store.Save(); err != nil {
-		return err
+		return fmt.Errorf("vault: save store: %w", err)
 	}
 	if on {
 		delete(a.sessionAutoload0, fp)
@@ -311,27 +318,27 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 	if extensionType == "unlock-recovery" {
 		mnemonic := strings.Join(strings.Fields(strings.TrimSpace(string(contents))), " ")
 		if err := a.UnlockWithRecovery(mnemonic); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: unlock recovery: %w", err)
 		}
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionAddKeyOpts {
 		if len(contents) < 5 {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: add-key-opts: payload too short (%d bytes)", len(contents))
 		}
 		pemLen := binary.BigEndian.Uint32(contents[:4])
 		if int(pemLen) > len(contents)-5 {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
 		}
 		pem := contents[4 : 4+pemLen]
 		autoloadByte := contents[4+pemLen]
 		autoload := autoloadByte == 1
 		if autoloadByte != 0 && autoloadByte != 1 {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
 		}
 		key, err := ssh.ParseRawPrivateKey(pem)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: add-key-opts: parse PEM: %w", err)
 		}
 		comment := ""
 		if parsed, err := openssh.ParsePrivateKeyBlob(pem); err == nil && parsed.Comment != "" {
@@ -339,36 +346,36 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		}
 		addedKey := sshagent.AddedKey{PrivateKey: key, Comment: comment}
 		if err := a.addKeyWithAutoload(addedKey, autoload); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: add-key-opts: %w", err)
 		}
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionVaultSessionLoad {
 		fp := strings.TrimSpace(string(contents))
 		if fp == "" {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: session-load: empty fingerprint")
 		}
 		if err := a.sessionLoad(fp); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: session-load: %w", err)
 		}
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionVaultSetAutoload {
 		if len(contents) < 5 {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: set-autoload: payload too short (%d bytes)", len(contents))
 		}
 		fpLen64 := binary.BigEndian.Uint32(contents[:4])
 		if int(fpLen64)+5 != len(contents) {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: set-autoload: fingerprint length %d does not match payload size", fpLen64)
 		}
 		fpLen := int(fpLen64)
 		fp := string(contents[4 : 4+fpLen])
 		flag := contents[4+fpLen]
 		if flag != 0 && flag != 1 {
-			return nil, errExtensionPayload
+			return nil, fmt.Errorf("vault: set-autoload: invalid flag byte %d", flag)
 		}
 		if err := a.setIdentityAutoload(fp, flag == 1); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("vault: set-autoload: %w", err)
 		}
 		return []byte("ok"), nil
 	}

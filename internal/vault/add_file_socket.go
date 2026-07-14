@@ -1,6 +1,10 @@
 package vault
 
-import "github.com/ollykeran/sshush/internal/agent"
+import (
+	"fmt"
+
+	"github.com/ollykeran/sshush/internal/agent"
+)
 
 // AddPrivateKeyFileToSocket adds the private key at path to the agent at socketPath.
 // If the agent is a vault backend, uses add-key-opts with vaultAutoload; otherwise
@@ -10,10 +14,16 @@ func AddPrivateKeyFileToSocket(socketPath, path string, vaultAutoload bool) erro
 	if live && mode == "vault" {
 		payload, err := BuildAddKeyOptsPayload(path, vaultAutoload)
 		if err != nil {
-			return err
+			return fmt.Errorf("vault: build add-key-opts payload: %w", err)
 		}
 		_, err = agent.CallExtension(socketPath, ExtensionAddKeyOpts, payload)
-		return err
+		if err != nil {
+			return fmt.Errorf("vault: call add-key-opts extension: %w", err)
+		}
+		return nil
 	}
-	return agent.AddKeyToSocketFromPath(socketPath, path)
+	if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		return fmt.Errorf("vault: add key to socket: %w", err)
+	}
+	return nil
 }

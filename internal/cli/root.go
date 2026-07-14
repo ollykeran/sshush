@@ -175,7 +175,7 @@ func NewRootCommand() *cobra.Command {
 					style.SetTheme(theme.DefaultTheme())
 					return nil
 				}
-				return err
+				return fmt.Errorf("cli: resolve config path: %w", err)
 			}
 
 			overrides := LoadOverrides{}
@@ -186,10 +186,10 @@ func NewRootCommand() *cobra.Command {
 				}
 			}
 
-			cfg, err := LoadMergedConfig(configPath, overrides)
-			if err != nil {
-				return err
-			}
+		cfg, err := LoadMergedConfig(configPath, overrides)
+		if err != nil {
+			return fmt.Errorf("cli: load merged config: %w", err)
+		}
 
 			env.Config = &cfg
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))

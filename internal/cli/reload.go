@@ -41,11 +41,11 @@ type keyInfo struct {
 func runReload(cmd *cobra.Command, _ []string) error {
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: resolve config path: %w", err)
 	}
 	newCfg, err := LoadMergedConfig(configPath, LoadOverrides{})
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: load merged config: %w", err)
 	}
 
 	pidFilePath := runtime.PidFilePath()

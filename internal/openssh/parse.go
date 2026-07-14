@@ -3,6 +3,7 @@ package openssh
 import (
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 
 	ssh "golang.org/x/crypto/ssh"
@@ -16,7 +17,7 @@ const openssh_auth_magic = "openssh-key-v1\x00"
 var ErrNotOpenSSHKey = errors.New("openssh: not an unencrypted OpenSSH private key")
 
 // ErrEncryptedPrivateKey is returned when the file is a passphrase-protected private key.
-var ErrEncryptedPrivateKey = errors.New("encrypted private key (passphrase-protected); sshush only supports unencrypted keys")
+var ErrEncryptedPrivateKey = errors.New("openssh: encrypted private key (passphrase-protected); sshush only supports unencrypted keys")
 
 // ParsedKey holds parsed OpenSSH key metadata.
 type ParsedKey struct {
@@ -74,7 +75,7 @@ func ParsePrivateKeyBlob(data []byte) (*ParsedKey, error) {
 			Pad     []byte `ssh:"rest"`
 		}
 		if err := ssh.Unmarshal(pk.Rest, &ed); err != nil {
-			return nil, ErrNotOpenSSHKey
+			return nil, fmt.Errorf("openssh: parse ed25519 key: %w", err)
 		}
 		out.Comment = ed.Comment
 	case ssh.KeyAlgoRSA:
@@ -89,7 +90,7 @@ func ParsePrivateKeyBlob(data []byte) (*ParsedKey, error) {
 			Pad     []byte `ssh:"rest"`
 		}
 		if err := ssh.Unmarshal(pk.Rest, &rsa); err != nil {
-			return nil, ErrNotOpenSSHKey
+			return nil, fmt.Errorf("openssh: parse RSA key: %w", err)
 		}
 		out.Comment = rsa.Comment
 	case ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521:
@@ -101,7 +102,7 @@ func ParsePrivateKeyBlob(data []byte) (*ParsedKey, error) {
 			Pad     []byte `ssh:"rest"`
 		}
 		if err := ssh.Unmarshal(pk.Rest, &ec); err != nil {
-			return nil, ErrNotOpenSSHKey
+			return nil, fmt.Errorf("openssh: parse ECDSA key: %w", err)
 		}
 		out.Comment = ec.Comment
 	}
