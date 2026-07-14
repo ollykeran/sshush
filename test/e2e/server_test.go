@@ -69,7 +69,7 @@ func TestE2E_ServerStartStop(t *testing.T) {
 	runtimeDir := dir
 
 	// Vault init
-	if err := os.WriteFile(filepath.Join(dir, "init_stdin.txt"), []byte("e2epass\ne2epass\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "init_stdin.txt"), []byte("e2epassthatalwaysmeetspasswordrequirementsA1!\ne2epassthatalwaysmeetspasswordrequirementsA1!\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	initStdin, err := os.Open(filepath.Join(dir, "init_stdin.txt"))
@@ -141,7 +141,7 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 	runtimeDir := dir
 
 	// Vault init
-	initStdin := strings.NewReader("e2epass\ne2epass\n")
+	initStdin := strings.NewReader("e2epassthatalwaysmeetspasswordrequirementsA1!\ne2epassthatalwaysmeetspasswordrequirementsA1!\n")
 	_, _, code := runSSHush(t, binDir, configPath, runtimeDir, initStdin, "vault", "init", "--no-recovery")
 	if code != 0 {
 		t.Fatalf("vault init: exit %d", code)
@@ -337,7 +337,7 @@ func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
 	configPath := writeE2EConfigWithServer(t, dir, socketPath, vaultPath, nil, serverPort, "", "")
 	runtimeDir := dir
 
-	initStdin := strings.NewReader("e2epass\ne2epass\n")
+	initStdin := strings.NewReader("e2epassthatalwaysmeetspasswordrequirementsA1!\ne2epassthatalwaysmeetspasswordrequirementsA1!\n")
 	_, _, code := runSSHush(t, binDir, configPath, runtimeDir, initStdin, "vault", "init", "--no-recovery")
 	if code != 0 {
 		t.Fatalf("vault init: exit %d", code)

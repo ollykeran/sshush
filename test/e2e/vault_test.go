@@ -22,7 +22,7 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-const e2ePassphrase = "e2epass\n"
+const e2ePassphrase = "e2epassthatalwaysmeetspasswordrequirementsA1!\n"
 
 var (
 	buildOnce sync.Once
@@ -217,7 +217,7 @@ func TestE2E_VaultLifecycle(t *testing.T) {
 
 	// vault init: passphrase + confirm (two lines); use file so child reads both lines reliably
 	initStdinFile := filepath.Join(dir, "init_stdin.txt")
-	if err := os.WriteFile(initStdinFile, []byte("e2epass\ne2epass\n"), 0o600); err != nil {
+	if err := os.WriteFile(initStdinFile, []byte("e2epassthatalwaysmeetspasswordrequirementsA1!\ne2epassthatalwaysmeetspasswordrequirementsA1!\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	initStdin, err := os.Open(initStdinFile)
@@ -390,7 +390,7 @@ func TestE2E_VaultSubcommandManage(t *testing.T) {
 	runtimeDir := dir
 
 	initStdinFile := filepath.Join(dir, "init_stdin.txt")
-	if err := os.WriteFile(initStdinFile, []byte("e2epass\ne2epass\n"), 0o600); err != nil {
+	if err := os.WriteFile(initStdinFile, []byte("e2epassthatalwaysmeetspasswordrequirementsA1!\ne2epassthatalwaysmeetspasswordrequirementsA1!\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	initStdin, err := os.Open(initStdinFile)
