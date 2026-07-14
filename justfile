@@ -66,6 +66,13 @@ build: build-sshushd
 test pkg="./...":
     go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
 
+bench pkg="./..." count="1":
+    go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -bench=. -benchmem -count={{ count }} -run=^$
+
+# Run benchmarks via Python script (nicer formatting, optional -w to save)
+bench-report count="1":
+    python3 scripts/bench.py -c {{ count }}
+
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
