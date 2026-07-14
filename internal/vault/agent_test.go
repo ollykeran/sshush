@@ -487,7 +487,7 @@ func TestAutoload_ListFiltersAfterRestart(t *testing.T) {
 	if err := va.Add(sshagent.AddedKey{PrivateKey: privA, Comment: "no-autoload"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: privB, Comment: "autoload"}, true); err != nil {
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: privB, Comment: "autoload"}, true, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -605,7 +605,7 @@ func TestExtension_VaultSessionLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "noload"}, false); err != nil {
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "noload"}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -637,7 +637,7 @@ func TestExtension_VaultSessionLoad(t *testing.T) {
 
 	// No-op for autoload identity
 	_, privB, _ := ed25519.GenerateKey(rand.Reader)
-	if err := va2.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: privB, Comment: "autoloaded"}, true); err != nil {
+	if err := va2.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: privB, Comment: "autoloaded"}, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	signerB, _ := ssh.NewSignerFromKey(privB)
@@ -664,7 +664,7 @@ func TestExtension_VaultSetAutoload(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "toggle"}, false); err != nil {
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "toggle"}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	signer, _ := ssh.NewSignerFromKey(priv)
@@ -695,5 +695,68 @@ func TestExtension_VaultSetAutoload(t *testing.T) {
 	keys3, _ := va3.List()
 	if len(keys3) != 0 {
 		t.Fatalf("after set autoload off: want 0 keys at restart, got %d", len(keys3))
+	}
+}
+
+func TestAddKeyWithAutoload_storesFilepath(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("filepath-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	keyFilepath := "/home/user/.ssh/id_ed25519"
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "with-path"}, true, keyFilepath); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := store.AllIdentities()
+	if len(ids) != 1 {
+		t.Fatalf("want 1 identity, got %d", len(ids))
+	}
+	if ids[0].Filepath != keyFilepath {
+		t.Fatalf("Identity.Filepath = %q, want %q", ids[0].Filepath, keyFilepath)
+	}
+}
+
+func TestAddKeyWithAutoload_emptyFilepath(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("no-path-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "no-path"}, false, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := store.AllIdentities()
+	if len(ids) != 1 {
+		t.Fatalf("want 1 identity, got %d", len(ids))
+	}
+	if ids[0].Filepath != "" {
+		t.Fatalf("Identity.Filepath = %q, want empty", ids[0].Filepath)
 	}
 }

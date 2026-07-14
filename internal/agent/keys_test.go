@@ -102,3 +102,83 @@ func TestLoadKeys_skipsBadPaths(t *testing.T) {
 		t.Fatalf("want 1 key after skipping bad path, got %d", len(keys))
 	}
 }
+
+func TestAddKeyFromPath_registersFilepath(t *testing.T) {
+	keyPEM := mustMarshalKey(t, "reg-test")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(path, keyPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	keyring := sshagent.NewKeyring()
+	if err := AddKeyFromPath(keyring, path); err != nil {
+		t.Fatalf("AddKeyFromPath: %v", err)
+	}
+
+	keys, err := keyring.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("want 1 key, got %d", len(keys))
+	}
+
+	pub, err := ssh.ParsePublicKey(keys[0].Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := ssh.FingerprintSHA256(pub)
+	got := GetFilepath(fp)
+	if got != path {
+		t.Fatalf("GetFilepath(%s) = %q, want %q", fp, got, path)
+	}
+}
+
+func TestRegisterAndGetFilepath(t *testing.T) {
+	fp := "SHA256:test-fingerprint"
+	path := "/home/user/.ssh/id_ed25519"
+
+	if got := GetFilepath(fp); got != "" {
+		t.Fatalf("GetFilepath before register: got %q, want empty", got)
+	}
+
+	RegisterFilepath(fp, path)
+	if got := GetFilepath(fp); got != path {
+		t.Fatalf("GetFilepath after register: got %q, want %q", got, path)
+	}
+}
+
+func TestResolveFilepath_fallbackToCfgPaths(t *testing.T) {
+	keyPEM := mustMarshalKey(t, "cfg-test")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(path, keyPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the fingerprint
+	pub, _, _, err := ParseKeyFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := ssh.FingerprintSHA256(pub)
+
+	// Registry is empty — should fall back to cfgPaths
+	got := ResolveFilepath(fp, []string{path})
+	if got != path {
+		t.Fatalf("ResolveFilepath = %q, want %q", got, path)
+	}
+
+	// Should now be cached in registry
+	if cached := GetFilepath(fp); cached != path {
+		t.Fatalf("GetFilepath after resolve = %q, want %q", cached, path)
+	}
+}
+
+func TestResolveFilepath_notFound(t *testing.T) {
+	got := ResolveFilepath("SHA256:nonexistent", nil)
+	if got != "" {
+		t.Fatalf("ResolveFilepath for unknown = %q, want empty", got)
+	}
+}
