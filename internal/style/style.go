@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
+var mu sync.RWMutex
 var currentTheme theme.Theme
 
 func init() {
@@ -47,6 +49,8 @@ func rebuildStyles() {
 
 // SetTheme sets the theme used by all style functions and Output. Call after loading config (e.g. in root PersistentPreRunE).
 func SetTheme(t theme.Theme) {
+	mu.Lock()
+	defer mu.Unlock()
 	currentTheme = t
 	rebuildStyles()
 }
@@ -54,22 +58,59 @@ func SetTheme(t theme.Theme) {
 // StylesForInput returns the box, focus, and blurred lipgloss styles for use by input components (e.g. passphrase prompt).
 // Use focusStyle for focused state, blurredStyle for unfocused (e.g. placeholder/secondary text).
 func StylesForInput() (boxStyle, focusStyle, blurredStyle lipgloss.Style) {
+	mu.RLock()
+	defer mu.RUnlock()
 	return box, focus, text
 }
 
 // InputCursorColor returns the theme focus color for the text input cursor (e.g. Cursor.Color).
 func InputCursorColor() color.Color {
+	mu.RLock()
+	defer mu.RUnlock()
 	return lipgloss.Color(currentTheme.Focus)
 }
 
 // Standalone style functions - all driven by the current theme (SetTheme).
-func Success(s string) string   { return success.Render(s) }
-func Text(s string) string      { return text.Render(s) }
-func Highlight(s string) string { return highlight.Render(s) }
-func Focus(s string) string     { return focus.Render(s) }
-func Warn(s string) string      { return warn.Render(s) }
-func Err(s string) string       { return err.Render(s) }
-func Dim(s string) string       { return dim.Render(s) }
+func Success(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return success.Render(s)
+}
+func Text(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return text.Render(s)
+}
+func TextBold(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return textBold.Render(s)
+}
+func Highlight(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return highlight.Render(s)
+}
+func Focus(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return focus.Render(s)
+}
+func Warn(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return warn.Render(s)
+}
+func Err(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return err.Render(s)
+}
+func Dim(s string) string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return dim.Render(s)
+}
 
 // AgentModeIndicatorLine shows live backend when the socket is reachable; otherwise config with a note.
 // Secondary details use normal text colour so they stay readable (not faint dim).
@@ -117,15 +158,16 @@ func maxContentLineWidth(s string) int {
 // renderBox renders at natural width when the outer block fits within limit;
 // otherwise uses box.Width(limit) so long lines wrap on narrow terminals.
 func renderBox(s string, limit int) string {
+	boxLocal, _, _ := StylesForInput()
 	if limit <= 0 {
-		return box.Render(s)
+		return boxLocal.Render(s)
 	}
 	inner := maxContentLineWidth(s)
-	outerMin := inner + box.GetHorizontalFrameSize()
+	outerMin := inner + boxLocal.GetHorizontalFrameSize()
 	if outerMin <= limit {
-		return box.Render(s)
+		return boxLocal.Render(s)
 	}
-	return box.Width(limit).Render(s)
+	return boxLocal.Width(limit).Render(s)
 }
 
 // Output is a builder for styled terminal output. Append lines with semantic
@@ -138,11 +180,11 @@ type Output struct {
 func NewOutput() *Output { return &Output{} }
 
 // Semantic append methods - encode color from theme, callers describe intent.
-func (o *Output) Success(s string) *Output  { return o.add(success.Render(s)) }
-func (o *Output) Info(s string) *Output     { return o.add(text.Render(s)) }
-func (o *Output) InfoBold(s string) *Output { return o.add(textBold.Render(s)) }
-func (o *Output) Warn(s string) *Output     { return o.add(warn.Render(s)) }
-func (o *Output) Error(s string) *Output    { return o.add(err.Render(s)) }
+func (o *Output) Success(s string) *Output  { return o.add(Success(s)) }
+func (o *Output) Info(s string) *Output     { return o.add(Text(s)) }
+func (o *Output) InfoBold(s string) *Output { return o.add(TextBold(s)) }
+func (o *Output) Warn(s string) *Output     { return o.add(Warn(s)) }
+func (o *Output) Error(s string) *Output    { return o.add(Err(s)) }
 
 // Spacer appends a blank line for visual separation.
 func (o *Output) Spacer() *Output { return o.add("") }
