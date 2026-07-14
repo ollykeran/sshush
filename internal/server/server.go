@@ -36,11 +36,14 @@ func (s *Server) ListenAndServe() error {
 	} else {
 		pem, err := generateHostKeyPEM()
 		if err != nil {
-			return fmt.Errorf("generate host key: %w", err)
+			return fmt.Errorf("server: generate host key: %w", err)
 		}
 		opts = append(opts, gliderlabs.HostKeyPEM(pem))
 	}
-	return gliderlabs.ListenAndServe(s.ListenAddr, s.handleSession, opts...)
+	if err := gliderlabs.ListenAndServe(s.ListenAddr, s.handleSession, opts...); err != nil {
+		return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
+	}
+	return nil
 }
 
 func (s *Server) publicKeyAuth(ctx gliderlabs.Context, key gliderlabs.PublicKey) bool {
@@ -54,11 +57,11 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 func generateHostKeyPEM() ([]byte, error) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("server: generate ed25519 key: %w", err)
 	}
 	block, err := ssh.MarshalPrivateKey(priv, "")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("server: marshal host key: %w", err)
 	}
 	return pem.EncodeToMemory(block), nil
 }

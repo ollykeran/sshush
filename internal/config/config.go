@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -108,7 +109,7 @@ func MarshalConfig(cfg Config) ([]byte, error) {
 	doc := toDocument(cfg)
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config: marshal toml: %w", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -124,17 +125,17 @@ func EnsureSSHDirectory() {
 func LoadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
 	}
 
 	var doc configDocument
 	if _, err := toml.Decode(string(data), &doc); err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("config: parse toml %s: %w", path, err)
 	}
 
 	cfg, err := documentToConfig(&doc)
 	if err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("config: validate %s: %w", path, err)
 	}
 
 	cfg.SocketPath = utils.ExpandHomeDirectory(cfg.SocketPath)

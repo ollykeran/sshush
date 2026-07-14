@@ -19,7 +19,7 @@ import (
 func ParseKeyFromPath(path string) (ssh.PublicKey, string, interface{}, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("agent: read key %s: %w", path, err)
 	}
 	if block, _ := pem.Decode(data); block != nil {
 		if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
@@ -40,11 +40,11 @@ func ParseKeyFromPath(path string) (ssh.PublicKey, string, interface{}, error) {
 		if errors.As(err, &pm) {
 			return nil, "", nil, openssh.ErrEncryptedPrivateKey
 		}
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("agent: parse private key %s: %w", path, err)
 	}
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("agent: create signer for %s: %w", path, err)
 	}
 	comment := filepath.Base(path)
 	if openComment != nil && openComment.Comment != "" {

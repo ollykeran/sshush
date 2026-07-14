@@ -12,21 +12,21 @@ import (
 
 // KDF locked-agent errors mirror golang.org/x/crypto/ssh/agent keyring strings.
 var (
-	errKDFAgentLocked            = errors.New("agent: locked")
-	errKDFAgentNotLocked         = errors.New("agent: not locked")
-	errKDFAgentIncorrectPassphrase = fmt.Errorf("agent: incorrect passphrase")
+	errKDFAgentLocked             = errors.New("agent: locked")
+	errKDFAgentNotLocked          = errors.New("agent: not locked")
+	errKDFAgentIncorrectPassphrase = errors.New("agent: incorrect passphrase")
 )
 
 // KDFLockedKeyring wraps a plain ExtendedAgent and enforces lock/unlock using an Argon2id-derived
 // verifier (salt + derived key material in memory only). The inner keyring is never Lock/Unlock'd;
 // signing and listing are blocked at this layer when locked.
 type KDFLockedKeyring struct {
-	mu sync.Mutex
+	mu    sync.Mutex
 	inner sshagent.ExtendedAgent
 
-	locked       bool
-	salt         []byte
-	derivedKey   []byte // 32-byte kdf.DeriveKey output
+	locked     bool
+	salt       []byte
+	derivedKey []byte // 32-byte kdf.DeriveKey output
 }
 
 // NewKDFLockedKeyring wraps the given agent (typically *sshagent.Keyring) for keys-only mode.
@@ -56,7 +56,7 @@ func (k *KDFLockedKeyring) Lock(passphrase []byte) error {
 	}
 	salt, err := kdf.GenerateSalt()
 	if err != nil {
-		return err
+		return fmt.Errorf("agent: generate lock salt: %w", err)
 	}
 	derived := kdf.DeriveKey(passphrase, salt)
 	k.salt = append([]byte(nil), salt...)

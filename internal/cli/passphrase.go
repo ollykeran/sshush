@@ -16,10 +16,10 @@ import (
 	"golang.org/x/term"
 )
 
-var errPassphraseCancelled = errors.New("cancelled")
+var errPassphraseCancelled = errors.New("cli: passphrase input cancelled")
 
 // ErrPassphrasesDoNotMatch is returned when confirmation does not match the first entry.
-var ErrPassphrasesDoNotMatch = errors.New("passphrases do not match")
+var ErrPassphrasesDoNotMatch = errors.New("cli: passphrases do not match")
 
 // ClearBytes overwrites b with zeros. Use after handling sensitive passphrase material.
 func ClearBytes(b []byte) {
@@ -73,7 +73,7 @@ func readPassphrase(prompt string) ([]byte, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	line, err := stdinLineReader.r.ReadString('\n')
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cli: read passphrase from stdin: %w", err)
 	}
 	return []byte(strings.TrimSuffix(line, "\n")), nil
 }
@@ -116,10 +116,10 @@ func readPassphraseStyled(prompt string) ([]byte, error) {
 		eraseInlineBlock(os.Stderr, pm.lastLineCount)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cli: run passphrase prompt: %w", err)
 	}
 	if pm == nil {
-		return nil, errors.New("passphrase prompt failed")
+		return nil, fmt.Errorf("cli: passphrase prompt failed")
 	}
 	if pm.cancelled {
 		return nil, errPassphraseCancelled

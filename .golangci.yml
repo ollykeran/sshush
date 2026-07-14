@@ -1,0 +1,28 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+  exclusions:
+    generated: strict
+    rules:
+      # Exclude staticcheck quickfix suggestions (QF) — informational only
+      - linters:
+          - staticcheck
+        text: "QF1"
+      # Exclude deprecated API warnings until the codebase migrates
+      - linters:
+          - staticcheck
+        text: "SA1019"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

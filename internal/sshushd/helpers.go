@@ -26,7 +26,7 @@ func FindBinary() (string, error) {
 	if err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("sshushd binary not found")
+	return "", fmt.Errorf("sshushd: binary not found in PATH or alongside current executable")
 }
 
 // StopDaemon sends SIGTERM to the process in pidFilePath and waits for it to exit.
@@ -34,22 +34,22 @@ func StopDaemon(pidFilePath string) error {
 	data, err := os.ReadFile(pidFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no pidfile at %s: %w", pidFilePath, os.ErrNotExist)
+			return fmt.Errorf("sshushd: no pidfile at %s: %w", pidFilePath, os.ErrNotExist)
 		}
-		return err
+		return fmt.Errorf("sshushd: read pidfile %s: %w", pidFilePath, err)
 	}
 
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return fmt.Errorf("invalid pidfile: %w", err)
+		return fmt.Errorf("sshushd: invalid pidfile %s: %w", pidFilePath, err)
 	}
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("find process %d: %w", pid, err)
+		return fmt.Errorf("sshushd: find process %d: %w", pid, err)
 	}
 	if err := process.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("send SIGTERM: %w", err)
+		return fmt.Errorf("sshushd: send SIGTERM to process %d: %w", pid, err)
 	}
 	for i := 0; i < 50; i++ {
 		if process.Signal(syscall.Signal(0)) != nil {

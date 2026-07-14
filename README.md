@@ -23,7 +23,8 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 ## Features
 
 - **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
-- **Keys**: create, edit comment, find, export public key.
+- **Keys**: create, edit comment, find, export public key, validate.
+- **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`). See [Config Reference](docs/config.md) `[server]` section.
@@ -40,6 +41,8 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 | `sshush reload` | match agent to `config.toml` |
 | `sshush tui` | interactive UI |
 | `sshush create` / `edit` / `export` / `find` | key file operations |
+| `sshush validate` | validate and inspect a key file (private or public) |
+| `sshush selftest` | test agent connectivity (env, socket, list, sign) |
 | `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
 | `sshush server` | optional TCP SSH server |
 | `sshush theme` / `completion` / `version` | theming, shell completion, build info |

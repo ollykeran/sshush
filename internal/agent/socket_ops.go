@@ -11,7 +11,7 @@ import (
 func withSocketClient(socketPath string, fn func(client sshagent.ExtendedAgent) error) error {
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("agent: dial socket %s: %w", socketPath, err)
 	}
 	defer conn.Close()
 	return fn(sshagent.NewClient(conn))
@@ -42,12 +42,12 @@ func RemoveKeyFromSocketByFingerprint(socketPath, fingerprint string) (bool, err
 	err := withSocketClient(socketPath, func(client sshagent.ExtendedAgent) error {
 		keys, err := client.List()
 		if err != nil {
-			return err
+			return fmt.Errorf("agent: list keys: %w", err)
 		}
 		for _, key := range keys {
 			if ssh.FingerprintSHA256(key) == fingerprint {
 				if err := client.Remove(key); err != nil {
-					return fmt.Errorf("remove key: %w", err)
+					return fmt.Errorf("agent: remove key: %w", err)
 				}
 				removed = true
 				return nil
