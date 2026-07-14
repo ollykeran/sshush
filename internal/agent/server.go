@@ -23,7 +23,9 @@ func (e *errStyled) Error() string { return e.styled }
 func (e *errStyled) Unwrap() error { return e.err }
 
 func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent) error {
-	os.MkdirAll(filepath.Dir(socketPath), 0700)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+		return err
+	}
 	if conn, err := net.Dial("unix", socketPath); err == nil {
 		conn.Close()
 		return &errStyled{err: ErrAlreadyRunning, styled: style.Err(ErrAlreadyRunning.Error())}
@@ -34,8 +36,6 @@ func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.Ext
 		return err
 	}
 	defer listener.Close()
-
-	os.Setenv("SSH_AUTH_SOCK", socketPath)
 
 	go func() {
 		<-ctx.Done()

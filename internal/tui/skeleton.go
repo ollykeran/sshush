@@ -108,15 +108,6 @@ const (
 
 var themePresetOrder = theme.PresetNamesOrdered()
 
-func (s *Skeleton) currentThemePresetIndex() int {
-	for i, name := range themePresetOrder {
-		if t, ok := theme.ResolveTheme(name); ok && themeEqual(t, s.theme) {
-			return i
-		}
-	}
-	return 0
-}
-
 // themePickerOrder returns preset names for the picker; appends "custom" if current theme matches no preset.
 func (s *Skeleton) themePickerOrder() []string {
 	order := make([]string, 0, len(themePresetOrder)+1)
@@ -1165,7 +1156,7 @@ func (s *Skeleton) themePickerMenuBox(maxHeight int) string {
 	}
 	for j := start; j < end; j++ {
 		name := order[j]
-		lineContent := "  " + name
+		var lineContent string
 		if j == s.themePickerIndex {
 			lineContent = st.FocusedButtonStyle.Render("> " + name)
 		} else {
@@ -1183,31 +1174,6 @@ func (s *Skeleton) themePickerMenuBox(maxHeight int) string {
 		BorderForeground(lipgloss.Color(st.OuterBorderColorHex)).
 		Padding(1, 1).
 		Render(body)
-}
-
-func (s *Skeleton) themePickerView(width, height int) string {
-	st := s.styles
-	order := s.themePickerOrder()
-	lines := []string{st.SectionTitleStyle.Render(" Theme"), ""}
-	for i, name := range order {
-		suffix := ""
-		if i == s.currentThemePickerIndex() {
-			suffix = " (current)"
-		}
-		if i == s.themePickerIndex {
-			lines = append(lines, st.FocusedButtonStyle.Render("> "+name)+suffix)
-		} else {
-			lines = append(lines, st.DimStyle.Render("  "+name)+suffix)
-		}
-	}
-	lines = append(lines, "", st.DimStyle.Render("  [s] save  Esc: close"))
-	body := strings.Join(lines, "\n")
-	box := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(st.OuterBorderColorHex)).
-		Padding(1, 2).
-		Render(body)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (s *Skeleton) helpOverlay(lines []string, width, height int) string {
