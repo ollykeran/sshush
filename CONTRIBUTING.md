@@ -9,7 +9,7 @@
 
 ## Code style
 
-- Run `go fmt`, `golangci-lint` (if configured).
+- Run `go fmt`, `just lint` (golangci-lint).
 - Add godoc comments for exported symbols. See [docs/godoc-guide.md](docs/godoc-guide.md).
 
 ## Pull requests
