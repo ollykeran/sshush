@@ -40,8 +40,14 @@ func isGenerateConfigCmd(cmd *cobra.Command) bool {
 func suppressAgentModeIndicator(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "tui", "theme", "help", "completion":
+		case "tui", "theme", "help", "completion",
+			"validate", "create", "export", "find", "version",
+			"generate", "selftest":
 			return true
+		case "vault":
+			if c != cmd && cmd.Name() == "init" {
+				return true
+			}
 		}
 	}
 	return isGenerateConfigCmd(cmd)

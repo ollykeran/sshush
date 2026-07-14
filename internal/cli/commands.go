@@ -24,4 +24,6 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newVaultCommand())
 	root.AddCommand(newServerCommand())
 	root.AddCommand(newGenerateCommand())
+	root.AddCommand(newValidateCommand())
+	root.AddCommand(newSelftestCommand())
 }
