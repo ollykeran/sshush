@@ -70,12 +70,12 @@ func (a *VaultAgent) List() ([]*sshagent.Key, error) {
 // Add encrypts the private key and adds it to the store with autoload=false,
 // and adds the fingerprint to the session set so the key is visible until restart.
 func (a *VaultAgent) Add(key sshagent.AddedKey) error {
-	return a.addKeyWithAutoload(key, false)
+	return a.addKeyWithAutoload(key, false, "")
 }
 
 // addKeyWithAutoload adds the key with the given autoload.
 // When autoload is false, the fingerprint is added to sessionAutoload0 so the key is visible until restart.
-func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool) error {
+func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool, keyFilepath string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	signer, err := ssh.NewSignerFromKey(key.PrivateKey)
@@ -102,6 +102,7 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool) er
 		PublicKey:     pubBlob,
 		EncryptedBlob: encrypted,
 		Comment:       key.Comment,
+		Filepath:      keyFilepath,
 		Autoload:      autoload,
 	}
 	if err := a.store.AddOrReplaceIdentity(id); err != nil {
@@ -326,26 +327,53 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		if len(contents) < 5 {
 			return nil, fmt.Errorf("vault: add-key-opts: payload too short (%d bytes)", len(contents))
 		}
-		pemLen := binary.BigEndian.Uint32(contents[:4])
-		if int(pemLen) > len(contents)-5 {
-			return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
+		// Version detection: old format starts with 4-byte PEM length (first byte 0x00 for typical keys);
+		// new format (v1) starts with version byte 0x01.
+		var pemData []byte
+		var autoload bool
+		var keyFilepath string
+		if contents[0] == 1 && len(contents) >= 10 {
+			// Version 1: [1-byte version][4-byte PEM len][PEM][1-byte autoload][4-byte filepath len][filepath]
+			pemLen := int(binary.BigEndian.Uint32(contents[1:5]))
+			if 5+pemLen > len(contents) {
+				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
+			}
+			pemData = contents[5 : 5+pemLen]
+			autoloadByte := contents[5+pemLen]
+			if autoloadByte != 0 && autoloadByte != 1 {
+				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
+			}
+			autoload = autoloadByte == 1
+			fpOffset := 5 + pemLen + 1
+			if fpOffset+4 <= len(contents) {
+				fpLen := int(binary.BigEndian.Uint32(contents[fpOffset : fpOffset+4]))
+				if fpOffset+4+fpLen <= len(contents) {
+					keyFilepath = string(contents[fpOffset+4 : fpOffset+4+fpLen])
+				}
+			}
+		} else {
+			// Legacy format: [4-byte PEM len][PEM][1-byte autoload]
+			pemLen := int(binary.BigEndian.Uint32(contents[:4]))
+			if pemLen > len(contents)-5 {
+				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
+			}
+			pemData = contents[4 : 4+pemLen]
+			autoloadByte := contents[4+pemLen]
+			if autoloadByte != 0 && autoloadByte != 1 {
+				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
+			}
+			autoload = autoloadByte == 1
 		}
-		pem := contents[4 : 4+pemLen]
-		autoloadByte := contents[4+pemLen]
-		autoload := autoloadByte == 1
-		if autoloadByte != 0 && autoloadByte != 1 {
-			return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
-		}
-		key, err := ssh.ParseRawPrivateKey(pem)
+		key, err := ssh.ParseRawPrivateKey(pemData)
 		if err != nil {
 			return nil, fmt.Errorf("vault: add-key-opts: parse PEM: %w", err)
 		}
 		comment := ""
-		if parsed, err := openssh.ParsePrivateKeyBlob(pem); err == nil && parsed.Comment != "" {
+		if parsed, err := openssh.ParsePrivateKeyBlob(pemData); err == nil && parsed.Comment != "" {
 			comment = parsed.Comment
 		}
 		addedKey := sshagent.AddedKey{PrivateKey: key, Comment: comment}
-		if err := a.addKeyWithAutoload(addedKey, autoload); err != nil {
+		if err := a.addKeyWithAutoload(addedKey, autoload, keyFilepath); err != nil {
 			return nil, fmt.Errorf("vault: add-key-opts: %w", err)
 		}
 		return []byte("ok"), nil
