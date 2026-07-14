@@ -41,8 +41,8 @@ func TestStartServerDaemon_alreadyRunningPort(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when port already in use")
 	}
-	if err.Error() != "already running" {
-		t.Errorf("expected \"already running\", got %q", err.Error())
+	if err.Error() != "sshushd: server already running on port "+strconv.Itoa(port) {
+		t.Errorf("expected \"sshushd: server already running on port %d\", got %q", port, err.Error())
 	}
 }
 

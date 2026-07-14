@@ -3,6 +3,7 @@ package kdf
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"fmt"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -24,7 +25,7 @@ func DeriveKey(passphrase, salt []byte) []byte {
 func GenerateSalt() ([]byte, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("kdf: generate salt: %w", err)
 	}
 	return salt, nil
 }

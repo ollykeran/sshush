@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/config"
@@ -39,5 +41,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 	m := tui.NewTUI(configPath, socketPath, th, mode)
 	_, err := tea.NewProgram(m).Run()
-	return err
+	if err != nil {
+		return fmt.Errorf("cli: run tui: %w", err)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/ollykeran/sshush/internal/agent"
@@ -25,11 +26,11 @@ func runList(cmd *cobra.Command, _ []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 	keys, err := agent.ListKeysFromSocket(socketPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: list keys from socket: %w", err)
 	}
 	return ListKeysSnapshotTo(keys, os.Stdout)
 }

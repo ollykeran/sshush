@@ -1,6 +1,8 @@
 package vault
 
 import (
+	"fmt"
+
 	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/tyler-smith/go-bip39"
 )
@@ -9,7 +11,7 @@ import (
 func GenerateRecoveryMnemonic() (string, error) {
 	entropy, err := bip39.NewEntropy(256)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("vault: generate entropy: %w", err)
 	}
 	return bip39.NewMnemonic(entropy)
 }
@@ -20,13 +22,13 @@ func GenerateRecoveryMnemonic() (string, error) {
 func EnableRecovery(store *VaultStore, masterKey []byte, mnemonic string) error {
 	recoverySalt, err := kdf.GenerateSalt()
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: generate recovery salt: %w", err)
 	}
 	recoveryKey := kdf.DeriveKey([]byte(mnemonic), recoverySalt)
 	defer wipe(recoveryKey)
 	wrapped, err := encryptBlob(recoveryKey, masterKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: encrypt master key with recovery key: %w", err)
 	}
 	meta := store.GetMetadata()
 	if meta == nil {

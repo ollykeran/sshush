@@ -40,8 +40,14 @@ func isGenerateConfigCmd(cmd *cobra.Command) bool {
 func suppressAgentModeIndicator(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "tui", "theme", "help", "completion":
+		case "tui", "theme", "help", "completion",
+			"validate", "create", "export", "find", "version",
+			"generate", "selftest":
 			return true
+		case "vault":
+			if c != cmd && cmd.Name() == "init" {
+				return true
+			}
 		}
 	}
 	return isGenerateConfigCmd(cmd)
@@ -169,7 +175,7 @@ func NewRootCommand() *cobra.Command {
 					style.SetTheme(theme.DefaultTheme())
 					return nil
 				}
-				return err
+				return fmt.Errorf("cli: resolve config path: %w", err)
 			}
 
 			overrides := LoadOverrides{}
@@ -180,10 +186,10 @@ func NewRootCommand() *cobra.Command {
 				}
 			}
 
-			cfg, err := LoadMergedConfig(configPath, overrides)
-			if err != nil {
-				return err
-			}
+		cfg, err := LoadMergedConfig(configPath, overrides)
+		if err != nil {
+			return fmt.Errorf("cli: load merged config: %w", err)
+		}
 
 			env.Config = &cfg
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))

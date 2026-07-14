@@ -272,6 +272,9 @@ func assertKeyComment(t *testing.T, privPath, wantComment string) {
 		t.Fatal(err)
 	}
 	block, err := ssh.MarshalPrivateKey(rawKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = block
 
 	pubData, err := os.ReadFile(privPath + ".pub")

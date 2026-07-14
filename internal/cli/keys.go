@@ -25,7 +25,7 @@ func ListKeys(keyring sshagent.Agent) error {
 func AppendKeysTo(keyring sshagent.Agent, out *style.Output, socketPath, vaultPath string) error {
 	keys, err := keyring.List()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: list keys from keyring: %w", err)
 	}
 	if len(keys) == 0 && strings.TrimSpace(socketPath) != "" {
 		// Detect vault-at-socket even when config omits vaultPath (e.g. stale config vs running daemon).
@@ -59,7 +59,7 @@ func AppendKeysTo(keyring sshagent.Agent, out *style.Output, socketPath, vaultPa
 func ListKeysTo(keyring sshagent.Agent, w io.Writer) error {
 	keys, err := keyring.List()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: list keys from keyring: %w", err)
 	}
 	return ListKeysSnapshotTo(keys, w)
 }

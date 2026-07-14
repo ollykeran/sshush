@@ -363,7 +363,7 @@ func runVaultRemove(cmd *cobra.Command, args []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 	if !sshushd.CheckAlreadyRunning(socketPath) {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
@@ -437,7 +437,7 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 	if !sshushd.CheckAlreadyRunning(socketPath) {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
@@ -516,7 +516,7 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 	}
 	socketPath, err := getSocketPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 	if !sshushd.CheckAlreadyRunning(socketPath) {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()

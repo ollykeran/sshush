@@ -66,6 +66,23 @@ build: build-sshushd
 test pkg="./...":
     go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
 
+bench pkg="./..." count="1":
+    go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -bench=. -benchmem -count={{ count }} -run=^$
+
+# Run benchmarks via Python script (nicer formatting, optional -w to save)
+bench-report count="1":
+    python3 scripts/bench.py -c {{ count }}
+
+lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$(go env GOPATH)/bin:$PATH"
+    if ! command -v golangci-lint >/dev/null 2>&1; then
+        echo "Installing golangci-lint..."
+        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    fi
+    golangci-lint run ./...
+
 # Cross-compile macOS to build/darwin-<goarch>/ (goarch: arm64 | amd64). Used by tarballs and build-mac.
 build-darwin goarch: deps
     mkdir -p {{ build_dir }}/darwin-{{ goarch }}

@@ -16,7 +16,7 @@ import (
 // StartDaemon starts sshushd with SSHUSH_CONFIG and waits for socket readiness.
 func StartDaemon(configPath, socketPath string) error {
 	if CheckAlreadyRunning(socketPath) {
-		return fmt.Errorf("already running")
+		return fmt.Errorf("sshushd: daemon already running on %s", socketPath)
 	}
 
 	sshushdPath, err := FindBinary()
@@ -35,10 +35,10 @@ func StartDaemon(configPath, socketPath string) error {
 	child.Stdout = nil
 	child.Stderr = nil
 	if err := child.Start(); err != nil {
-		return fmt.Errorf("start failed: %w", err)
+		return fmt.Errorf("sshushd: start failed: %w", err)
 	}
 	if !WaitForSocket(socketPath, 50, 10*time.Millisecond) {
-		return fmt.Errorf("started but socket not ready")
+		return fmt.Errorf("sshushd: started but socket %s not ready", socketPath)
 	}
 	return nil
 }
@@ -51,14 +51,14 @@ func StartServerDaemon(configPath string, port int) error {
 		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
 		if pid > 0 {
 			if process, findErr := os.FindProcess(pid); findErr == nil && process.Signal(syscall.Signal(0)) == nil {
-				return fmt.Errorf("already running")
+				return fmt.Errorf("sshushd: server already running on port %d", port)
 			}
 		}
 	}
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	if conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond); err == nil {
 		conn.Close()
-		return fmt.Errorf("already running")
+		return fmt.Errorf("sshushd: server already running on port %d", port)
 	}
 
 	sshushdPath, err := FindBinary()
@@ -75,7 +75,7 @@ func StartServerDaemon(configPath string, port int) error {
 	child.Stdout = nil
 	child.Stderr = nil
 	if err := child.Start(); err != nil {
-		return fmt.Errorf("start failed: %w", err)
+		return fmt.Errorf("sshushd: start server failed: %w", err)
 	}
 	for i := 0; i < 50; i++ {
 		if conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond); err == nil {
@@ -84,7 +84,7 @@ func StartServerDaemon(configPath string, port int) error {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return fmt.Errorf("started but port %d not ready", port)
+	return fmt.Errorf("sshushd: started but port %d not ready", port)
 }
 
 // ReloadDaemon stops any existing daemon and starts a new one.
@@ -92,7 +92,7 @@ func ReloadDaemon(configPath, socketPath, pidFilePath string) error {
 	_ = StopDaemon(pidFilePath)
 	time.Sleep(100 * time.Millisecond)
 	if err := StartDaemon(configPath, socketPath); err != nil {
-		return fmt.Errorf("reload failed: %w", err)
+		return fmt.Errorf("sshushd: reload failed: %w", err)
 	}
 	return nil
 }

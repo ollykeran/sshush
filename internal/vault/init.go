@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ollykeran/sshush/internal/kdf"
@@ -15,13 +16,13 @@ func Init(store *VaultStore, passphrase []byte) error {
 	}
 	salt, err := kdf.GenerateSalt()
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: generate salt: %w", err)
 	}
 	masterKey := kdf.DeriveKey(passphrase, salt)
 	defer wipe(masterKey)
 	canaryCipher, err := encryptBlob(masterKey, []byte(canaryPlaintext))
 	if err != nil {
-		return err
+		return fmt.Errorf("vault: encrypt canary: %w", err)
 	}
 	store.SetMetadata(&VaultMetadata{
 		Salt:      salt,

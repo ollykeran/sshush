@@ -13,29 +13,29 @@ import (
 func LoadKeyMaterial(path string) (*openssh.ParsedKey, interface{}, ssh.Signer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("read key: %w", err)
+		return nil, nil, nil, fmt.Errorf("keys: read key %s: %w", path, err)
 	}
 
 	parsed, err := openssh.ParsePrivateKeyBlob(data)
 	if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-		return nil, nil, nil, fmt.Errorf("encrypted keys not supported")
+		return nil, nil, nil, fmt.Errorf("keys: %s: encrypted keys not supported", path)
 	}
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("not an unencrypted OpenSSH private key file")
+		return nil, nil, nil, fmt.Errorf("keys: parse %s: not an unencrypted OpenSSH private key file", path)
 	}
 
 	rawKey, err := ssh.ParseRawPrivateKey(data)
 	if err != nil {
 		var pm *ssh.PassphraseMissingError
 		if errors.As(err, &pm) {
-			return nil, nil, nil, fmt.Errorf("encrypted keys not supported")
+			return nil, nil, nil, fmt.Errorf("keys: %s: encrypted keys not supported", path)
 		}
-		return nil, nil, nil, fmt.Errorf("parse key: %w", err)
+		return nil, nil, nil, fmt.Errorf("keys: parse %s: %w", path, err)
 	}
 
 	signer, err := ssh.NewSignerFromKey(rawKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create signer: %w", err)
+		return nil, nil, nil, fmt.Errorf("keys: create signer for %s: %w", path, err)
 	}
 
 	return parsed, rawKey, signer, nil
