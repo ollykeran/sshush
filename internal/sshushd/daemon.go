@@ -188,8 +188,8 @@ func detachProcess() error {
 		return err
 	}
 	defer devNull.Close()
-	syscall.Dup2(int(devNull.Fd()), 0)
-	syscall.Dup2(int(devNull.Fd()), 1)
-	syscall.Dup2(int(devNull.Fd()), 2)
+	dupFd(int(devNull.Fd()), 0)
+	dupFd(int(devNull.Fd()), 1)
+	dupFd(int(devNull.Fd()), 2)
 	return nil
 }
