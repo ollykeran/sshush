@@ -107,6 +107,24 @@ build-mac:
     cp "{{ build_dir }}/darwin-$goarch/sshush" "{{ binary }}"
     cp "{{ build_dir }}/darwin-$goarch/sshushd" "{{ binaryd }}"
 
+# Cross-compile for all supported platforms (catches platform-specific issues)
+build-all: deps
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Building for linux/amd64..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/sshush
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/sshushd
+    echo "Building for linux/arm64..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/sshush
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/sshushd
+    echo "Building for darwin/arm64..."
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/sshush
+    CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/sshushd
+    echo "Building for darwin/amd64..."
+    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/sshush
+    CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/sshushd
+    echo "All platforms build successfully."
+
 # Serve godoc at http://localhost:6060 (module-aware, use -http not -http=:6060)
 doc:
     go doc -http
@@ -215,27 +233,39 @@ check-artifacts ver="dev":
 release ver branch:
     gh release create "v{{ ver }}" --generate-notes --latest --target "{{ branch }}"
 
-# List jobs in the release workflow (via act)
-act-list:
-    act -l push -e .github/events/push-tag.json -W .github/workflows/release.yml
-
-# Write .github/events/push-tag.json: tag ref + `after` = branch tip SHA (sets github.sha for act; --defaultbranch alone does not).
-[private]
-act-push-tag-json ver branch:
+# Run workflows locally via act: `just act ci`, `just act release v0.0.9 master`, `just act all`
+act cmd ver="" branch="":
     #!/usr/bin/env bash
     set -euo pipefail
-    br="{{ branch }}"
-    ver="{{ ver }}"
-    if git show-ref --verify --quiet "refs/heads/$br"; then
-      sha=$(git rev-parse "refs/heads/$br")
-    elif git show-ref --verify --quiet "refs/remotes/origin/$br"; then
-      sha=$(git rev-parse "refs/remotes/origin/$br")
-    else
-      echo "act-push-tag-json: unknown branch '$br' (need refs/heads/$br or refs/remotes/origin/$br)" >&2
-      exit 1
-    fi
-    printf '{"ref":"refs/tags/v%s","before":"0000000000000000000000000000000000000000","after":"%s"}\n' "$ver" "$sha" > .github/events/push-tag.json
-
-# Run the release workflow locally (via act); Release step is skipped
-act-release ver branch: (act-push-tag-json ver branch)
-    act push -e .github/events/push-tag.json -W .github/workflows/release.yml --defaultbranch "{{ branch }}"
+    export PATH="/opt/homebrew/bin:$PATH"
+    case "{{ cmd }}" in
+      ci)
+        echo "=== CI ==="
+        act push -W .github/workflows/ci.yml
+        ;;
+      release)
+        echo "=== Release ==="
+        if [[ -z "{{ ver }}" || -z "{{ branch }}" ]]; then
+          echo "Usage: just act release <version> <branch>" >&2
+          exit 1
+        fi
+        ver="{{ ver }}"; br="{{ branch }}"
+        if git show-ref --verify --quiet "refs/heads/$br"; then
+          sha=$(git rev-parse "refs/heads/$br")
+        elif git show-ref --verify --quiet "refs/remotes/origin/$br"; then
+          sha=$(git rev-parse "refs/remotes/origin/$br")
+        else
+          echo "act: unknown branch '$br'" >&2
+          exit 1
+        fi
+        tmp_event=$(mktemp)
+        printf '{"ref":"refs/tags/v%s","before":"0000000000000000000000000000000000000000","after":"%s"}\n' "$ver" "$sha" > "$tmp_event"
+        act push -e "$tmp_event" -W .github/workflows/release.yml --defaultbranch "$br"
+        rm -f "$tmp_event"
+        ;;
+      *)
+        echo "Unknown command: {{ cmd }}" >&2
+        echo "Usage: just act <ci|release|all>" >&2
+        exit 1
+        ;;
+    esac
