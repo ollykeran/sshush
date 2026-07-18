@@ -8,7 +8,7 @@
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
-  "postCreateCommand": "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin && go install golang.org/x/tools/gopls@latest && go install github.com/rogpeppe/godef@latest && go install github.com/ramya-rao-a/go-outline@latest && go install github.com/go-delve/delve/cmd/dlv@latest && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest && go mod download",
+  "postCreateCommand": "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin && just setup",
   "customizations": {
     "vscode": {
       "extensions": [
