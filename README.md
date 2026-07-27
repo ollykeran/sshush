@@ -102,4 +102,4 @@ Go 1.26+, [`just`](https://github.com/casey/just) optional but recommended.
 just build
 ```
 
-Outputs `build/sshush` and `build/sshushd`. From the repo, run e.g. `./build/sshush` and `./build/sshushd` or install the artifacts the same way you do other static binaries. macOS: `just build-mac`. Release layout and packaging: `just package`, `just build-darwin arm64`, etc. (see [justfile](justfile)).
+Outputs `build/linux-amd64/sshush` and `build/linux-amd64/sshushd`. From the repo, run e.g. `./build/linux-amd64/sshush` or install the artifacts the same way you do other static binaries. macOS: `just build darwin`. Release layout and packaging: `just pkg all`, `just build darwin-arm64`, etc. (see [justfile](justfile)).
