@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/style"
+	"github.com/spf13/cobra"
 )
 
 func TestLoadMergedConfig_noOverrides(t *testing.T) {
@@ -97,6 +99,76 @@ func TestLoadMergedConfig_missingFileWithKeyOverride_usesEmptyConfig(t *testing.
 	}
 	if !reflect.DeepEqual(cfg.KeyPaths, []string{"/tmp/key1"}) {
 		t.Errorf("KeyPaths: got %v", cfg.KeyPaths)
+	}
+}
+
+func TestResolveNoColor_flag_activates_plain_mode(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("no-color", false, "")
+	cmd.SetArgs([]string{"--no-color"})
+	_ = cmd.ParseFlags([]string{"--no-color"})
+
+	resolveNoColor(cmd)
+	if !style.IsPlainMode() {
+		t.Fatal("expected plain mode after --no-color flag")
+	}
+}
+
+func TestResolveNoColor_flag_false_does_not_activate(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("no-color", false, "")
+	cmd.SetArgs([]string{"--no-color=false"})
+	_ = cmd.ParseFlags([]string{"--no-color=false"})
+
+	resolveNoColor(cmd)
+	if style.IsPlainMode() {
+		t.Fatal("expected plain mode to remain false after --no-color=false")
+	}
+}
+
+func TestResolveNoColor_env_activates_plain_mode(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+
+	t.Setenv("NO_COLOR", "1")
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("no-color", false, "")
+	resolveNoColor(cmd)
+	if !style.IsPlainMode() {
+		t.Fatal("expected plain mode after NO_COLOR=1")
+	}
+}
+
+func TestResolveNoColor_env_empty_does_not_activate(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+
+	t.Setenv("NO_COLOR", "")
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("no-color", false, "")
+	resolveNoColor(cmd)
+	if style.IsPlainMode() {
+		t.Fatal("expected plain mode to remain false when NO_COLOR is empty")
+	}
+}
+
+func TestResolveNoColor_env_unset_does_not_activate(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("no-color", false, "")
+	resolveNoColor(cmd)
+	if style.IsPlainMode() {
+		t.Fatal("expected plain mode to remain false when NO_COLOR is unset")
 	}
 }
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"charm.land/lipgloss/v2"
+	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
@@ -51,7 +52,18 @@ func headerTabBorder() lipgloss.Border {
 }
 
 // BuildStyles returns a Styles struct built from the given theme.
+// When plain mode is active (via style.IsPlainMode), all styles are rendered without colour or decoration.
 func BuildStyles(t theme.Theme) Styles {
+	if style.IsPlainMode() {
+		return Styles{
+			OuterBorderColorHex: "",
+			TableHeaderFgHex:    "",
+			TableCellFgHex:      "",
+			TableSelectedFgHex:  "",
+			TableSelectedBgHex:  "",
+		}
+	}
+
 	text := lipgloss.Color(t.Text)
 	focus := lipgloss.Color(t.Focus)
 	accent := lipgloss.Color(t.Accent)

@@ -12,6 +12,7 @@ Options are grouped into TOML tables:
 
 | Section | Purpose |
 |---------|---------|
+| `[general]` | General options (plain output mode) |
 | `[agent]` | Socket path, key paths, vault mode flag |
 | `[vault]` | Vault file path; required when `[agent].vault` is true, optional when false (for `sshush vault` CLI while the agent uses `key_paths`) |
 | `[server]` | TCP SSH server listen port and related paths |
@@ -114,6 +115,17 @@ flowchart TD
 ```
 
 See also: [Setup](setup.md) | [TUI](tui.md)
+
+## `[general]`
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `plain` | Disable colours and fancy output (plain ASCII). Also via `--no-color` flag or `NO_COLOR` env var. | `true` / `false` |
+
+```toml
+[general]
+plain = true
+```
 
 ## `[agent]`
 
