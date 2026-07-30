@@ -101,6 +101,24 @@ func argsNoneOrHelp(cmd *cobra.Command, args []string) error {
 	return cobra.NoArgs(cmd, args)
 }
 
+// resolveNoColor checks --no-color flag, NO_COLOR env var, and config general.plain in order;
+// first truthy value wins (flag > env > config).
+func resolveNoColor(cmd *cobra.Command) {
+	if cmd.Flags().Changed("no-color") {
+		if v, _ := cmd.Flags().GetBool("no-color"); v {
+			style.SetPlainMode(true)
+		}
+		return
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		style.SetPlainMode(true)
+		return
+	}
+	if env.Config != nil && env.Config.General.Plain {
+		style.SetPlainMode(true)
+	}
+}
+
 // LoadOverrides holds CLI flag values and whether each was set (so we only override when set).
 type LoadOverrides struct {
 	SocketPath  string
@@ -165,6 +183,7 @@ func NewRootCommand() *cobra.Command {
 			if isGenerateConfigCmd(cmd) {
 				env.Config = nil
 				style.SetTheme(theme.DefaultTheme())
+				resolveNoColor(cmd)
 				return nil
 			}
 			config.SetupConfig()
@@ -173,6 +192,7 @@ func NewRootCommand() *cobra.Command {
 				if isThemeCmd(cmd) {
 					env.Config = nil
 					style.SetTheme(theme.DefaultTheme())
+					resolveNoColor(cmd)
 					return nil
 				}
 				return fmt.Errorf("cli: resolve config path: %w", err)
@@ -193,6 +213,7 @@ func NewRootCommand() *cobra.Command {
 
 			env.Config = &cfg
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))
+			resolveNoColor(cmd)
 			printAgentModeIndicator(cmd)
 			return nil
 		},
@@ -200,6 +221,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.PersistentFlags().StringP("config", "c", "", "path to config file")
 	root.PersistentFlags().StringP("socket", "s", "", "path to agent socket")
+	root.PersistentFlags().Bool("no-color", false, "disable colours and fancy output (also via NO_COLOR)")
 	root.Flags().BoolP("version", "v", false, "print version and exit")
 
 	return root
