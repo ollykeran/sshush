@@ -12,11 +12,10 @@ Options are grouped into TOML tables:
 
 | Section | Purpose |
 |---------|---------|
-| `[general]` | General options (plain output mode) |
 | `[agent]` | Socket path, key paths, vault mode flag |
 | `[vault]` | Vault file path; required when `[agent].vault` is true, optional when false (for `sshush vault` CLI while the agent uses `key_paths`) |
 | `[server]` | TCP SSH server listen port and related paths |
-| `[theme]` | Colours (preset or custom hex) |
+| `[theme]` | Colours (preset or custom hex) and plain output mode |
 
 ### Migration from flat TOML (breaking)
 
@@ -116,17 +115,6 @@ flowchart TD
 
 See also: [Setup](setup.md) | [TUI](tui.md)
 
-## `[general]`
-
-| Option | Description | Example |
-|--------|-------------|---------|
-| `plain` | Disable colours and fancy output (plain ASCII). Also via `--no-color` flag or `NO_COLOR` env var. | `true` / `false` |
-
-```toml
-[general]
-plain = true
-```
-
 ## `[agent]`
 
 | Option | Description | Example |
@@ -217,6 +205,10 @@ If `ssh` still authenticates after lock, check that `SSH_AUTH_SOCK` points at ss
 ## Theme
 
 Optional `[theme]` section controls colours for CLI and TUI. You can use a preset name or custom hex colours.
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `no_color` | Disable colours and fancy output (plain ASCII). Also via `--no-color` flag or `NO_COLOR` env var. | `true` / `false` |
 
 **Preset** (name takes precedence over any hex keys):
 
