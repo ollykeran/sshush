@@ -20,6 +20,7 @@ type ThemeSection struct {
 	Accent  string `toml:"accent"`
 	Error   string `toml:"error"`
 	Warning string `toml:"warning"`
+	NoColor bool   `toml:"no_color"`
 }
 
 // Config is the runtime view of the TOML file (flat fields for callers).

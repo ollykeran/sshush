@@ -200,6 +200,61 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("theme.no_color is parsed from config file", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[theme]\nno_color = true\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to be true")
+		}
+	})
+
+	t.Run("theme.no_color defaults to false when absent", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to default to false")
+		}
+	})
+
+	t.Run("theme.no_color roundtrips through marshal", func(t *testing.T) {
+		cfg := Config{
+			SocketPath: "/tmp/agent.sock",
+			KeyPaths:   []string{"/tmp/k"},
+			Theme:      ThemeSection{NoColor: true},
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to be true after roundtrip")
+		}
+	})
+
 	t.Run("relative socket_path is resolved against config file directory", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgDir := filepath.Join(dir, "sshush")

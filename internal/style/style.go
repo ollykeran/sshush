@@ -14,6 +14,7 @@ import (
 
 var mu sync.RWMutex
 var currentTheme theme.Theme
+var plainMode bool
 
 func init() {
 	currentTheme = theme.DefaultTheme()
@@ -33,6 +34,18 @@ var (
 )
 
 func rebuildStyles() {
+	if plainMode {
+		success = lipgloss.NewStyle()
+		warn = lipgloss.NewStyle()
+		err = lipgloss.NewStyle()
+		text = lipgloss.NewStyle()
+		textBold = lipgloss.NewStyle()
+		highlight = lipgloss.NewStyle()
+		focus = lipgloss.NewStyle()
+		dim = lipgloss.NewStyle()
+		box = lipgloss.NewStyle()
+		return
+	}
 	success = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(currentTheme.Accent))
 	warn = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Warning))
 	err = lipgloss.NewStyle().Foreground(lipgloss.Color(currentTheme.Error))
@@ -53,6 +66,25 @@ func SetTheme(t theme.Theme) {
 	defer mu.Unlock()
 	currentTheme = t
 	rebuildStyles()
+}
+
+// SetPlainMode enables or disables plain output mode (no colours, no boxes, no fancy formatting).
+// When true, all style functions return unstyled strings and Box() returns content without borders.
+func SetPlainMode(v bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	if plainMode == v {
+		return
+	}
+	plainMode = v
+	rebuildStyles()
+}
+
+// IsPlainMode returns whether plain output mode is active.
+func IsPlainMode() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return plainMode
 }
 
 // StylesForInput returns the box, focus, and blurred lipgloss styles for use by input components (e.g. passphrase prompt).
@@ -158,6 +190,12 @@ func maxContentLineWidth(s string) int {
 // renderBox renders at natural width when the outer block fits within limit;
 // otherwise uses box.Width(limit) so long lines wrap on narrow terminals.
 func renderBox(s string, limit int) string {
+	mu.RLock()
+	p := plainMode
+	mu.RUnlock()
+	if p {
+		return s
+	}
 	boxLocal, _, _ := StylesForInput()
 	if limit <= 0 {
 		return boxLocal.Render(s)
@@ -238,6 +276,12 @@ func (o *Output) AsError() error { return &StyledError{o} }
 // HexWithBackground renders the hex string (e.g. " #RRGGBB ") with that colour as the terminal background
 // and a contrasting foreground. Returns plain hex if invalid.
 func HexWithBackground(hex string) string {
+	mu.RLock()
+	p := plainMode
+	mu.RUnlock()
+	if p {
+		return hex
+	}
 	if !theme.ValidHex(hex) {
 		return hex
 	}
