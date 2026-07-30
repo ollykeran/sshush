@@ -200,10 +200,10 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("general.plain is parsed from config file", func(t *testing.T) {
+	t.Run("theme.no_color is parsed from config file", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "config.toml")
-		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[general]\nplain = true\n"
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[theme]\nno_color = true\n"
 		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -211,12 +211,12 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !cfg.General.Plain {
-			t.Fatal("expected General.Plain to be true")
+		if !cfg.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to be true")
 		}
 	})
 
-	t.Run("general.plain defaults to false when absent", func(t *testing.T) {
+	t.Run("theme.no_color defaults to false when absent", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "config.toml")
 		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n"
@@ -227,16 +227,16 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.General.Plain {
-			t.Fatal("expected General.Plain to default to false")
+		if cfg.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to default to false")
 		}
 	})
 
-	t.Run("general.plain roundtrips through marshal", func(t *testing.T) {
+	t.Run("theme.no_color roundtrips through marshal", func(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/agent.sock",
 			KeyPaths:   []string{"/tmp/k"},
-			General:    GeneralSection{Plain: true},
+			Theme:      ThemeSection{NoColor: true},
 		}
 		data, err := MarshalConfig(cfg)
 		if err != nil {
@@ -250,8 +250,8 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.General.Plain {
-			t.Fatal("expected General.Plain to be true after roundtrip")
+		if !got.Theme.NoColor {
+			t.Fatal("expected Theme.NoColor to be true after roundtrip")
 		}
 	})
 

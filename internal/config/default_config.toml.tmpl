@@ -1,8 +1,4 @@
 # Example config.toml
-
-[general]
-# plain = false
-
 [agent]
 socket_path = {{ printf "%q" .SocketPath }}
 vault = false
@@ -18,6 +14,7 @@ key_paths = {{ .KeyPathsTOML }}
 
 [theme]
 name = "default"
+no_color = false
 # text = {{ printf "%q" .ThemeText }}
 # focus = {{ printf "%q" .ThemeFocus }}
 # accent = {{ printf "%q" .ThemeAccent }}

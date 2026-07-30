@@ -12,11 +12,6 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 )
 
-// GeneralSection holds [general] from the TOML config.
-type GeneralSection struct {
-	Plain bool `toml:"plain"`
-}
-
 // ThemeSection holds [theme] from the TOML config: either name = "preset" or hex keys.
 type ThemeSection struct {
 	Name    string `toml:"name"`
@@ -25,17 +20,17 @@ type ThemeSection struct {
 	Accent  string `toml:"accent"`
 	Error   string `toml:"error"`
 	Warning string `toml:"warning"`
+	NoColor bool   `toml:"no_color"`
 }
 
 // Config is the runtime view of the TOML file (flat fields for callers).
-// On disk the file uses [general], [agent], [vault], [server], and [theme] sections.
+// On disk the file uses [agent], [vault], [server], and [theme] sections.
 type Config struct {
 	KeyPaths   []string // From [agent].key_paths; when AgentVault is false, keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
 	AgentVault bool     // From [agent].vault; when true, sshushd uses VaultPath as the agent backend.
 	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentVault is false).
 	Theme      ThemeSection
-	General    GeneralSection
 
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
@@ -44,11 +39,10 @@ type Config struct {
 
 // configDocument matches the on-disk TOML layout.
 type configDocument struct {
-	General GeneralSection `toml:"general"`
-	Agent   agentSection   `toml:"agent"`
-	Vault   vaultSection   `toml:"vault"`
-	Server  serverSection  `toml:"server"`
-	Theme   ThemeSection   `toml:"theme"`
+	Agent  agentSection  `toml:"agent"`
+	Vault  vaultSection  `toml:"vault"`
+	Server serverSection `toml:"server"`
+	Theme  ThemeSection  `toml:"theme"`
 }
 
 type agentSection struct {
@@ -86,7 +80,7 @@ func toDocument(cfg Config) configDocument {
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
 	}
-	doc := configDocument{General: cfg.General, Agent: a, Theme: cfg.Theme}
+	doc := configDocument{Agent: a, Theme: cfg.Theme}
 	if cfg.VaultPath != "" {
 		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
 	}
@@ -214,7 +208,6 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		AgentVault:           doc.Agent.Vault,
 		VaultPath:            vaultPath,
 		Theme:                doc.Theme,
-		General:              doc.General,
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
 		ServerHostKey:        doc.Server.HostKey,

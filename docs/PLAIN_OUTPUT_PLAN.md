@@ -7,7 +7,7 @@
 ## Driver
 
 `NO_COLOR` env var. If set to any non-empty value, plain mode activates.  
-Also exposed as `--no-color` CLI flag and (optionally) `[general].plain = true` in config.
+Also exposed as `--no-color` CLI flag and (optionally) `[theme].no_color = true` in config.
 
 ---
 
@@ -64,27 +64,20 @@ These tests should use `cmd.SetArgs()` and `cmd.Execute()` and then check the si
 
 ### 5. `internal/config/config.go` (optional) — Config file option
 
-Add:
+Add `NoColor bool` to ThemeSection:
 ```go
-type GeneralSection struct {
-    Plain bool `toml:"plain"`
-}
-```
-
-Add to `configDocument`:
-```go
-type configDocument struct {
-    General GeneralSection `toml:"general"`
+type ThemeSection struct {
     ...
+    NoColor bool `toml:"no_color"`
 }
 ```
 
-Pass through to Config struct similarly. Then in `PersistentPreRunE`, also check `cfg.General.Plain`.
+Pass through to Config struct similarly. Then in `PersistentPreRunE`, also check `cfg.Theme.NoColor`.
 
 ### 6. `internal/config/config_test.go` — Config tests
 
 Test cases:
-- `TestConfig_plain_mode` — write a config with `[general]\nplain = true`, load it, verify General.Plain is true
+- `TestConfig_plain_mode` — write a config with `[theme]\nno_color = true`, load it, verify Theme.NoColor is true
 
 ### 7. `internal/tui/theme.go` — TUI plain styles
 
@@ -105,11 +98,7 @@ Check `style.IsPlainMode()` in `NewTUI()` and in `View()` to switch rendering.
 
 ### 9. `docs/config.md` — Documentation
 
-Add `[general]` section documentation:
-```toml
-[general]
-plain = true   # Disable colours and fancy output; can also use --no-color or NO_COLOR env var
-```
+Document `[theme].no_color` option:
 
 ---
 

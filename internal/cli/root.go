@@ -101,7 +101,7 @@ func argsNoneOrHelp(cmd *cobra.Command, args []string) error {
 	return cobra.NoArgs(cmd, args)
 }
 
-// resolveNoColor checks --no-color flag, NO_COLOR env var, and config general.plain in order;
+// resolveNoColor checks --no-color flag, NO_COLOR env var, and config theme.no_color in order;
 // first truthy value wins (flag > env > config).
 func resolveNoColor(cmd *cobra.Command) {
 	if cmd.Flags().Changed("no-color") {
@@ -114,7 +114,7 @@ func resolveNoColor(cmd *cobra.Command) {
 		style.SetPlainMode(true)
 		return
 	}
-	if env.Config != nil && env.Config.General.Plain {
+	if env.Config != nil && env.Config.Theme.NoColor {
 		style.SetPlainMode(true)
 	}
 }
