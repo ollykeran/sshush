@@ -38,6 +38,9 @@ jobs:
       - name: Validate artifacts
         run: just check-artifacts ${{ steps.tag.outputs.version }}
 
+      - name: Generate checksums
+        run: just checksums
+
       - name: Release
         if: ${{ !env.ACT }}
         uses: softprops/action-gh-release@v2
@@ -49,3 +52,4 @@ jobs:
             build/sshush-*.deb
             build/sshush-*.rpm
             build/sshush-*.pkg.tar.zst
+            build/*.sha256

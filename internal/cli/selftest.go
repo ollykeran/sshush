@@ -8,6 +8,7 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/vault"
+	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -18,7 +19,7 @@ func newSelftestCommand() *cobra.Command {
 		Short:   "Test agent connectivity",
 		Example: "sshush selftest",
 		Long:    "Check that the SSH agent socket is reachable, can list keys, and can sign with a key.",
-		Args: nil,
+		Args:    nil,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				cmd.Usage()
@@ -104,6 +105,15 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	out.Add(style.Focus("sign:   ") + style.Success(fmt.Sprintf("%s  ✓", keys[0].Comment)))
+
+	integrityMsg, integErr := version.VerifyBinaryChecksum()
+	if integErr != nil {
+		out.Add(style.Focus("checksum: ") + style.Err(fmt.Sprintf("✗ %v", integErr)))
+	} else if integrityMsg != "" {
+		out.Add(style.Focus("checksum: ") + style.Warn(integrityMsg))
+	} else {
+		out.Add(style.Focus("checksum: ") + style.Success("binary checksum verified  ✓"))
+	}
 
 	out.Print()
 	return nil

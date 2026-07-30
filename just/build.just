@@ -162,6 +162,24 @@ check-artifacts ver="dev":
     echo "$pass passed, $fail failed"
     [ "$fail" -eq 0 ]
 
+# Generate SHA256 checksum files for all built binaries
+checksums:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{ build_dir }}"
+    count=0
+    for plat in linux-amd64 darwin-arm64 darwin-amd64; do
+        for bin in sshush sshushd; do
+            f="$dir/$plat/$bin"
+            if [ -f "$f" ]; then
+                sha=$(sha256sum "$f" | cut -d' ' -f1)
+                echo "$sha" > "$dir/${bin}-${plat}.sha256"
+                count=$((count + 1))
+            fi
+        done
+    done
+    echo "Generated $count .sha256 files in $dir"
+
 # Remove all build artifacts
 clean:
     rm -rf {{ build_dir }}
