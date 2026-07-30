@@ -25,6 +25,7 @@ type ParsedKey struct {
 	Comment    string
 	PublicKey  []byte // SSH wire format public key (e.g. for ssh.ParsePublicKey)
 	PrivateKey []byte // PEM-encoded private key
+	Filepath   string // original file path on disk (populated by callers)
 }
 
 // ParsePrivateKeyBlob parses unencrypted OpenSSH private key data.

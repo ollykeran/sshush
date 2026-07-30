@@ -7,12 +7,49 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/style"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
+
+// filepathRegistry maps key fingerprints to their original file paths on disk.
+// Used by the edit command and other operations that need to locate the source file.
+var filepathRegistry sync.Map
+
+// RegisterFilepath records the file path for a key fingerprint.
+func RegisterFilepath(fingerprint, path string) {
+	filepathRegistry.Store(fingerprint, path)
+}
+
+// GetFilepath returns the file path for a key fingerprint, or empty string if not found.
+func GetFilepath(fingerprint string) string {
+	if v, ok := filepathRegistry.Load(fingerprint); ok {
+		return v.(string)
+	}
+	return ""
+}
+
+// ResolveFilepath attempts to find the source file path for a key by fingerprint.
+// For non-vault agents, it falls back to parsing each path in cfgPaths to match.
+func ResolveFilepath(fingerprint string, cfgPaths []string) string {
+	if fp := GetFilepath(fingerprint); fp != "" {
+		return fp
+	}
+	for _, path := range cfgPaths {
+		pubKey, _, _, err := ParseKeyFromPath(path)
+		if err != nil {
+			continue
+		}
+		if ssh.FingerprintSHA256(pubKey) == fingerprint {
+			RegisterFilepath(fingerprint, path)
+			return path
+		}
+	}
+	return ""
+}
 
 // ParseKeyFromPath reads a private key file and returns the public key,
 // comment, and raw private key without adding to any keyring.
@@ -54,11 +91,14 @@ func ParseKeyFromPath(path string) (ssh.PublicKey, string, interface{}, error) {
 }
 
 // AddKeyFromPath reads a private key from path and adds it to the keyring.
+// The fingerprint-to-filepath mapping is registered for later lookup.
 func AddKeyFromPath(keyring sshagent.Agent, path string) error {
-	_, comment, key, err := ParseKeyFromPath(path)
+	pubKey, comment, key, err := ParseKeyFromPath(path)
 	if err != nil {
 		return err
 	}
+	fp := ssh.FingerprintSHA256(pubKey)
+	RegisterFilepath(fp, path)
 	return keyring.Add(sshagent.AddedKey{PrivateKey: key, Comment: comment})
 }
 

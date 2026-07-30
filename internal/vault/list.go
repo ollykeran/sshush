@@ -10,6 +10,7 @@ type IdentityInfo struct {
 	Comment     string
 	KeyType     string
 	Autoload    bool
+	Filepath    string
 }
 
 // ListIdentities returns all identities in the vault with metadata.
@@ -27,6 +28,7 @@ func ListIdentities(store *VaultStore) ([]IdentityInfo, error) {
 			Comment:     id.Comment,
 			KeyType:     keyType,
 			Autoload:    id.Autoload,
+			Filepath:    id.Filepath,
 		})
 	}
 	return out, nil

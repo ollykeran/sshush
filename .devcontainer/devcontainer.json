@@ -1,0 +1,25 @@
+{
+  "name": "sshush",
+  "image": "golang:1.26-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "packages": ["python3", "python3-pip"]
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin && just setup",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ],
+      "settings": {
+        "go.useLanguageServer": true,
+        "gopls": {
+          "build.directoryFilters": ["-build"]
+        }
+      }
+    }
+  }
+}
