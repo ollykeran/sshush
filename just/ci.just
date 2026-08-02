@@ -10,7 +10,27 @@ act cmd ver="" branch="":
     case "{{ cmd }}" in
       ci)
         echo "=== CI ==="
-        act push -W .github/workflows/ci.yml
+        act push --rm -W .github/workflows/ci.yml
+        ;;
+      lint)
+        echo "=== Lint ==="
+        act push --rm -W .github/workflows/ci.yml -j lint
+        ;;
+      lint-yml)
+        echo "=== Lint YAML ==="
+        act push --rm -W .github/workflows/ci.yml -j lint-yml
+        ;;
+      test)
+        echo "=== Test ==="
+        act push --rm -W .github/workflows/ci.yml -j test
+        ;;
+      build)
+        echo "=== Build ==="
+        act push --rm -W .github/workflows/ci.yml -j build
+        ;;
+      all)
+        echo "=== All CI jobs ==="
+        act push --rm -W .github/workflows/ci.yml -j lint -j lint-yml -j test -j build
         ;;
       release)
         echo "=== Release ==="
@@ -34,7 +54,7 @@ act cmd ver="" branch="":
         ;;
       *)
         echo "Unknown command: {{ cmd }}" >&2
-        echo "Usage: just act <ci|release|all>" >&2
+        echo "Usage: just act <ci|release|lint|lint-yml|test|build|all>" >&2
         exit 1
         ;;
     esac
