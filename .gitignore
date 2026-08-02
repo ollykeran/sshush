@@ -5,9 +5,12 @@ id_*
 *.toml
 .bash*
 openspec/
-.actrc
 .github/events/push-tag.json
 ok/
+.act-artifacts/
+/cover-report
+cover-report.md
+coverage.out
 .vscode/
 .cursor/
 benchmarks/

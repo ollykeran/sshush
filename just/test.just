@@ -12,6 +12,10 @@ test-cover:
     echo ""
     echo "View HTML report: go tool cover -html=benchmarks/coverage.out"
 
+# Generate the same markdown coverage report CI posts on PRs (needs a coverprofile)
+cover-report profile="benchmarks/coverage.out":
+    go run ./scripts/cover-report -profile {{ profile }}
+
 # Run e2e tests (builds for current platform automatically)
 e2e:
     #!/usr/bin/env bash
