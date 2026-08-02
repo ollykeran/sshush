@@ -5,7 +5,7 @@ version: ${VERSION}
 maintainer: ollykeran
 description: Go SSH Agent and utilities
 contents:
-  - src: build/sshush
+  - src: build/linux-amd64/sshush
     dst: /usr/bin/sshush
-  - src: build/sshushd
+  - src: build/linux-amd64/sshushd
     dst: /usr/bin/sshushd

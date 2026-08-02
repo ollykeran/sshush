@@ -33,6 +33,19 @@ var (
 func buildBins(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
+		// Use pre-built binaries if SSHUSH_E2E_BIN_DIR is set (from just e2e)
+		if dir := os.Getenv("SSHUSH_E2E_BIN_DIR"); dir != "" {
+			// Verify binaries exist
+			for _, name := range []string{"sshush", "sshushd"} {
+				path := filepath.Join(dir, name)
+				if _, err := os.Stat(path); err != nil {
+					buildErr = fmt.Errorf("pre-built binary %s not found in %s: %w", name, dir, err)
+					return
+				}
+			}
+			binDir = dir
+			return
+		}
 		dir, err := os.MkdirTemp("", "sshush-e2e-bin-")
 		if err != nil {
 			buildErr = err
@@ -91,7 +104,9 @@ func writeE2EConfig(t *testing.T, dir, socketPath, vaultPath string, keyPaths []
 		for i, p := range keyPaths {
 			quoted[i] = fmt.Sprintf("%q", p)
 		}
-		b.WriteString("key_paths = [" + strings.Join(quoted, ", ") + "]\n")
+		b.WriteString("key_paths = [")
+		b.WriteString(strings.Join(quoted, ", "))
+		b.WriteString("]\n")
 	}
 	if vaultPath != "" {
 		b.WriteString("\n[vault]\n")

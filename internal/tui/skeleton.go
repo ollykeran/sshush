@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
@@ -828,7 +829,25 @@ func (s *Skeleton) contentHeight() int {
 
 func (s *Skeleton) renderOuterHeader(w int) string {
 	st := s.styles
-	bc := lipgloss.NewStyle().Foreground(lipgloss.Color(st.OuterBorderColorHex))
+	plain := style.IsPlainMode()
+
+	var bc lipgloss.Style
+	var hFill, topL, topR, sideL, sideR string
+	if plain {
+		hFill = "-"
+		topL = "+"
+		topR = "+"
+		sideL = "|"
+		sideR = "|"
+	} else {
+		bc = lipgloss.NewStyle().Foreground(lipgloss.Color(st.OuterBorderColorHex))
+		hFill = "─"
+		topL = "╭"
+		topR = "╮"
+		sideL = "│"
+		sideR = "│"
+	}
+
 	innerW := w - 2
 
 	var tabParts []string
@@ -886,18 +905,30 @@ func (s *Skeleton) renderOuterHeader(w int) string {
 		} else {
 			fillCh := " "
 			if i == 0 {
-				fillCh = "─"
+				fillCh = hFill
 			}
-			fill = bc.Render(strings.Repeat(fillCh, innerW-lineW))
+			if plain {
+				fill = strings.Repeat(fillCh, innerW-lineW)
+			} else {
+				fill = bc.Render(strings.Repeat(fillCh, innerW-lineW))
+			}
 		}
 		row := line + fill
 		if lipgloss.Width(row) > innerW {
 			row = ansi.Truncate(row, innerW, "")
 		}
 		if i == 0 {
-			result = append(result, bc.Render("╭")+row+bc.Render("╮"))
+			if plain {
+				result = append(result, topL+row+topR)
+			} else {
+				result = append(result, bc.Render(topL)+row+bc.Render(topR))
+			}
 		} else {
-			result = append(result, bc.Render("│")+row+bc.Render("│"))
+			if plain {
+				result = append(result, sideL+row+sideR)
+			} else {
+				result = append(result, bc.Render(sideL)+row+bc.Render(sideR))
+			}
 		}
 	}
 	return strings.Join(result, "\n")
@@ -905,7 +936,29 @@ func (s *Skeleton) renderOuterHeader(w int) string {
 
 func (s *Skeleton) renderOuterFooter(w int) string {
 	st := s.styles
-	bc := lipgloss.NewStyle().Foreground(lipgloss.Color(st.OuterBorderColorHex))
+	plain := style.IsPlainMode()
+
+	var bc lipgloss.Style
+	var hFill, botL, botR, sep string
+	if plain {
+		hFill = "-"
+		botL = "+-"
+		botR = "-+"
+		sep = "-"
+	} else {
+		bc = lipgloss.NewStyle().Foreground(lipgloss.Color(st.OuterBorderColorHex))
+		hFill = "─"
+		botL = "╰─"
+		botR = "─╯"
+		sep = "─"
+	}
+
+	renderSep := func(s string) string {
+		if plain {
+			return s
+		}
+		return bc.Render(s)
+	}
 
 	var leftParts []string
 
@@ -944,20 +997,20 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 	themeWidgetMarked := zone.Mark("footer-theme", themeWidget)
 	helpWidgetMarked := zone.Mark("footer-help", rightContent)
 
-	suffix := themeWidgetMarked + bc.Render("─") + helpWidgetMarked + bc.Render("─╯")
+	suffix := themeWidgetMarked + renderSep(sep) + helpWidgetMarked + renderSep(botR)
 	modeSeg := ""
 	if m := strings.TrimSpace(s.agentBackendMode); m != "" {
 		modeSeg = " " + st.DimStyle.Render(m) + " "
 	}
-	rightBlock := sizeInfo + bc.Render("─") + suffix
+	rightBlock := sizeInfo + renderSep(sep) + suffix
 	if modeSeg != "" {
-		rightBlock = sizeInfo + bc.Render("─") + modeSeg + bc.Render("─") + suffix
+		rightBlock = sizeInfo + renderSep(sep) + modeSeg + renderSep(sep) + suffix
 	}
 
-	leftPrefix := bc.Render("╰─") + leftContent
+	leftPrefix := renderSep(botL) + leftContent
 	fillW := w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
 	if fillW < 1 && modeSeg != "" {
-		rightBlock = sizeInfo + bc.Render("─") + suffix
+		rightBlock = sizeInfo + renderSep(sep) + suffix
 		fillW = w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
 	}
 	if fillW < 1 {
@@ -965,7 +1018,7 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 	}
 
 	return leftPrefix +
-		bc.Render(strings.Repeat("─", fillW)) +
+		renderSep(strings.Repeat(hFill, fillW)) +
 		rightBlock
 }
 
@@ -1090,8 +1143,13 @@ func (s *Skeleton) View() tea.View {
 }
 
 func (s *Skeleton) renderSideBorders(content string, w, h int) string {
-	bc := lipgloss.NewStyle().Foreground(lipgloss.Color(s.styles.OuterBorderColorHex))
-	border := bc.Render("│")
+	plain := style.IsPlainMode()
+	var bc lipgloss.Style
+	border := "|"
+	if !plain {
+		bc = lipgloss.NewStyle().Foreground(lipgloss.Color(s.styles.OuterBorderColorHex))
+		border = "│"
+	}
 	innerW := w - 2
 
 	lines := strings.Split(content, "\n")
@@ -1110,7 +1168,11 @@ func (s *Skeleton) renderSideBorders(content string, w, h int) string {
 		} else if lineW < innerW {
 			line = line + strings.Repeat(" ", innerW-lineW)
 		}
-		result[i] = border + line + border
+		if plain {
+			result[i] = border + line + border
+		} else {
+			result[i] = bc.Render(border) + line + bc.Render(border)
+		}
 	}
 	return strings.Join(result, "\n")
 }
