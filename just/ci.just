@@ -2,15 +2,26 @@
 release ver branch:
     gh release create "v{{ ver }}" --generate-notes --latest --target "{{ branch }}"
 
-# Run workflows locally via act: `just act ci`, `just act release v0.0.9 master`, `just act all`
+# Run workflows locally via act: `just act ci`, `just act pr`, `just act all`, `just act release v0.0.9 master`
 act cmd ver="" branch="":
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
+    ARGS="--rm -W .github/workflows/ci.yml --artifact-server-path .act-artifacts"
     case "{{ cmd }}" in
       ci)
-        echo "=== CI ==="
-        act push --rm -W .github/workflows/ci.yml
+        echo "=== CI (push event) ==="
+        act push $ARGS
+        ;;
+      pr)
+        echo "=== CI (pull_request event) ==="
+        act pull_request $ARGS
+        ;;
+      all)
+        echo "=== CI (push event) ==="
+        act push $ARGS
+        echo "=== CI (pull_request event) ==="
+        act pull_request $ARGS
         ;;
       lint)
         echo "=== Lint ==="
@@ -27,10 +38,6 @@ act cmd ver="" branch="":
       build)
         echo "=== Build ==="
         act push --rm -W .github/workflows/ci.yml -j build
-        ;;
-      all)
-        echo "=== All CI jobs ==="
-        act push --rm -W .github/workflows/ci.yml -j lint -j lint-yml -j test -j build
         ;;
       release)
         echo "=== Release ==="
@@ -54,7 +61,21 @@ act cmd ver="" branch="":
         ;;
       *)
         echo "Unknown command: {{ cmd }}" >&2
-        echo "Usage: just act <ci|release|lint|lint-yml|test|build|all>" >&2
+        echo "Usage: just act <ci|pr|all|lint|lint-yml|test|build|release>" >&2
         exit 1
         ;;
     esac
+
+# Run the given event against a fresh checkout of HEAD (no untracked/gitignored local files),
+# closest to a GitHub runner. e.g. `just act-clean push`, `just act-clean pull_request`
+act-clean event="push":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="/opt/homebrew/bin:$PATH"
+    tmp=$(mktemp -d)
+    git worktree add --detach "$tmp" HEAD >/dev/null
+    trap 'git worktree remove --force "$tmp"; rm -rf "$tmp"' EXIT
+    cp .actrc "$tmp/.actrc"
+    echo "Running act {{ event }} on fresh checkout: $tmp"
+    cd "$tmp"
+    act {{ event }} --rm -W .github/workflows/ci.yml --artifact-server-path "$tmp/.act-artifacts"
