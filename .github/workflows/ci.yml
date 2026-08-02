@@ -64,12 +64,27 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: coverage
-      - name: Post coverage comment
-        uses: orgoro/coverage@v3.2
+      - name: Check test coverage
+        id: coverage
+        continue-on-error: true
+        uses: vladopajic/go-test-coverage@v2
         with:
-          coverageFile: coverage.out
-          token: ${{ secrets.GITHUB_TOKEN }}
-          thresholdAll: 0.5
+          profile: coverage.out
+          threshold-total: 50
+      - name: Post coverage comment
+        if: steps.coverage.outputs.report != ''
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-tag: coverage-report
+          message: |
+            go-test-coverage report:
+            ```
+            ${{ fromJSON(steps.coverage.outputs.report) }}
+            ```
+      - name: Fail if coverage is below threshold
+        if: steps.coverage.outcome == 'failure'
+        run: echo "coverage check failed" && exit 1
 
   build:
     runs-on: ubuntu-latest
