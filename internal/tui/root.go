@@ -58,7 +58,8 @@ func themeMessageTimeoutCmd(generation int) tea.Cmd {
 // Theme is used for all TUI colours; pass theme.DefaultTheme() or from config.
 // configPath is used by the theme picker to persist theme changes.
 // agentBackendMode is "vault" or "keys" (from config.AgentBackendMode); shown in the footer.
-func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode string) *Skeleton {
+// keyPaths are the config [agent].key_paths, used by the agent screen to resolve key source files.
+func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode string, keyPaths []string) *Skeleton {
 	s := NewSkeleton()
 	s.theme = t
 	s.styles = BuildStyles(t)
@@ -67,7 +68,7 @@ func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode strin
 	s.KeyMap.SwitchTabLeft = []string{"left", "h"}
 	s.KeyMap.SwitchTabRight = []string{"right", "l"}
 
-	s.AddPage("agent", "Agent", NewAgentScreen(s, configPath, socketPath))
+	s.AddPage("agent", "Agent", NewAgentScreen(s, configPath, socketPath, keyPaths, agentBackendMode))
 	s.AddPage("create", "Create", NewCreateScreen(s))
 	s.AddPage("edit", "Edit", NewEditScreen(s, socketPath))
 	s.AddPage("export", "Export", NewExportScreen(s, socketPath))

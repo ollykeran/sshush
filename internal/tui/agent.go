@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/theme"
@@ -48,6 +49,10 @@ type agentUnlockResultMsg struct {
 	err error
 }
 
+type agentEditCommentMsg struct {
+	err error
+}
+
 const (
 	agentFocusButtons = iota
 	agentFocusTable
@@ -79,17 +84,33 @@ type AgentScreen struct {
 	showPass   bool
 	passAction string // "lock" or "unlock"
 
+	// keyPaths are the config [agent].key_paths, used to resolve a key's source file.
+	// backendMode is "vault" or "keys" (from config.AgentBackendMode at TUI start).
+	keyPaths    []string
+	backendMode string
+
+	// editComment overlays a text input for renaming the selected key's comment.
+	editComment     bool
+	editInput       textinput.Model
+	editFingerprint string
+	originalComment string
+	editError       string
+
 	focus int
 }
 
-// NewAgentScreen creates an AgentScreen with the given skeleton, config path, and socket path.
-func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
+// NewAgentScreen creates an AgentScreen with the given skeleton, config path, socket path,
+// config key paths (used to locate a key's source file for comment edits), and backend mode.
+func NewAgentScreen(sk *Skeleton, configPath, socketPath string, keyPaths []string, backendMode string) *AgentScreen {
 	prefix := zone.NewPrefix()
 
 	pi := textinput.New()
 	pi.Placeholder = "passphrase"
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '*'
+
+	ei := textinput.New()
+	ei.Placeholder = "key comment"
 
 	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload")
 	btns.Focused = true
@@ -109,12 +130,22 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 		loadedFPs:    make(map[string]bool),
 		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
 		passInput:    pi,
+		keyPaths:     keyPaths,
+		backendMode:  backendMode,
+		editInput:    ei,
 		focus:        agentFocusTable,
 	}
 }
 
 func (s *AgentScreen) HasModal() bool {
-	return s.fileSelector.Visible() || s.showPass
+	return s.fileSelector.Visible() || s.showPass || s.editComment
+}
+
+// HandleModalEscape reports whether the agent screen consumed an esc/q press for its
+// inline modal. The comment-edit overlay cancels on esc; the file picker and passphrase
+// overlay keep the existing focus-to-navbar behaviour.
+func (s *AgentScreen) HandleModalEscape() bool {
+	return s.editComment
 }
 
 func (s *AgentScreen) Init() tea.Cmd {
@@ -128,7 +159,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, agentEditCommentMsg, foundKeysMsg, ButtonFlashDoneMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -265,8 +296,21 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.focus = agentFocusTable
 		return s, fetchAgentKeysCmd(s.socketPath, true)
 
+	case agentEditCommentMsg:
+		s.editComment = false
+		s.editInput.Blur()
+		s.focus = agentFocusTable
+		if msg.err != nil {
+			s.status = "comment edit failed: " + msg.err.Error()
+			s.statusErr = true
+			return s, nil
+		}
+		s.status = "comment updated"
+		s.statusErr = false
+		return s, fetchAgentKeysCmd(s.socketPath, true)
+
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.editComment {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
@@ -274,6 +318,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if s.showPass {
 			return s.handlePassInput(msg)
+		}
+		if s.editComment {
+			return s.handleEditCommentInput(msg)
 		}
 		if s.fileSelector.Visible() {
 			return s, s.fileSelector.Update(msg)
@@ -346,6 +393,12 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 
+	case "e":
+		if s.focus == agentFocusTable {
+			return s.startEditComment()
+		}
+		return s, nil
+
 	case "L":
 		s.showPass = true
 		s.passAction = "lock"
@@ -386,6 +439,53 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	}
 	var cmd tea.Cmd
 	s.passInput, cmd = s.passInput.Update(msg)
+	return s, cmd
+}
+
+// startEditComment opens the comment-edit overlay for the selected table row.
+func (s *AgentScreen) startEditComment() (tea.Model, tea.Cmd) {
+	row := s.keyTable.SelectedRow()
+	if row == nil {
+		s.status = "no key selected"
+		s.statusErr = true
+		return s, nil
+	}
+	fp := row[1]
+	comment := row[2]
+	s.editFingerprint = fp
+	s.originalComment = comment
+	s.editError = ""
+	s.editInput.SetValue(comment)
+	s.editComment = true
+	return s, s.editInput.Focus()
+}
+
+func (s *AgentScreen) handleEditCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		s.editComment = false
+		s.editInput.Blur()
+		s.focus = agentFocusTable
+		return s, nil
+	case "enter":
+		comment := strings.TrimSpace(s.editInput.Value())
+		if comment == "" {
+			s.editError = "comment cannot be empty"
+			return s, nil
+		}
+		if comment == strings.TrimSpace(s.originalComment) {
+			s.editComment = false
+			s.editInput.Blur()
+			s.focus = agentFocusTable
+			s.status = "no changes"
+			s.statusErr = false
+			return s, nil
+		}
+		s.editInput.Blur()
+		return s, editAgentKeyCommentCmd(s.socketPath, s.keyPaths, s.backendMode, s.editFingerprint, comment)
+	}
+	var cmd tea.Cmd
+	s.editInput, cmd = s.editInput.Update(msg)
 	return s, cmd
 }
 
@@ -484,6 +584,17 @@ func (s *AgentScreen) View() tea.View {
 		title := st.SectionTitleStyle.Render("Enter " + s.passAction + " passphrase")
 		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 			title+"\n"+st.FocusedBorderStyle.Render(s.passInput.View())))
+	}
+
+	if s.editComment {
+		st := s.sk.Styles()
+		title := st.SectionTitleStyle.Render("Edit comment: " + truncate(s.editFingerprint, 40))
+		body := title + "\n" + st.FocusedBorderStyle.Render(s.editInput.View())
+		if s.editError != "" {
+			body += "\n" + st.ErrorStyle.Render("  " + s.editError)
+		}
+		body += "\n" + st.DimStyle.Render("  esc cancel · enter save")
+		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, body))
 	}
 
 	w := width
@@ -628,6 +739,7 @@ func (s *AgentScreen) HelpEntries() []string {
 	return []string{
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow("e", "Edit key comment"),
 		st.HelpRow("d / bksp", "Remove key"),
 		"",
 	}
@@ -709,6 +821,61 @@ func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}
+	}
+}
+
+// editAgentKeyCommentCmd renames a key's comment from the agent screen. For the vault
+// backend it persists the comment in the vault config; otherwise (and also in vault mode
+// when a source file is known) it rewrites the key file on disk, then reloads the key so
+// the running agent reports the new comment.
+func editAgentKeyCommentCmd(socketPath string, keyPaths []string, mode, fingerprint, comment string) tea.Cmd {
+	return func() tea.Msg {
+		comment = strings.TrimSpace(comment)
+		if comment == "" {
+			return agentEditCommentMsg{err: fmt.Errorf("comment cannot be empty")}
+		}
+
+		path := agent.ResolveFilepath(fingerprint, keyPaths)
+		fileExists := false
+		if path != "" {
+			if _, err := os.Stat(path); err == nil {
+				fileExists = true
+			}
+		}
+
+		// Vault backend: the config stores per-key comments, so persist the change there.
+		if mode == "vault" {
+			payload := vault.BuildSetCommentPayload(fingerprint, comment)
+			if _, err := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); err != nil {
+				return agentEditCommentMsg{err: fmt.Errorf("vault: %w", err)}
+			}
+		}
+
+		// Update the key file on disk when its source path is known.
+		if fileExists {
+			_, _, rawKey, err := agent.ParseKeyFromPath(path)
+			if err != nil {
+				return agentEditCommentMsg{err: fmt.Errorf("load key file: %w", err)}
+			}
+			if err := keys.SaveWithComment(rawKey, comment, path); err != nil {
+				return agentEditCommentMsg{err: fmt.Errorf("save key file: %w", err)}
+			}
+			agent.RegisterFilepath(fingerprint, path)
+		} else if mode != "vault" {
+			return agentEditCommentMsg{err: fmt.Errorf("source file path unknown; add the key via config key_paths")}
+		}
+
+		// Reload the key in the running agent so its reported comment changes.
+		if mode != "vault" && fileExists {
+			if _, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, fingerprint); err != nil {
+				return agentEditCommentMsg{err: fmt.Errorf("remove old key: %w", err)}
+			}
+			if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+				return agentEditCommentMsg{err: fmt.Errorf("reload key: %w", err)}
+			}
+		}
+
+		return agentEditCommentMsg{}
 	}
 }
 

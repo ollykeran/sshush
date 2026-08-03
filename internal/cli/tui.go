@@ -36,10 +36,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	mode := "keys"
+	var keyPaths []string
 	if env.Config != nil {
 		mode = env.Config.AgentBackendMode()
+		keyPaths = env.Config.KeyPaths
 	}
-	m := tui.NewTUI(configPath, socketPath, th, mode)
+	m := tui.NewTUI(configPath, socketPath, th, mode, keyPaths)
 	_, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return fmt.Errorf("cli: run tui: %w", err)

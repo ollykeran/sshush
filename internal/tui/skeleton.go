@@ -364,6 +364,13 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
 			if (key == "q" || key == "esc") && s.navFocus == navFocusScreen {
+				// A page may consume q/esc to cancel its inline modal (e.g. comment edit)
+				// instead of the skeleton moving focus to the navbar.
+				if m, ok := s.pages[s.activeTab].model.(interface{ HandleModalEscape() bool }); ok && m.HandleModalEscape() {
+					updated, cmd := s.pages[s.activeTab].model.Update(msg)
+					s.pages[s.activeTab].model = updated
+					return s, cmd
+				}
 				// Return focus to navbar; next q/esc will quit.
 				s.navFocus = navFocusTabs
 				return s, nil
@@ -785,7 +792,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case agentStatusMsg, agentKeysMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+	case agentStatusMsg, agentKeysMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, agentEditCommentMsg, foundKeysMsg, ButtonFlashDoneMsg:
 		updated, cmd := s.pages[0].model.Update(msg)
 		s.pages[0].model = updated
 		return s, cmd
