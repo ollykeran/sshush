@@ -169,26 +169,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		tableH := s.height - tableHeaderRows
-		if tableH > maxTableHeight {
-			tableH = maxTableHeight
-		}
-		if tableH < minTableHeight {
-			tableH = minTableHeight
-		}
-		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		return s, nil
 
 	case ThemeChangedMsg:
-		tableH := s.height - tableHeaderRows
-		if tableH > maxTableHeight {
-			tableH = maxTableHeight
-		}
-		if tableH < minTableHeight {
-			tableH = minTableHeight
-		}
-		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -232,7 +218,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.status = msg.err.Error()
 			s.statusErr = true
 			s.keyTable.SetRows(nil)
+			s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 			s.loadedFPs = make(map[string]bool)
+			s.syncTableSelection()
 			return s, nil
 		}
 		rows := make([]table.Row, len(msg.keys))
@@ -243,6 +231,8 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.loadedFPs[fp] = true
 		}
 		s.keyTable.SetRows(rows)
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
+		s.syncTableSelection()
 		s.statusErr = false
 		if s.vaultKnown && s.vaultLocked {
 			s.status = "vault locked - press u to unlock"
@@ -257,10 +247,10 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.focus == agentFocusFound {
 			visible := s.visibleFoundKeys()
 			if len(visible) == 0 {
-				s.focus = agentFocusTable
+				s.focusFirstLoadedKey()
 				s.foundSelected = 0
-			} else if s.foundSelected >= len(visible) {
-				s.foundSelected = len(visible) - 1
+			} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
+				s.foundSelected = s.foundKeysMaxIndex(visible)
 			}
 		}
 		return s, nil
@@ -343,6 +333,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pollVaultStateCmd(s.socketPath, msg.gen),
 		)
 
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
+
 	case tea.MouseReleaseMsg:
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
 			return s, nil
@@ -361,6 +357,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if s.focus == agentFocusTable {
 		cmd := s.keyTable.Update(msg)
+		s.syncTableSelection()
 		return s, cmd
 	}
 	return s, nil
@@ -374,12 +371,18 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		switch s.focus {
 		case agentFocusTable:
+			if s.keyTable.Table.Cursor() > 0 {
+				cmd := s.keyTable.Update(msg)
+				s.syncTableSelection()
+				return s, cmd
+			}
+			s.syncTableSelection()
 			return s, navToTabBarCmd()
 		case agentFocusFound:
 			if s.foundSelected > 0 {
 				s.foundSelected--
 			} else {
-				s.focus = agentFocusTable
+				s.focusFirstLoadedKey()
 			}
 		}
 		return s, nil
@@ -387,13 +390,23 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		switch s.focus {
 		case agentFocusTable:
+			rows := s.keyTable.Table.Rows()
+			cursor := s.keyTable.Table.Cursor()
+			if len(rows) > 0 && cursor < len(rows)-1 {
+				cmd := s.keyTable.Update(msg)
+				s.syncTableSelection()
+				return s, cmd
+			}
 			visible := s.visibleFoundKeys()
 			if len(visible) > 0 {
 				s.focus = agentFocusFound
 				s.foundSelected = 0
+				s.syncTableSelection()
 			}
 		case agentFocusFound:
-			if s.foundSelected < len(s.visibleFoundKeys())-1 {
+			visible := s.visibleFoundKeys()
+			maxIdx := s.foundKeysMaxIndex(visible)
+			if s.foundSelected < maxIdx {
 				s.foundSelected++
 			}
 		}
@@ -433,6 +446,7 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if s.focus == agentFocusTable {
 		cmd := s.keyTable.Update(msg)
+		s.syncTableSelection()
 		return s, cmd
 	}
 	return s, nil
@@ -458,9 +472,19 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+	rows := s.keyTable.Table.Rows()
+	for i := range rows {
+		if inZoneBounds(fmt.Sprintf("%skey-%d", s.zonePrefix, i), x, y) {
+			s.focus = agentFocusTable
+			s.keyTable.Table.SetCursor(i)
+			s.syncTableSelection()
+			return s, nil
+		}
+	}
 	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
 		s.focus = agentFocusTable
 		s.keyTable.Table.SetCursor(row)
+		s.syncTableSelection()
 		return s, nil
 	}
 	visible := s.visibleFoundKeys()
@@ -545,6 +569,66 @@ func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 	return s, addKeyToAgentCmd(s.socketPath, path)
 }
 
+func (s *AgentScreen) focusFirstLoadedKey() {
+	s.focus = agentFocusTable
+	if rows := s.keyTable.Table.Rows(); len(rows) > 0 {
+		s.keyTable.Table.SetCursor(0)
+	}
+	s.syncTableSelection()
+}
+
+// syncTableSelection keeps row data visible and toggles row highlight only while
+// the loaded-keys list is the active focus target.
+func (s *AgentScreen) syncTableSelection() {
+	if s.sk == nil {
+		return
+	}
+	rows := s.keyTable.Table.Rows()
+	if len(rows) > 0 && s.keyTable.Table.Cursor() < 0 {
+		s.keyTable.Table.SetCursor(0)
+	}
+	highlighted := s.sk.ScreenActive() && s.focus == agentFocusTable && len(rows) > 0
+	s.keyTable.SetSelectionHighlighted(highlighted, s.sk.Styles())
+}
+
+func (s *AgentScreen) loadedKeysTableHeight() int {
+	rowCount := len(s.keyTable.Table.Rows())
+	if rowCount == 0 {
+		return minTableHeight
+	}
+	// Table view = header row + header rule + data rows.
+	h := rowCount + 2
+	if h > agentLoadedKeysMaxRows {
+		h = agentLoadedKeysMaxRows
+	}
+	if h < minTableHeight {
+		h = minTableHeight
+	}
+	return h
+}
+
+func (s *AgentScreen) foundKeysMaxIndex(visible []string) int {
+	if len(visible) == 0 {
+		return 0
+	}
+	maxIdx := len(visible) - 1
+	if maxIdx >= foundKeysMaxVisible {
+		maxIdx = foundKeysMaxVisible - 1
+	}
+	return maxIdx
+}
+
+func sectionBoxWidth(width int) int {
+	boxW := width * 3 / 4
+	if boxW > sectionBoxMaxWidth {
+		boxW = sectionBoxMaxWidth
+	}
+	if boxW < sectionBoxMinWidth {
+		boxW = sectionBoxMinWidth
+	}
+	return boxW
+}
+
 func (s *AgentScreen) visibleFoundKeys() []string {
 	var visible []string
 	for _, p := range s.foundKeys {
@@ -592,14 +676,8 @@ func (s *AgentScreen) View() tea.View {
 		w = defaultViewWidth
 	}
 
-	st := s.sk.Styles()
-	keyBox := s.keyTable.FocusedBoxView(st, active && s.focus == agentFocusTable)
-	if s.vaultKnown && s.vaultLocked {
-		keyBox = s.keyTable.WarnBoxView(st)
-	}
-
 	var sections []string
-	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
+	sections = append(sections, s.renderLoadedKeys(w, active))
 
 	visible := s.visibleFoundKeys()
 	if len(visible) > 0 {
@@ -609,6 +687,10 @@ func (s *AgentScreen) View() tea.View {
 	}
 
 	content := strings.Join(sections, "\n")
+	contentLines := strings.Count(content, "\n") + 1
+	if padTop := (height - contentLines) / 2; padTop > 0 {
+		content = strings.Repeat("\n", padTop) + content
+	}
 	return tea.NewView(content)
 }
 
@@ -689,11 +771,29 @@ func (s *AgentScreen) ControlButtonsInlineView(focused bool) string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
+func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
+	s.syncTableSelection()
+
+	st := s.sk.Styles()
+	title := st.SectionTitleStyle.Render(" Loaded Keys")
+
+	focused := active && s.focus == agentFocusTable && len(s.keyTable.Table.Rows()) > 0
+	border := st.UnfocusedBorderStyle
+	if s.vaultKnown && s.vaultLocked {
+		border = st.WarnBorderStyle
+	} else if focused {
+		border = st.FocusedBorderStyle
+	}
+
+	content := border.Render(s.keyTable.AgentViewMarked(s.zonePrefix, focused, st))
+	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top, title+"\n"+content)
+}
+
 func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
 	st := s.sk.Styles()
 	title := st.SectionTitleStyle.Render(" Found Keys")
 	var lines []string
-	maxShow := 6
+	maxShow := foundKeysMaxVisible
 	if len(visible) < maxShow {
 		maxShow = len(visible)
 	}
@@ -712,13 +812,7 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 		lines = append(lines, st.DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
 	}
 	content := strings.Join(lines, "\n")
-	boxW := width * 3 / 4
-	if boxW > sectionBoxMaxWidth {
-		boxW = sectionBoxMaxWidth
-	}
-	if boxW < sectionBoxMinWidth {
-		boxW = sectionBoxMinWidth
-	}
+	boxW := sectionBoxWidth(width)
 	border := st.UnfocusedBorderStyle
 	if active && s.focus == agentFocusFound {
 		border = st.FocusedBorderStyle
