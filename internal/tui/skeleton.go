@@ -54,6 +54,9 @@ type Skeleton struct {
 	themeMessage            string      // footer message: session only, saved, save failed
 	themeMessageGeneration  int         // incremented each time message is set, so timeout only clears if still current
 	agentBackendMode        string      // "vault" or "keys"; shown in footer (from config at TUI start)
+	vaultMode               string      // live backend mode read from the running agent ("vault"/"keys")
+	vaultLocked             bool        // true when the running vault agent reports locked
+	vaultKnown              bool        // true when the vault lock state has been read from a running agent
 }
 
 // Styles returns the current styles (derived from theme). Use for all TUI rendering.
@@ -217,6 +220,14 @@ func (s *Skeleton) UpdateWidgetValue(id, value string) {
 		}
 	}
 	s.AddWidget(id, value)
+}
+
+// UpdateVaultState records the live vault lock state read from the running agent.
+// mode is "vault"/"keys"/""; known is false when no live state is available (daemon stopped).
+func (s *Skeleton) UpdateVaultState(mode string, locked, known bool) {
+	s.vaultMode = mode
+	s.vaultLocked = locked
+	s.vaultKnown = known
 }
 
 func (s *Skeleton) GetTerminalWidth() int {
@@ -398,24 +409,45 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Global daemon hotkeys s/x/r (when not in text input; theme picker keeps "s" for save)
-		if (key == "s" || key == "x" || key == "r") && !s.showThemePicker {
+		// Global daemon hotkeys s/x/r/L/u (when not in text input; theme picker keeps "s" for save).
+		// L/u switch to the agent tab and take screen focus when the passphrase prompt opens
+		// (a vault agent locks immediately without one).
+		if (key == "s" || key == "x" || key == "r" || key == "L" || key == "u") && !s.showThemePicker {
 			textInputActive := false
 			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
 				textInputActive = tip.HasActiveTextInput()
 			}
 			if !textInputActive {
 				if agent := s.agentScreen(); agent != nil {
-					var cmd tea.Cmd
 					switch key {
 					case "s":
-						_, cmd = agent.pressButton(0)
+						_, cmd := agent.pressButton(btnStart)
+						return s, cmd
 					case "x":
-						_, cmd = agent.pressButton(1)
+						_, cmd := agent.pressButton(btnStop)
+						return s, cmd
 					case "r":
-						_, cmd = agent.pressButton(2)
+						_, cmd := agent.pressButton(btnReload)
+						return s, cmd
+					case "L", "u":
+						var cmd tea.Cmd
+						if key == "L" {
+							cmd = agent.startLock()
+						} else {
+							cmd = agent.startPassphrase("unlock")
+						}
+						var tabCmd tea.Cmd
+						if s.activeTab != 0 {
+							tabCmd = s.switchTab(0)
+						}
+						if agent.HasModal() {
+							s.navFocus = navFocusScreen
+						}
+						if tabCmd != nil {
+							return s, tea.Batch(tabCmd, cmd)
+						}
+						return s, cmd
 					}
-					return s, cmd
 				}
 			}
 		}
@@ -441,6 +473,9 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				if agent := s.agentScreen(); agent != nil {
 					_, cmd := agent.pressButton(agent.buttons.Active)
+					if agent.HasModal() {
+						s.navFocus = navFocusScreen
+					}
 					return s, cmd
 				}
 				return s, nil
@@ -675,13 +710,15 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
 					cmd := s.SetTheme(s.themeBeforePicker)
 					s.showThemePicker = false
-					if s.navFocus != navFocusDaemon {
+					agent.buttons.Active = btn
+					_, pressCmd := agent.pressButton(btn)
+					if agent.HasModal() {
+						s.navFocus = navFocusScreen
+					} else if s.navFocus != navFocusDaemon {
 						s.navFocusBeforeDaemon = s.navFocus
 						s.activeTabBeforeDaemon = s.activeTab
 						s.navFocus = navFocusDaemon
 					}
-					agent.buttons.Active = btn
-					_, pressCmd := agent.pressButton(btn)
 					if s.activeTab != 0 {
 						return s, tea.Batch(cmd, s.switchTab(0), pressCmd)
 					}
@@ -759,13 +796,15 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if agent := s.agentScreen(); agent != nil {
 			if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
-				if s.navFocus != navFocusDaemon {
+				agent.buttons.Active = btn
+				_, cmd := agent.pressButton(btn)
+				if agent.HasModal() {
+					s.navFocus = navFocusScreen
+				} else if s.navFocus != navFocusDaemon {
 					s.navFocusBeforeDaemon = s.navFocus
 					s.activeTabBeforeDaemon = s.activeTab
 					s.navFocus = navFocusDaemon
 				}
-				agent.buttons.Active = btn
-				_, cmd := agent.pressButton(btn)
 				if s.activeTab != 0 {
 					return s, tea.Batch(s.switchTab(0), cmd)
 				}
@@ -785,7 +824,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case agentStatusMsg, agentKeysMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+	case agentStatusMsg, agentKeysMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
 		updated, cmd := s.pages[0].model.Update(msg)
 		s.pages[0].model = updated
 		return s, cmd
@@ -962,6 +1001,24 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 
 	var leftParts []string
 
+	// Vault/agent mode, with a padlock indicating live vault lock state when known.
+	modeLabel := strings.TrimSpace(s.agentBackendMode)
+	if s.vaultKnown {
+		modeLabel = s.vaultMode
+	}
+	if modeLabel != "" {
+		seg := modeLabel
+		segStyle := st.DimStyle
+		switch {
+		case s.vaultKnown && s.vaultMode == "vault" && s.vaultLocked:
+			seg = "🔒 " + modeLabel + " locked"
+			segStyle = st.WarnStyle
+		case s.vaultKnown && s.vaultMode == "vault":
+			seg = "🔓 " + modeLabel
+		}
+		leftParts = append(leftParts, segStyle.Render(seg))
+	}
+
 	for _, wd := range s.widgets {
 		if wd.value != "" {
 			leftParts = append(leftParts, st.DimStyle.Render(fmt.Sprintf("%s: %s", wd.id, wd.value)))
@@ -998,21 +1055,10 @@ func (s *Skeleton) renderOuterFooter(w int) string {
 	helpWidgetMarked := zone.Mark("footer-help", rightContent)
 
 	suffix := themeWidgetMarked + renderSep(sep) + helpWidgetMarked + renderSep(botR)
-	modeSeg := ""
-	if m := strings.TrimSpace(s.agentBackendMode); m != "" {
-		modeSeg = " " + st.DimStyle.Render(m) + " "
-	}
 	rightBlock := sizeInfo + renderSep(sep) + suffix
-	if modeSeg != "" {
-		rightBlock = sizeInfo + renderSep(sep) + modeSeg + renderSep(sep) + suffix
-	}
 
 	leftPrefix := renderSep(botL) + leftContent
 	fillW := w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
-	if fillW < 1 && modeSeg != "" {
-		rightBlock = sizeInfo + renderSep(sep) + suffix
-		fillW = w - lipgloss.Width(leftPrefix) - lipgloss.Width(rightBlock)
-	}
 	if fillW < 1 {
 		fillW = 1
 	}
@@ -1047,6 +1093,8 @@ func (s *Skeleton) View() tea.View {
 			st.HelpRow("s", "Start daemon"),
 			st.HelpRow("x", "Stop daemon"),
 			st.HelpRow("r", "Reload daemon"),
+			st.HelpRow("L", "Lock vault"),
+			st.HelpRow("u", "Unlock vault"),
 			"",
 			st.HelpRow("t", "Theme picker"),
 			"",

@@ -16,6 +16,7 @@ type Styles struct {
 	InactiveTabStyle          lipgloss.Style
 	FocusedBorderStyle        lipgloss.Style
 	UnfocusedBorderStyle      lipgloss.Style
+	WarnBorderStyle           lipgloss.Style
 	SectionTitleStyle         lipgloss.Style
 	FocusedButtonStyle        lipgloss.Style
 	UnfocusedButtonStyle      lipgloss.Style
@@ -100,6 +101,11 @@ func BuildStyles(t theme.Theme) Styles {
 		UnfocusedBorderStyle: lipgloss.NewStyle().
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(accent).
+			Padding(0, 1),
+		WarnBorderStyle: lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(warnClr).
+			Bold(true).
 			Padding(0, 1),
 		SectionTitleStyle: lipgloss.NewStyle().
 			Bold(true).
