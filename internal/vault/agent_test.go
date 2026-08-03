@@ -698,6 +698,96 @@ func TestExtension_VaultSetAutoload(t *testing.T) {
 	}
 }
 
+func TestExtension_VaultSetComment(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("set-comment-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := va.addKeyWithAutoload(sshagent.AddedKey{PrivateKey: priv, Comment: "old-comment"}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	signer, _ := ssh.NewSignerFromKey(priv)
+	fp := fingerprint(signer.PublicKey())
+
+	payload := BuildSetCommentPayload(fp, "renamed-comment")
+	if _, err := va.Extension(ExtensionVaultSetComment, payload); err != nil {
+		t.Fatalf("set-comment extension: %v", err)
+	}
+
+	// A fresh agent over the same store sees the new comment.
+	va2 := NewVaultAgent(store)
+	if err := va2.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := va2.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("want 1 key, got %d", len(keys))
+	}
+	if keys[0].Comment != "renamed-comment" {
+		t.Errorf("comment: want %q, got %q", "renamed-comment", keys[0].Comment)
+	}
+
+	ids := store.AllIdentities()
+	if len(ids) != 1 || ids[0].Comment != "renamed-comment" {
+		t.Errorf("store identity comment: want %q, got %q", "renamed-comment", ids[0].Comment)
+	}
+}
+
+func TestExtension_VaultSetComment_unknownFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("set-comment-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+	va := NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+	payload := BuildSetCommentPayload("SHA256:nope", "new-comment")
+	if _, err := va.Extension(ExtensionVaultSetComment, payload); err == nil {
+		t.Fatal("expected error for unknown fingerprint")
+	}
+}
+
+func TestExtension_VaultSetComment_locked(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passphrase := []byte("set-comment-test")
+	if err := Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+	va := NewVaultAgent(store)
+	// Never unlocked: set-comment must fail like other mutations.
+	payload := BuildSetCommentPayload("SHA256:whatever", "new-comment")
+	if _, err := va.Extension(ExtensionVaultSetComment, payload); err == nil {
+		t.Fatal("expected error when vault is locked")
+	}
+}
+
 func TestAddKeyWithAutoload_storesFilepath(t *testing.T) {
 	dir := t.TempDir()
 	vaultPath := filepath.Join(dir, "vault.json")
