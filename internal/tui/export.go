@@ -65,7 +65,10 @@ type ExportScreen struct {
 	saveFilename textinput.Model
 	showSaveIn   bool
 
-	focus     int
+	loadRow   ButtonRow
+	actionRow ButtonRow
+	ring      FocusRing
+
 	width     int
 	height    int
 	status    string
@@ -83,15 +86,36 @@ func NewExportScreen(sk *Skeleton, socketPath string) *ExportScreen {
 	kt := NewKeyTable(defaultViewWidth, defaultExportAgentKeysRows, sk.Styles())
 	kt.ZonePrefix = prefix + "agent-"
 
-	return &ExportScreen{
+	loadRow := NewButtonRow("Load from file", "Load from agent")
+	loadRow.ZonePrefix = prefix + "load-"
+	actionRow := NewButtonRow("Copy to clipboard", "Save to file")
+	actionRow.ZonePrefix = prefix + "action-"
+
+	s := &ExportScreen{
 		sk:           sk,
 		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
 		agentKeys:    kt,
 		socketPath:   socketPath,
 		zonePrefix:   prefix,
 		saveFilename: saveIn,
-		focus:        exportFocusLoadFile,
+		loadRow:      loadRow,
+		actionRow:    actionRow,
+		ring:         NewFocusRing(6),
 	}
+	s.syncRingSkip()
+	return s
+}
+
+func (s *ExportScreen) syncRingSkip() {
+	s.ring.SetSkip(func(i int) bool {
+		switch i {
+		case exportFocusAgentTable:
+			return !s.showAgent
+		case exportFocusPubKey, exportFocusCopy, exportFocusSaveFile:
+			return s.pubKeyStr == ""
+		}
+		return false
+	})
 }
 
 func (s *ExportScreen) HasActiveTextInput() bool {
@@ -162,7 +186,8 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.updateDefaultSaveFilename()
 		s.status = "loaded"
 		s.statusErr = false
-		s.focus = exportFocusPubKey
+		s.syncRingSkip()
+		s.ring.SetIndex(exportFocusPubKey)
 		return s, nil
 
 	case exportAgentKeysMsg:
@@ -177,7 +202,8 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		s.agentKeys.SetRows(rows)
 		s.showAgent = true
-		s.focus = exportFocusAgentTable
+		s.syncRingSkip()
+		s.ring.SetIndex(exportFocusAgentTable)
 		return s, nil
 
 	case exportCopyMsg:
@@ -211,7 +237,7 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.fileSelector.Visible() {
 			return s, s.fileSelector.Update(msg)
 		}
-		if s.showAgent && s.focus == exportFocusAgentTable {
+		if s.showAgent && s.ring.Index() == exportFocusAgentTable {
 			return s.handleAgentTable(msg)
 		}
 		if s.showSaveIn {
@@ -223,21 +249,22 @@ func (s *ExportScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *ExportScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
-	if inZoneBounds(s.zonePrefix+"load-file", x, y) {
-		s.focus = exportFocusLoadFile
-		return s, s.fileSelector.Show()
-	}
-	if inZoneBounds(s.zonePrefix+"load-agent", x, y) {
-		s.focus = exportFocusLoadAgent
+	if btn := s.loadRow.HandleMouse(x, y); btn >= 0 {
+		s.ring.SetIndex(exportFocusLoadFile + btn)
+		s.loadRow.Active = btn
+		if btn == 0 {
+			return s, s.fileSelector.Show()
+		}
 		return s, exportFetchAgentKeysCmd(s.socketPath)
 	}
 	if s.pubKeyStr != "" {
-		if inZoneBounds(s.zonePrefix+"copy", x, y) {
-			s.focus = exportFocusCopy
-			return s, copyToClipboardCmd(s.pubKeyStr)
-		}
-		if inZoneBounds(s.zonePrefix+"save", x, y) {
-			s.focus = exportFocusSaveFile
+		if btn := s.actionRow.HandleMouse(x, y); btn >= 0 {
+			s.actionRow.Active = btn
+			if btn == 0 {
+				s.ring.SetIndex(exportFocusCopy)
+				return s, copyToClipboardCmd(s.pubKeyStr)
+			}
+			s.ring.SetIndex(exportFocusSaveFile)
 			s.showSaveIn = true
 			return s, s.saveFilename.Focus()
 		}
@@ -246,19 +273,36 @@ func (s *ExportScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 }
 
 func (s *ExportScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "esc":
+	switch {
+	case KeyMatches(msg, KeyQuit):
 		return s, tea.Quit
-	case "down", "j":
+	case KeyMatches(msg, KeyDown):
 		s.advanceFocus(1)
 		return s, nil
-	case "up", "k":
+	case KeyMatches(msg, KeyUp):
 		cmd := s.advanceFocus(-1)
 		return s, cmd
-	case "left", "h", "right", "l":
+	case KeyMatches(msg, KeyLeft), KeyMatches(msg, KeyRight):
+		focus := s.ring.Index()
+		if focus == exportFocusLoadFile || focus == exportFocusLoadAgent {
+			if KeyMatches(msg, KeyLeft) {
+				s.loadRow.Left()
+			} else {
+				s.loadRow.Right()
+			}
+			s.ring.SetIndex(exportFocusLoadFile + s.loadRow.Active)
+		}
+		if focus == exportFocusCopy || focus == exportFocusSaveFile {
+			if KeyMatches(msg, KeyLeft) {
+				s.actionRow.Left()
+			} else {
+				s.actionRow.Right()
+			}
+			s.ring.SetIndex(exportFocusCopy + s.actionRow.Active)
+		}
 		return s, nil
-	case "enter":
-		switch s.focus {
+	case KeyMatches(msg, KeyEnter):
+		switch s.ring.Index() {
 		case exportFocusLoadFile:
 			return s, s.fileSelector.Show()
 		case exportFocusLoadAgent:
@@ -277,7 +321,7 @@ func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	switch msg.String() {
 	case "esc":
 		s.showAgent = false
-		s.focus = exportFocusLoadFile
+		s.ring.SetIndex(exportFocusLoadFile)
 		return s, nil
 	case "enter":
 		row := s.agentKeys.SelectedRow()
@@ -288,7 +332,7 @@ func (s *ExportScreen) handleAgentTable(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 			s.sourcePath = ""
 			s.updateDefaultSaveFilename()
 			s.showAgent = false
-			s.focus = exportFocusPubKey
+			s.ring.SetIndex(exportFocusPubKey)
 			s.status = "loaded from agent"
 			s.statusErr = false
 		}
@@ -321,28 +365,19 @@ func (s *ExportScreen) handleSaveInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 }
 
 func (s *ExportScreen) advanceFocus(dir int) tea.Cmd {
-	next := s.focus + dir
-	if next < exportFocusLoadFile {
-		return navToTabBarCmd()
-	}
-	max := exportFocusLoadAgent
-	if s.pubKeyStr != "" {
-		max = exportFocusSaveFile
-	}
-	if next > max {
-		next = max
-	}
-	// Skip agent table focus when not showing
-	if next == exportFocusAgentTable && !s.showAgent {
-		next += dir
-		if next < exportFocusLoadFile {
+	s.syncRingSkip()
+	if dir < 0 {
+		if s.ring.Prev() {
 			return navToTabBarCmd()
 		}
-		if next > max {
-			next = max
-		}
+		return nil
 	}
-	s.focus = next
+	before := s.ring.Index()
+	s.ring.Next()
+	// Clamp wrap when advancing past last visible: stay on last
+	if s.ring.Index() < before && before != exportFocusLoadFile {
+		s.ring.SetIndex(before)
+	}
 	return nil
 }
 
@@ -392,59 +427,33 @@ func (s *ExportScreen) View() tea.View {
 	st := s.sk.Styles()
 	var sections []string
 
-	loadFileFocused := active && s.focus == exportFocusLoadFile
-	loadAgentFocused := active && s.focus == exportFocusLoadAgent
-	loadFileStyle := st.AccentStyle
-	loadAgentStyle := st.AccentStyle
-	loadFileLabel := "  Load from file"
-	loadAgentLabel := "  Load from agent"
-	if loadFileFocused {
-		loadFileStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
-		loadFileLabel = "> Load from file"
+	activeFocus := s.ring.Index()
+	s.loadRow.Focused = active && (activeFocus == exportFocusLoadFile || activeFocus == exportFocusLoadAgent)
+	if activeFocus == exportFocusLoadFile {
+		s.loadRow.Active = 0
+	} else if activeFocus == exportFocusLoadAgent {
+		s.loadRow.Active = 1
 	}
-	if loadAgentFocused {
-		loadAgentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
-		loadAgentLabel = "> Load from agent"
-	}
-	sections = append(sections,
-		zone.Mark(s.zonePrefix+"load-file", loadFileStyle.Render(loadFileLabel)),
-		zone.Mark(s.zonePrefix+"load-agent", loadAgentStyle.Render(loadAgentLabel)),
-	)
+	sections = append(sections, s.loadRow.View(st))
 
 	if s.pubKeyStr != "" {
 		sections = append(sections, "")
 
-		contentW := w * 3 / 4
-		if contentW > sectionBoxMaxWidth {
-			contentW = sectionBoxMaxWidth
-		}
-		if contentW < sectionBoxMinWidth {
-			contentW = sectionBoxMinWidth
-		}
+		contentW := SectionWidth(w)
 
 		pubStyle := st.AccentStyle
-		if active && s.focus == exportFocusPubKey {
+		if active && activeFocus == exportFocusPubKey {
 			pubStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(st.TableCellFgHex)).Background(lipgloss.Color(s.sk.Theme().Focus))
 		}
-		sections = append(sections, st.SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && s.focus == exportFocusPubKey))
+		sections = append(sections, st.SectionBox("Public Key", pubStyle.Render(s.pubKeyStr), contentW, active && activeFocus == exportFocusPubKey))
 
-		copyFocused := active && s.focus == exportFocusCopy
-		copyStyle := st.AccentStyle
-		copyLabel := "  Copy to clipboard"
-		if copyFocused {
-			copyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
-			copyLabel = "> Copy to clipboard"
+		s.actionRow.Focused = active && (activeFocus == exportFocusCopy || activeFocus == exportFocusSaveFile)
+		if activeFocus == exportFocusCopy {
+			s.actionRow.Active = 0
+		} else if activeFocus == exportFocusSaveFile {
+			s.actionRow.Active = 1
 		}
-		sections = append(sections, zone.Mark(s.zonePrefix+"copy", copyStyle.Render(copyLabel)))
-
-		saveFocused := active && s.focus == exportFocusSaveFile
-		saveStyle := st.AccentStyle
-		saveLabel := "  Save to file"
-		if saveFocused {
-			saveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
-			saveLabel = "> Save to file"
-		}
-		sections = append(sections, zone.Mark(s.zonePrefix+"save", saveStyle.Render(saveLabel)))
+		sections = append(sections, s.actionRow.View(st))
 
 		if s.showSaveIn {
 			sections = append(sections, st.SectionBox("Filename", s.saveFilename.View(), contentW, active))

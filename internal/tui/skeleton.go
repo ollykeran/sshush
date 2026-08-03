@@ -78,29 +78,32 @@ type skeletonNavFocus int
 const (
 	navFocusScreen skeletonNavFocus = iota
 	navFocusTabs
-	navFocusDaemon
+	navFocusHeaderTools // header tools slot (e.g. daemon buttons); not agent-specific
 )
+
+// navFocusDaemon is kept as an alias for tests during migration.
+const navFocusDaemon = navFocusHeaderTools
 
 const (
 	minTermWidth          = 120
 	minTermHeight         = 30
 	themePickerMaxVisible = 10
 
-	headerRows     = 3
-	footerRows     = 1
-	sideBorderCols = 2
+	headerRows     = LayoutHeaderRows
+	footerRows     = LayoutFooterRows
+	sideBorderCols = LayoutSideBorderCols
 
 	tableHeaderRows             = 14
 	minTableHeight              = 3
 	maxTableHeight              = 12
 	fileSelectorHeightReserve   = 12
 	fileSelectorMinHeight       = 8
-	sectionBoxMaxWidth          = 120
-	sectionBoxMinWidth          = 60
+	sectionBoxMaxWidth          = SectionBoxMaxWidth
+	sectionBoxMinWidth          = SectionBoxMinWidth
 	fileSelectorMinUsableWidth  = 60
 	fileSelectorMinInnerWidth   = 40
-	minCreatePanelWidth         = 40
-	minWidthForHorizontalLayout = 100
+	minCreatePanelWidth         = MinCreatePanelWidth
+	minWidthForHorizontalLayout = MinWidthForHorizontalLayout
 	agentKeysTableMinRows       = 3
 	agentKeysTableMaxRows       = 8
 	agentKeysTableHeightDiv     = 5
@@ -256,15 +259,6 @@ func (s *Skeleton) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func containsKey(keys []string, key string) bool {
-	for _, k := range keys {
-		if k == key {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Skeleton) switchTab(idx int) tea.Cmd {
 	if len(s.pages) == 0 {
 		return nil
@@ -292,21 +286,108 @@ func (s *Skeleton) switchTab(idx int) tea.Cmd {
 	return cmd
 }
 
-func (s *Skeleton) agentScreen() *AgentScreen {
-	if len(s.pages) == 0 {
+func (s *Skeleton) activeModel() tea.Model {
+	if len(s.pages) == 0 || s.activeTab < 0 || s.activeTab >= len(s.pages) {
 		return nil
 	}
-	agent, _ := s.pages[0].model.(*AgentScreen)
-	return agent
+	return s.pages[s.activeTab].model
 }
 
-func (s *Skeleton) enterAgentScreenFocus() {
-	s.navFocus = navFocusScreen
-	if s.activeTab == 0 {
-		if agent := s.agentScreen(); agent != nil {
-			agent.focusFirstLoadedKey()
+func (s *Skeleton) setActiveModel(m tea.Model) {
+	s.pages[s.activeTab].model = m
+}
+
+func (s *Skeleton) pageHasModal() bool {
+	if p, ok := s.activeModel().(Page); ok {
+		return p.HasModal()
+	}
+	if m, ok := s.activeModel().(interface{ HasModal() bool }); ok {
+		return m.HasModal()
+	}
+	return false
+}
+
+func (s *Skeleton) pageHasActiveTextInput() bool {
+	if p, ok := s.activeModel().(Page); ok {
+		return p.HasActiveTextInput()
+	}
+	if tip, ok := s.activeModel().(interface{ HasActiveTextInput() bool }); ok {
+		return tip.HasActiveTextInput()
+	}
+	return false
+}
+
+func (s *Skeleton) findPageIndex(id string) int {
+	for i, p := range s.pages {
+		if p.id == id {
+			return i
 		}
 	}
+	return -1
+}
+
+func (s *Skeleton) findGlobalHotkeys() (GlobalHotkeys, int) {
+	for i, p := range s.pages {
+		if gh, ok := p.model.(GlobalHotkeys); ok {
+			return gh, i
+		}
+	}
+	return nil, -1
+}
+
+func (s *Skeleton) findHeaderTools() (HeaderTools, int) {
+	for i, p := range s.pages {
+		if ht, ok := p.model.(HeaderTools); ok {
+			return ht, i
+		}
+	}
+	return nil, -1
+}
+
+func (s *Skeleton) enterScreenFocus() {
+	s.navFocus = navFocusScreen
+	if se, ok := s.activeModel().(ScreenEnter); ok {
+		se.OnScreenEnter()
+	}
+}
+
+func (s *Skeleton) handleActivateHeaderTools(msg ActivateHeaderToolsMsg) (tea.Model, tea.Cmd) {
+	idx := s.findPageIndex(msg.PageID)
+	if idx < 0 {
+		if _, i := s.findHeaderTools(); i >= 0 {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return s, nil
+	}
+	if msg.EnsureOnly {
+		var cmd tea.Cmd
+		if s.activeTab != idx {
+			cmd = s.switchTab(idx)
+		}
+		if msg.ScreenFocus || s.pageHasModal() {
+			s.navFocus = navFocusScreen
+		}
+		return s, cmd
+	}
+	s.navFocusBeforeDaemon = s.navFocus
+	s.activeTabBeforeDaemon = s.activeTab
+	s.navFocus = navFocusHeaderTools
+	if s.activeTab != idx {
+		return s, s.switchTab(idx)
+	}
+	return s, nil
+}
+
+func (s *Skeleton) handleExitHeaderTools() (tea.Model, tea.Cmd) {
+	s.navFocus = s.navFocusBeforeDaemon
+	prev := s.activeTabBeforeDaemon
+	if prev >= 0 && prev < len(s.pages) && prev != s.activeTab {
+		return s, s.switchTab(prev)
+	}
+	s.activeTab = prev
+	return s, nil
 }
 
 func (s *Skeleton) handleMouseEvent(x, y int, pageMsg tea.Msg) (tea.Model, tea.Cmd) {
@@ -327,11 +408,7 @@ func (s *Skeleton) handleMouseEvent(x, y int, pageMsg tea.Msg) (tea.Model, tea.C
 		return s, nil
 	}
 	if inZoneBounds("footer-theme", x, y) {
-		modalActive := false
-		if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok {
-			modalActive = m.HasModal()
-		}
-		if !modalActive {
+		if !s.pageHasModal() {
 			s.showThemePicker = true
 			s.themePickerIndex = s.currentThemePickerIndex()
 			s.themePickerScrollOffset = 0
@@ -352,23 +429,24 @@ func (s *Skeleton) handleMouseEvent(x, y int, pageMsg tea.Msg) (tea.Model, tea.C
 				return s, tea.Batch(cmd, s.switchTab(i))
 			}
 		}
-		if agent := s.agentScreen(); agent != nil {
-			if btn := agent.buttons.HandleMouse(x, y); btn >= 0 {
+		if ht, idx := s.findHeaderTools(); ht != nil {
+			if handled, pressCmd := ht.HeaderToolsHandleMouse(x, y); handled {
 				cmd := s.SetTheme(s.themeBeforePicker)
 				s.showThemePicker = false
-				agent.buttons.Active = btn
-				_, pressCmd := agent.pressButton(btn)
-				if agent.HasModal() {
+				s.pages[idx].model = ht.(tea.Model)
+				var focusCmd tea.Cmd
+				if s.pageModelHasModal(ht.(tea.Model)) {
 					s.navFocus = navFocusScreen
-				} else if s.navFocus != navFocusDaemon {
-					s.navFocusBeforeDaemon = s.navFocus
-					s.activeTabBeforeDaemon = s.activeTab
-					s.navFocus = navFocusDaemon
+				} else {
+					act, c := s.handleActivateHeaderTools(ActivateHeaderToolsMsg{PageID: s.pages[idx].id})
+					_ = act
+					focusCmd = c
+					s.navFocus = navFocusHeaderTools
 				}
-				if s.activeTab != 0 {
-					return s, tea.Batch(cmd, s.switchTab(0), pressCmd)
+				if s.activeTab != idx {
+					return s, tea.Batch(cmd, s.switchTab(idx), pressCmd, focusCmd)
 				}
-				return s, tea.Batch(cmd, pressCmd)
+				return s, tea.Batch(cmd, pressCmd, focusCmd)
 			}
 		}
 		visibleCount := themePickerMaxVisible
@@ -437,32 +515,41 @@ func (s *Skeleton) handleMouseEvent(x, y int, pageMsg tea.Msg) (tea.Model, tea.C
 			return s, s.switchTab(i)
 		}
 	}
-	if agent := s.agentScreen(); agent != nil {
-		if btn := agent.buttons.HandleMouse(x, y); btn >= 0 {
-			agent.buttons.Active = btn
-			_, cmd := agent.pressButton(btn)
-			if agent.HasModal() {
+	if ht, idx := s.findHeaderTools(); ht != nil {
+		if handled, pressCmd := ht.HeaderToolsHandleMouse(x, y); handled {
+			s.pages[idx].model = ht.(tea.Model)
+			if s.pageModelHasModal(ht.(tea.Model)) {
 				s.navFocus = navFocusScreen
-			} else if s.navFocus != navFocusDaemon {
+			} else if s.navFocus != navFocusHeaderTools {
 				s.navFocusBeforeDaemon = s.navFocus
 				s.activeTabBeforeDaemon = s.activeTab
-				s.navFocus = navFocusDaemon
+				s.navFocus = navFocusHeaderTools
 			}
-			if s.activeTab != 0 {
-				return s, tea.Batch(s.switchTab(0), cmd)
+			if s.activeTab != idx {
+				return s, tea.Batch(s.switchTab(idx), pressCmd)
 			}
-			return s, cmd
+			return s, pressCmd
 		}
 	}
-	if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
-		updated, cmd := s.pages[s.activeTab].model.Update(pageMsg)
-		s.pages[s.activeTab].model = updated
+	if s.pageHasModal() {
+		updated, cmd := s.activeModel().Update(pageMsg)
+		s.setActiveModel(updated)
 		return s, cmd
 	}
 	s.navFocus = navFocusScreen
-	updated, cmd := s.pages[s.activeTab].model.Update(pageMsg)
-	s.pages[s.activeTab].model = updated
+	updated, cmd := s.activeModel().Update(pageMsg)
+	s.setActiveModel(updated)
 	return s, cmd
+}
+
+func (s *Skeleton) pageModelHasModal(m tea.Model) bool {
+	if p, ok := m.(Page); ok {
+		return p.HasModal()
+	}
+	if mm, ok := m.(interface{ HasModal() bool }); ok {
+		return mm.HasModal()
+	}
+	return false
 }
 
 func (s *Skeleton) navMoveLeft() (tea.Model, tea.Cmd) {
@@ -483,30 +570,26 @@ func (s *Skeleton) navMoveRight() (tea.Model, tea.Cmd) {
 	return s, s.switchTab(idx)
 }
 
-func (s *Skeleton) exitDaemonFocus() (tea.Model, tea.Cmd) {
-	s.navFocus = s.navFocusBeforeDaemon
-	s.activeTab = s.activeTabBeforeDaemon
-	if agent := s.agentScreen(); agent != nil {
-		agent.buttons.Active = 0
+func (s *Skeleton) applySideEffect(msg tea.Msg) tea.Cmd {
+	switch m := msg.(type) {
+	case ActivateHeaderToolsMsg:
+		_, cmd := s.handleActivateHeaderTools(m)
+		return cmd
+	case ExitHeaderToolsMsg:
+		_, cmd := s.handleExitHeaderTools()
+		return cmd
+	case VaultStateMsg:
+		s.UpdateVaultState(m.Mode, m.Locked, m.Known)
+		return nil
 	}
-	return s, nil
-}
-
-func (s *Skeleton) enterDaemonFocus() (tea.Model, tea.Cmd) {
-	s.navFocusBeforeDaemon = s.navFocus
-	s.activeTabBeforeDaemon = s.activeTab
-	s.navFocus = navFocusDaemon
-	if agent := s.agentScreen(); agent != nil {
-		agent.buttons.Active = 0
-	}
-	// Switch view to agent screen when activating daemon bar
-	if s.activeTab != 0 {
-		return s, s.switchTab(0)
-	}
-	return s, nil
+	return nil
 }
 
 func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if vs, ok := msg.(VaultStateMsg); ok {
+		s.UpdateVaultState(vs.Mode, vs.Locked, vs.Known)
+		return s, nil
+	}
 	if len(s.pages) == 0 {
 		return s, nil
 	}
@@ -545,31 +628,21 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 
-		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
+		if s.pageHasModal() {
 			if (key == "q" || key == "esc") && s.navFocus == navFocusScreen {
-				// Return focus to navbar; next q/esc will quit.
 				s.navFocus = navFocusTabs
 				return s, nil
 			}
 			if s.navFocus == navFocusScreen {
-				updated, cmd := s.pages[s.activeTab].model.Update(msg)
-				s.pages[s.activeTab].model = updated
+				updated, cmd := s.activeModel().Update(msg)
+				s.setActiveModel(updated)
 				return s, cmd
 			}
 		}
 
 		// "t" opens theme picker from anywhere (screen or navbar), but not when file picker or text input is active.
-		// When picker is already open, do not handle "t" here so it can be used for theme search.
 		if key == "t" && !s.showThemePicker {
-			modalActive := false
-			if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok {
-				modalActive = m.HasModal()
-			}
-			textInputActive := false
-			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
-				textInputActive = tip.HasActiveTextInput()
-			}
-			if !modalActive && !textInputActive {
+			if !s.pageHasModal() && !s.pageHasActiveTextInput() {
 				s.showThemePicker = true
 				s.themePickerIndex = s.currentThemePickerIndex()
 				s.themePickerScrollOffset = 0
@@ -581,125 +654,66 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Global daemon hotkeys s/x/r/L/u (when not in text input; theme picker keeps "s" for save).
-		// L/u switch to the agent tab and take screen focus when the passphrase prompt opens
-		// (a vault agent locks immediately without one).
-		if (key == "s" || key == "x" || key == "r" || key == "L" || key == "u") && !s.showThemePicker {
-			textInputActive := false
-			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
-				textInputActive = tip.HasActiveTextInput()
-			}
-			if !textInputActive {
-				if agent := s.agentScreen(); agent != nil {
-					switch key {
-					case "s":
-						_, cmd := agent.pressButton(btnStart)
-						return s, cmd
-					case "x":
-						_, cmd := agent.pressButton(btnStop)
-						return s, cmd
-					case "r":
-						_, cmd := agent.pressButton(btnReload)
-						return s, cmd
-					case "L", "u":
-						var cmd tea.Cmd
-						if key == "L" {
-							cmd = agent.startLock()
-						} else {
-							cmd = agent.startPassphrase("unlock")
-						}
-						var tabCmd tea.Cmd
-						if s.activeTab != 0 {
-							tabCmd = s.switchTab(0)
-						}
-						if agent.HasModal() {
-							s.navFocus = navFocusScreen
-						}
-						if tabCmd != nil {
-							return s, tea.Batch(tabCmd, cmd)
-						}
-						return s, cmd
-					}
-				}
-			}
-		}
-
-		// Daemon focus: left/right, enter, s/x/r, d/q/esc exit
-		if s.navFocus == navFocusDaemon {
+		// Header tools focus first (before global hotkeys so d/esc exit tools).
+		if s.navFocus == navFocusHeaderTools {
 			switch key {
 			case "ctrl+c":
 				s.quitting = true
 				return s, tea.Quit
-			case "d", "q", "esc":
-				return s.exitDaemonFocus()
-			case "left", "h":
-				if agent := s.agentScreen(); agent != nil && agent.buttons.Active > 0 {
-					agent.buttons.Left()
-				}
-				return s, nil
-			case "right", "l":
-				if agent := s.agentScreen(); agent != nil && agent.buttons.Active < len(agent.buttons.Labels)-1 {
-					agent.buttons.Right()
-				}
-				return s, nil
-			case "enter":
-				if agent := s.agentScreen(); agent != nil {
-					_, cmd := agent.pressButton(agent.buttons.Active)
-					if agent.HasModal() {
-						s.navFocus = navFocusScreen
-					}
-					return s, cmd
-				}
-				return s, nil
-			case "s":
-				if agent := s.agentScreen(); agent != nil {
-					_, cmd := agent.pressButton(0)
-					return s, cmd
-				}
-				return s, nil
-			case "x":
-				if agent := s.agentScreen(); agent != nil {
-					_, cmd := agent.pressButton(1)
-					return s, cmd
-				}
-				return s, nil
-			case "r":
-				if agent := s.agentScreen(); agent != nil {
-					_, cmd := agent.pressButton(2)
-					return s, cmd
-				}
-				return s, nil
 			case "?":
 				s.showHelp = true
+				return s, nil
+			}
+			if ht, idx := s.findHeaderTools(); ht != nil {
+				cmd := ht.HeaderToolsUpdate(msg)
+				s.pages[idx].model = ht.(tea.Model)
+				if s.pageModelHasModal(ht.(tea.Model)) {
+					s.navFocus = navFocusScreen
+					return s, cmd
+				}
+				if cmd != nil {
+					if m := cmd(); m != nil {
+						if _, ok := m.(ExitHeaderToolsMsg); ok {
+							return s.handleExitHeaderTools()
+						}
+						return s, func() tea.Msg { return m }
+					}
+				}
 				return s, nil
 			}
 			return s, nil
 		}
 
-		// 'd' key: remove selected agent key on table, else enter daemon (when not in text field)
-		if key == "d" {
-			textInputActive := false
-			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
-				textInputActive = tip.HasActiveTextInput()
-			}
-			if !textInputActive {
-				if s.navFocus == navFocusScreen && s.activeTab == 0 {
-					if agent := s.agentScreen(); agent != nil && agent.focus == agentFocusTable && !agent.HasModal() {
-						updated, cmd := agent.Update(msg)
-						s.pages[0].model = updated
+		// Global hotkeys via GlobalHotkeys (s/x/r/L/u/d); theme picker keeps "s" for save.
+		if !s.showThemePicker && !s.pageHasActiveTextInput() {
+			// Other screens can claim 'd' for their own row-delete action instead of
+			// entering daemon focus (see VaultScreen.HandleDKey), taking priority over
+			// the global daemon-focus hotkey below.
+			if key == "d" && s.navFocus == navFocusScreen {
+				if h, ok := s.pages[s.activeTab].model.(interface{ HandleDKey() (tea.Cmd, bool) }); ok {
+					if cmd, handled := h.HandleDKey(); handled {
 						return s, cmd
 					}
 				}
-				// Other screens can claim 'd' for their own row-delete action instead of
-				// entering daemon focus (see VaultScreen.HandleDKey).
-				if s.navFocus == navFocusScreen {
-					if h, ok := s.pages[s.activeTab].model.(interface{ HandleDKey() (tea.Cmd, bool) }); ok {
-						if cmd, handled := h.HandleDKey(); handled {
-							return s, cmd
-						}
+			}
+			if gh, idx := s.findGlobalHotkeys(); gh != nil {
+				pageActive := s.activeTab == idx && s.navFocus == navFocusScreen
+				if handled, cmd, side := gh.HandleGlobalKey(key, pageActive); handled {
+					s.pages[idx].model = gh.(tea.Model)
+					var sideCmd tea.Cmd
+					if side != nil {
+						sideCmd = s.applySideEffect(side)
 					}
+					if s.pageModelHasModal(gh.(tea.Model)) {
+						s.navFocus = navFocusScreen
+					}
+					return s, tea.Batch(sideCmd, cmd)
 				}
-				return s.enterDaemonFocus()
+				if KeyMatchesString(key, KeyDaemonFocus) && pageActive {
+					updated, cmd := s.activeModel().Update(msg)
+					s.setActiveModel(updated)
+					return s, cmd
+				}
 			}
 		}
 
@@ -717,13 +731,13 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case containsKey(s.KeyMap.SwitchTabRight, key):
 				return s.navMoveRight()
 			case key == "down" || key == "j":
-				s.enterAgentScreenFocus()
+				s.enterScreenFocus()
 				return s, nil
 			case key == "up" || key == "k":
 				s.navFocus = navFocusTabs
 				return s, nil
 			case key == "enter":
-				s.enterAgentScreenFocus()
+				s.enterScreenFocus()
 				return s, nil
 			case key == "?":
 				s.showHelp = true
@@ -833,7 +847,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok && tip.HasActiveTextInput() {
+		if s.pageHasActiveTextInput() {
 			switch key {
 			case "ctrl+c":
 				s.quitting = true
@@ -842,8 +856,8 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s.quitting = true
 				return s, tea.Quit
 			default:
-				updated, cmd := s.pages[s.activeTab].model.Update(msg)
-				s.pages[s.activeTab].model = updated
+				updated, cmd := s.activeModel().Update(msg)
+				s.setActiveModel(updated)
 				return s, cmd
 			}
 		}
@@ -869,10 +883,13 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case agentStatusMsg, agentKeysMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
-		updated, cmd := s.pages[0].model.Update(msg)
-		s.pages[0].model = updated
-		return s, cmd
+	case ActivateHeaderToolsMsg:
+		return s.handleActivateHeaderTools(msg)
+	case ExitHeaderToolsMsg:
+		return s.handleExitHeaderTools()
+	case VaultStateMsg:
+		s.UpdateVaultState(msg.Mode, msg.Locked, msg.Known)
+		return s, nil
 	case ThemeChangedMsg:
 		for i := range s.pages {
 			updated, _ := s.pages[i].model.Update(msg)
@@ -886,16 +903,28 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 	}
 
-	updated, cmd := s.pages[s.activeTab].model.Update(msg)
-	s.pages[s.activeTab].model = updated
+	// Route async messages to pages that claim them.
+	for i := range s.pages {
+		if r, ok := s.pages[i].model.(AsyncMsgRouter); ok && r.HandlesAsync(msg) {
+			updated, cmd := s.pages[i].model.Update(msg)
+			s.pages[i].model = updated
+			return s, cmd
+		}
+	}
+
+	updated, cmd := s.activeModel().Update(msg)
+	s.setActiveModel(updated)
 	return s, cmd
 }
 
 func (s *Skeleton) statusLine() (string, bool) {
+	if sp, ok := s.activeModel().(Page); ok {
+		return sp.StatusTextRaw()
+	}
 	type statusProvider interface {
 		StatusTextRaw() (string, bool)
 	}
-	if sp, ok := s.pages[s.activeTab].model.(statusProvider); ok {
+	if sp, ok := s.activeModel().(statusProvider); ok {
 		return sp.StatusTextRaw()
 	}
 	return "", false
@@ -951,11 +980,12 @@ func (s *Skeleton) renderOuterHeader(w int) string {
 
 	tabsBlock := lipgloss.JoinHorizontal(lipgloss.Center, tabParts...)
 	var toolsBlock string
-	if agent := s.agentScreen(); agent != nil {
-		btns := agent.ControlButtonsInlineView(s.navFocus == navFocusDaemon)
+	if ht, idx := s.findHeaderTools(); ht != nil {
+		_ = idx
+		btns := ht.HeaderToolsView(s.navFocus == navFocusHeaderTools)
 		inner := st.DaemonLabelStyle.Render("[d]") + " " + btns
 		box := st.DaemonBoxUnfocused
-		if s.navFocus == navFocusDaemon {
+		if s.navFocus == navFocusHeaderTools {
 			box = st.DaemonBoxFocused
 		}
 		toolsBlock = box.Render(inner)
@@ -1122,7 +1152,7 @@ func (s *Skeleton) View() tea.View {
 	h := s.GetTerminalHeight()
 
 	var entries []string
-	if hp, ok := s.pages[s.activeTab].model.(interface{ HelpEntries() []string }); ok {
+	if hp, ok := s.pages[s.activeTab].model.(HelpProvider); ok {
 		entries = hp.HelpEntries()
 	}
 	if s.showHelp {
