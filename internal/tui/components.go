@@ -161,6 +161,12 @@ func (kt KeyTable) FocusedBoxView(st Styles, focused bool) string {
 	return border.Render(kt.Table.View())
 }
 
+// WarnBoxView renders the key table with the warn-coloured border, used when the
+// vault is locked.
+func (kt KeyTable) WarnBoxView(st Styles) string {
+	return st.WarnBorderStyle.Render(kt.Table.View())
+}
+
 func (kt KeyTable) BoxView(st Styles) string {
 	return st.UnfocusedBorderStyle.Render(kt.Table.View())
 }
@@ -179,7 +185,7 @@ func keyBoxInnerWidth(termWidth int) int {
 const (
 	keyTableMinTotalWidth = 36
 	keyTableTypeMinWidth  = 19
-	keyTableFPMinWidth     = 30
+	keyTableFPMinWidth    = 30
 	keyTableCommentMinW   = 20
 )
 
