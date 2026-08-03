@@ -258,14 +258,7 @@ func (kt KeyTable) BoxView(st Styles) string {
 }
 
 func keyBoxInnerWidth(termWidth int) int {
-	boxW := termWidth * 3 / 4
-	if boxW > sectionBoxMaxWidth {
-		boxW = sectionBoxMaxWidth
-	}
-	if boxW < sectionBoxMinWidth {
-		boxW = sectionBoxMinWidth
-	}
-	return boxW - 4
+	return SectionWidth(termWidth) - 4
 }
 
 const (

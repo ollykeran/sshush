@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
-	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
@@ -64,10 +62,10 @@ type vaultPollMsg struct {
 }
 
 const (
-	agentFocusButtons = iota
-	agentFocusTable
+	agentFocusTable = iota
 	agentFocusFound
 	agentFocusPassphrase
+	agentFocusButtons // header daemon controls
 )
 
 // Indices into AgentScreen.buttons.Labels.
@@ -146,6 +144,11 @@ func (s *AgentScreen) HasModal() bool {
 	return s.fileSelector.Visible() || s.showPass
 }
 
+func (s *AgentScreen) HasActiveTextInput() bool {
+	// Passphrase uses HasModal; no other free-text fields on this screen.
+	return false
+}
+
 func (s *AgentScreen) Init() tea.Cmd {
 	return tea.Batch(
 		fetchAgentKeysCmd(s.socketPath, false),
@@ -204,10 +207,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.vaultKnown = false
 		s.vaultLocked = false
 		s.vaultPollGen++
-		if s.sk != nil {
-			s.sk.UpdateVaultState("", false, false)
+		return s, func() tea.Msg {
+			return VaultStateMsg{Mode: "", Locked: false, Known: false}
 		}
-		return s, nil
 
 	case ButtonFlashDoneMsg:
 		s.buttons.ClearPress()
@@ -319,10 +321,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.vaultKnown = false
 			s.vaultLocked = false
 		}
-		if s.sk != nil {
-			s.sk.UpdateVaultState(s.vaultMode, s.vaultLocked, s.vaultKnown)
+		return s, func() tea.Msg {
+			return VaultStateMsg{Mode: s.vaultMode, Locked: s.vaultLocked, Known: s.vaultKnown}
 		}
-		return s, nil
 
 	case vaultPollMsg:
 		if msg.gen != s.vaultPollGen || !s.daemonRunning {
@@ -431,11 +432,20 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, s.fileSelector.Show()
 
-	case "backspace", "delete", "d":
+	case "backspace", "delete":
 		if s.focus == agentFocusTable {
 			return s.removeSelectedKey()
 		}
 		return s, nil
+
+	case "d":
+		if s.focus == agentFocusTable {
+			return s.removeSelectedKey()
+		}
+		s.focus = agentFocusButtons
+		s.buttons.Active = 0
+		s.syncTableSelection()
+		return s, func() tea.Msg { return ActivateHeaderToolsMsg{PageID: agentPageID} }
 
 	case "L":
 		return s, s.startLock()
@@ -619,14 +629,7 @@ func (s *AgentScreen) foundKeysMaxIndex(visible []string) int {
 }
 
 func sectionBoxWidth(width int) int {
-	boxW := width * 3 / 4
-	if boxW > sectionBoxMaxWidth {
-		boxW = sectionBoxMaxWidth
-	}
-	if boxW < sectionBoxMinWidth {
-		boxW = sectionBoxMinWidth
-	}
-	return boxW
+	return SectionWidth(width)
 }
 
 func (s *AgentScreen) visibleFoundKeys() []string {
@@ -694,20 +697,6 @@ func (s *AgentScreen) View() tea.View {
 	return tea.NewView(content)
 }
 
-func (s *AgentScreen) BannerColor() color.Color {
-	t := s.sk.Theme()
-	if s.statusErr {
-		c, _ := theme.HexToRGBA(t.Error)
-		return c
-	}
-	if s.daemonRunning {
-		c, _ := theme.HexToRGBA(t.Focus)
-		return c
-	}
-	c, _ := theme.HexToRGBA(t.Accent)
-	return c
-}
-
 func (s *AgentScreen) StatusText() string {
 	st := s.sk.Styles()
 	statusStyle := st.AccentStyle
@@ -719,30 +708,6 @@ func (s *AgentScreen) StatusText() string {
 
 func (s *AgentScreen) StatusTextRaw() (string, bool) {
 	return s.status, s.statusErr
-}
-
-func (s *AgentScreen) ControlButtonsView(focused bool) string {
-	st := s.sk.Styles()
-	var parts []string
-	for i, label := range s.buttons.Labels {
-		var style lipgloss.Style
-		switch {
-		case s.buttons.Pressed == i:
-			style = st.HeaderTabActiveFocused
-		case s.buttons.Active == i && focused:
-			style = st.HeaderTabActiveFocused
-		case s.buttons.Active == i:
-			style = st.HeaderTabActiveUnfocused
-		default:
-			style = st.HeaderTabInactive
-		}
-		rendered := style.Render(label)
-		if s.buttons.ZonePrefix != "" {
-			rendered = zone.Mark(s.buttons.ZonePrefix+label, rendered)
-		}
-		parts = append(parts, rendered)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
 // ControlButtonsInlineView returns buttons as styled text without per-button borders,

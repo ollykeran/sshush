@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
@@ -12,34 +11,11 @@ import (
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
-func waitForZone(id string) *zone.ZoneInfo {
-	for i := 0; i < 50; i++ {
-		if z := zone.Get(id); z != nil {
-			return z
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	return nil
-}
+func waitForZone(id string) *zone.ZoneInfo { return WaitForZone(id) }
 
-func newAgentTestSkeleton() (*Skeleton, *AgentScreen) {
-	sk := NewSkeleton()
-	sk.theme = theme.DefaultTheme()
-	sk.styles = BuildStyles(sk.theme)
-	agent := NewAgentScreen(sk, "", "/tmp/agent.sock")
-	sk.AddPage("agent", "Agent", agent)
-	sk.activeTab = 0
-	sk.navFocus = navFocusScreen
-	return sk, agent
-}
+func newAgentTestSkeleton() (*Skeleton, *AgentScreen) { return NewAgentTestSkeleton() }
 
-func seedAgentKeyRows(agent *AgentScreen, n int) {
-	rows := make([]table.Row, n)
-	for i := 0; i < n; i++ {
-		rows[i] = table.Row{"ssh-ed25519", fmt.Sprintf("SHA256:fp%d", i), fmt.Sprintf("key%d", i)}
-	}
-	agent.keyTable.SetRows(rows)
-}
+func seedAgentKeyRows(agent *AgentScreen, n int) { SeedAgentKeyRows(agent, n) }
 
 func TestAgentRowHighlightSpansAllColumns(t *testing.T) {
 	st := BuildStyles(theme.DefaultTheme())
@@ -249,8 +225,8 @@ func TestSkeletonDRemovesKeyOnAgentTable(t *testing.T) {
 	agent.keyTable.Table.SetCursor(0)
 
 	_, cmd := sk.Update(tea.KeyPressMsg{Code: 'd'})
-	if sk.navFocus == navFocusDaemon {
-		t.Fatal("d on agent table should not enter daemon focus")
+	if sk.navFocus == navFocusHeaderTools || agent.HeaderToolsFocused() {
+		t.Fatal("d on agent table should not enter header tools focus")
 	}
 	if cmd == nil {
 		t.Fatal("expected remove cmd from skeleton d routing")
@@ -263,20 +239,26 @@ func TestSkeletonDEntersDaemonOffAgentTable(t *testing.T) {
 	seedAgentKeyRows(agent, 2)
 
 	_, _ = sk.Update(tea.KeyPressMsg{Code: 'd'})
-	if sk.navFocus != navFocusDaemon {
-		t.Fatalf("navFocus=%v, want navFocusDaemon when not on table", sk.navFocus)
+	if sk.navFocus != navFocusHeaderTools {
+		t.Fatalf("navFocus=%v, want navFocusHeaderTools when not on table", sk.navFocus)
+	}
+	if !agent.HeaderToolsFocused() {
+		t.Fatal("expected agent header tools focused")
 	}
 }
 
 func TestSkeletonDEntersDaemonOnOtherTab(t *testing.T) {
-	sk, _ := newAgentTestSkeleton()
+	sk, agent := newAgentTestSkeleton()
 	sk.AddPage("create", "Create", NewCreateScreen(sk))
 	sk.activeTab = 1
 	sk.navFocus = navFocusScreen
 
 	_, _ = sk.Update(tea.KeyPressMsg{Code: 'd'})
-	if sk.navFocus != navFocusDaemon {
-		t.Fatalf("navFocus=%v, want navFocusDaemon on non-agent tab", sk.navFocus)
+	if sk.navFocus != navFocusHeaderTools {
+		t.Fatalf("navFocus=%v, want navFocusHeaderTools on non-agent tab", sk.navFocus)
+	}
+	if !agent.HeaderToolsFocused() {
+		t.Fatal("expected agent header tools focused")
 	}
 }
 

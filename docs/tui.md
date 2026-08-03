@@ -8,136 +8,149 @@ See also: [Config](config.md) | [Setup](setup.md)
 
 ```mermaid
 flowchart TD
-  Skeleton[Skeleton root]
+  Skeleton[Skeleton chrome]
+  Page[Page interface]
   Agent[AgentScreen]
   Create[CreateScreen]
   Edit[EditScreen]
   Export[ExportScreen]
-  Skeleton --> Agent
-  Skeleton --> Create
-  Skeleton --> Edit
-  Skeleton --> Export
+  Skeleton --> Page
+  Page --> Agent
+  Page --> Create
+  Page --> Edit
+  Page --> Export
 ```
 
 Text view:
 
 ```
-Skeleton (root)
-├── AgentScreen   (page 0: Agent tab)
-├── CreateScreen  (page 1: Create tab)
-├── EditScreen    (page 2: Edit tab)
-└── ExportScreen  (page 3: Export tab)
+Skeleton (chrome only)
+├── AgentScreen   (page id "agent")
+├── CreateScreen  (page id "create")
+├── EditScreen    (page id "edit")
+└── ExportScreen  (page id "export")
 ```
 
-- **Skeleton**: Layout shell with tabs, header, footer, help overlay. Owns pages and widgets. Routes input to the active page.
-- **AgentScreen**: Manages keys in the SSH agent. Table of loaded keys, buttons (Start/Stop/Reload), found keys, file picker for adding, passphrase for lock/unlock.
-- **CreateScreen**: Key generation form. Key type, options, comment, directory, filename, save button.
-- **EditScreen**: Edit key comments. Load from file or agent, edit comment, save.
-- **ExportScreen**: Export public keys. Load from file or agent, copy to clipboard or save to file.
+- **Skeleton**: Tabs, theme picker, help overlay, outer border/footer. Routes keys/mouse to the active page. Does not own daemon button logic (see `agent_chrome.go`).
+- **AgentScreen**: Keys table, found keys, file picker, passphrase. Implements `HeaderTools` and `GlobalHotkeys` (`s/x/r/L/u/d`).
+- **CreateScreen / EditScreen / ExportScreen**: Forms and actions using shared `FocusRing`, `KeyMap`, `SectionWidth`, `ButtonRow`.
+
+### Page contracts (`page.go`)
+
+| Interface | Methods |
+|-----------|---------|
+| **Page** | `tea.Model`, `HasModal() bool`, `HasActiveTextInput() bool`, `StatusTextRaw() (string, bool)` |
+| **HelpProvider** | `HelpEntries() []string` |
+| **HeaderTools** | `HeaderToolsView(focused bool) string`, `HeaderToolsFocused() bool`, `HeaderToolsUpdate(msg tea.Msg) tea.Cmd`, `HeaderToolsHandleMouse(x, y int) (handled bool, cmd tea.Cmd)` |
+| **GlobalHotkeys** | `HandleGlobalKey(key string, pageActive bool) (handled bool, cmd tea.Cmd, side tea.Msg)` |
+| **AsyncMsgRouter** | `HandlesAsync(msg tea.Msg) bool` |
+| **ScreenEnter** | `OnScreenEnter()` |
+
+`side` from `HandleGlobalKey` is a chrome message Skeleton applies in the same Update turn (e.g. `ActivateHeaderToolsMsg`). `VaultStateMsg` is unidirectional Agent → Skeleton for the footer vault padlock.
+
+Chrome nav focus for header tools is `navFocusHeaderTools` (`navFocusDaemon` remains an alias for older tests).
+
+## Event order
+
+1. Help / theme overlays (Skeleton)
+2. Modal open on active page → page owns keys (except ctrl+c)
+3. Header tools focused (`navFocusHeaderTools`) → `HeaderToolsUpdate`
+4. Global hotkeys (`HandleGlobalKey`) when not in text input / theme-picker save conflict
+5. Tab bar chrome keys, else forward to active page `Update` (screen FocusRing / custom focus)
+6. Async messages → pages that `HandlesAsync(msg)` (else active page)
+
+Mouse: chrome zones first; then `HeaderToolsHandleMouse` (handled miss returns `false`); else page.
+
+## Focus and keys
+
+- **FocusRing** (`focus.go`): index-based slots via `NewFocusRing(n)`, `SetSkip`, `SetIndex`, `Next` / `Prev` (and no-wrap variants). Create/Edit/Export use this; they do not store `Focusable` items. `Focusable` exists for optional richer wrappers later.
+- **KeyMap** (`keymap.go`): shared bindings (`KeyUp`/`KeyDown`/…, daemon keys). Prefer `KeyMatches` / `KeyMatchesString` over raw string switches.
+- **Layout** (`layout.go`): `ContentWidth`, `SectionWidth` (3/4 content, clamp 60–120), `SectionInnerWidth`, `SectionGap`.
+
+Zone IDs: `{pagePrefix}{kind}-{id}` (e.g. ButtonRow `ZonePrefix+label`, agent rows `{prefix}key-N`).
+
+## Testing
+
+- **Package `tui`**: Update-injection tests next to screens (`agent_nav_test.go`, `create_test.go`, `edit_test.go`, `export_focus_test.go` / `export_nav_test.go`, `focus_test.go`, `skeleton_footer_test.go`).
+- **`internal/tui/tuittest`**: harness for external packages that must import `tui` without cycles (`Harness.Send` / `Resize` / `Key`, `WaitForZone`).
+
+Official Charm `teatest` targets Bubbletea v1; this project uses Bubbletea v2, so keep Update-injection until a v2-compatible path exists.
 
 ## Message Flow
 
 Messages flow from tea.Cmd functions to Update. Custom message types carry async results.
+
+### Chrome
+
+| Message | Purpose |
+|---------|---------|
+| NavToTabBarMsg | Move focus to tab bar |
+| ActivateHeaderToolsMsg | Focus header tools / ensure agent tab |
+| ExitHeaderToolsMsg | Leave header tools; restore prior tab |
+| VaultStateMsg | Footer vault lock display (Agent → Skeleton) |
+| ThemeChangedMsg | Refresh styles on all pages |
 
 ### Agent Screen
 
 | Message | Source Cmd | Purpose |
 |---------|------------|---------|
 | agentKeysMsg | fetchAgentKeysCmd | Keys loaded from socket (or error) |
-| agentStatusMsg | startDaemonCmd, stopDaemonCmd, reloadDaemonCmd, addKeyToAgentCmd, removeKeyFromAgentCmd | Status text for banner |
+| agentStatusMsg | start/stop/reload/add/remove cmds | Status text for banner |
 | agentDaemonStateMsg | checkDaemonCmd | Daemon running/stopped |
-| foundKeysMsg | discoverKeysCmd | Discovered key paths from config |
-| agentLockResultMsg | lockAgentCmd | Lock result |
-| agentUnlockResultMsg | unlockAgentCmd | Unlock result |
-| ButtonFlashDoneMsg | ButtonFlashCmd | Button flash animation done |
+| foundKeysMsg | discoverKeysCmd | Discovered key paths |
+| agentLockResultMsg / agentUnlockResultMsg | lock/unlock cmds | Lock results |
+| ButtonFlashDoneMsg | ButtonFlashCmd | Button flash done |
 
-### Create Screen
+### Create / Edit / Export
 
-| Message | Source Cmd | Purpose |
-|---------|------------|---------|
-| keyGenDoneMsg | key generation Cmd | Key created (or error) |
-
-### Edit Screen
-
-| Message | Source Cmd | Purpose |
-|---------|------------|---------|
-| editKeyLoadedMsg | load key from file | Key loaded (or error) |
-| editAgentKeysMsg | fetch agent keys | Keys from agent for selection |
-| editSaveMsg | save Cmd | Save result |
-
-### Export Screen
-
-| Message | Source Cmd | Purpose |
-|---------|------------|---------|
-| exportKeyLoadedMsg | load key from file | Key loaded (or error) |
-| exportAgentKeysMsg | fetch agent keys | Keys from agent for selection |
-| exportCopyMsg | copy to clipboard | Copy result |
-| exportSaveMsg | save to file | Save result |
-
-### Layout
-
-| Message | Purpose |
-|---------|---------|
-| NavToTabBarMsg | Move focus to tab bar |
-| tea.WindowSizeMsg | Resize handled by Skeleton and forwarded to active page |
-| tea.KeyPressMsg, tea.MouseReleaseMsg | Routed by Skeleton to active page or tab bar |
+| Screen | Messages |
+|--------|----------|
+| Create | keyGenDoneMsg |
+| Edit | editKeyLoadedMsg, editSaveMsg |
+| Export | exportKeyLoadedMsg, exportAgentKeysMsg, exportCopyMsg, exportSaveMsg |
 
 ## Component Mapping
 
 | Component | Package | Used In | Purpose |
 |-----------|---------|---------|---------|
-| table | charm.land/bubbles/v2/table | AgentScreen, EditScreen, ExportScreen (KeyTable) | Display key lists |
-| textinput | charm.land/bubbles/v2/textinput | CreateScreen, EditScreen, ExportScreen | Comment, directory, filename, passphrase |
-| filepicker | charm.land/bubbles (StyledFilePicker) | AgentScreen, EditScreen, ExportScreen | Select key files |
-| ButtonRow | internal/tui/components | All screens | Action buttons (key type, Start/Stop, Save, etc.) |
-| KeyTable | internal/tui/components | AgentScreen, EditScreen, ExportScreen | Table + zone markup |
-| Lipgloss | charm.land/lipgloss | theme.go, all View() | Styling, layout |
+| table | charm.land/bubbles/v2/table | Agent, Edit, Export | Key lists |
+| textinput | charm.land/bubbles/v2/textinput | Create, Edit, Export, Agent pass | Fields |
+| filepicker | bubbles | Agent, Edit, Export | Select key files |
+| ButtonRow | internal/tui | All screens | Action buttons |
+| KeyTable | internal/tui | Agent, Edit, Export | Table + zones |
+| FocusRing | internal/tui | Create, Edit, Export | Focus order |
+| Lipgloss | charm.land/lipgloss/v2 | theme + View | Styling |
 
 ## Init / Update / View Responsibilities
 
 ### Skeleton
 
 - **Init**: Batches Init() of all pages.
-- **Update**: Handles tab switching, NavToTabBarMsg, WindowSizeMsg. Forwards screen-specific messages to the active page (e.g. agentKeysMsg only to page 0).
-- **View**: Renders tab bar, header, footer, help overlay, and delegates content to active page's View().
+- **Update**: Chrome (tabs, theme, help, `navFocusHeaderTools`). Applies `VaultStateMsg` to footer. Forwards via Page / HeaderTools / GlobalHotkeys / AsyncMsgRouter (`agent_chrome.go` for Agent).
+- **View**: Tab bar + optional `HeaderToolsView`, footer, help; body = active page View.
 
 ### AgentScreen
 
-- **Init**: fetchAgentKeysCmd, checkDaemonCmd, discoverKeysCmd.
-- **Update**: Handles agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, foundKeysMsg, lock/unlock results, key/button/mouse input.
-- **View**: Loaded keys table (primary, centered), found keys section below, file picker or passphrase input when active.
-
-#### Agent navigation
-
-Skeleton has three nav layers: tab bar (`navFocusTabs`), screen content (`navFocusScreen`), and daemon controls in the header (`navFocusDaemon`, entered with `d` when not removing a key).
-
-On the Agent tab with screen focus, the **Loaded Keys** table is the default focus (`agentFocusTable`). Entering the screen from the tab bar (`down`/`j`/`enter`) selects the first loaded key immediately; the bordered box is display-only.
+- **Init**: fetch keys, daemon, vault, discover.
+- **Update**: agent msgs, table/found/passphrase/file picker.
+- **View**: Loaded keys (centered), found keys; modals when active.
+- **Header tools**: entered with `d` (unless removing a selected loaded key). `s/x/r/L/u` work from any tab via GlobalHotkeys.
 
 | Key | Table focused | Found Keys focused |
 |-----|---------------|-------------------|
-| `up` / `k` | Move cursor up; at first row, return to tab bar | Move selection up; at top, return to table |
-| `down` / `j` | Move cursor down; at last row, enter Found Keys (if any) | Move selection down (clamped to visible rows) |
-| `backspace` / `delete` / `d` | Remove selected loaded key | — |
-| Click row | Select row in table | Click found line adds key (unchanged) |
-
-`d` removes the selected loaded key when the Agent table is focused. On other tabs, when Found Keys is focused, or when a modal is open, `d` enters daemon controls instead.
-
-Loaded keys and Found Keys share the same section layout: title, bordered box at 3/4 content width. The loaded keys block is vertically centered in the screen content area.
+| `up` / `k` | Cursor up; at first row → tab bar | Up; at top → table |
+| `down` / `j` | Cursor down; at last → Found Keys | Down (clamped) |
+| `backspace` / `delete` / `d` | Remove selected key | — |
+| Click row | Select row | Click found line adds key |
 
 ### CreateScreen
 
-- **Init**: None (form is static initially).
-- **Update**: Handles keyGenDoneMsg, form input (type, options, comment, dir, filename), save.
-- **View**: Key type row, options row, comment input, dir input, filename input, save button.
+FocusRing: Type → Options (skip for ed25519) → Comment → Dir → Filename → Save.
 
 ### EditScreen
 
-- **Init**: None.
-- **Update**: Handles editKeyLoadedMsg, editAgentKeysMsg, editSaveMsg, file picker, agent table, comment input.
-- **View**: Load-from-file / load-from-agent, comment input, save button.
+FocusRing: Select file → Comment → Save (comment/save skipped until a key is loaded).
 
 ### ExportScreen
 
-- **Init**: None.
-- **Update**: Handles exportKeyLoadedMsg, exportAgentKeysMsg, exportCopyMsg, exportSaveMsg, file picker, agent table.
-- **View**: Load source, pub key display, copy/save actions.
+FocusRing: Load file → Load agent → (agent table modal) → Pub key → Copy → Save. Copy/Save use `ButtonRow`.
