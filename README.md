@@ -1,5 +1,9 @@
 # sshush
 
+[![tests](https://github.com/ollykeran/sshush/actions/workflows/test.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/test.yml)
+[![build](https://github.com/ollykeran/sshush/actions/workflows/build.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/build.yml)
+[![lint](https://github.com/ollykeran/sshush/actions/workflows/lint.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/lint.yml)
+
 OpenSSH compatible agent over a Unix socket (`SSH_AUTH_SOCK`, same agent protocol as `ssh-agent`) with a TUI, themes, and a config file. I wanted the agent to stay out of the way for normal `ssh` use but still be easy to inspect and reload from dotfiles, without piling on shell wrapper scripts. Optional passphrase vault stores derived keys in one file.
 
 ## Compared to `ssh-agent`

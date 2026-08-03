@@ -7,37 +7,43 @@ act cmd ver="" branch="":
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
-    ARGS="--rm -W .github/workflows/ci.yml --artifact-server-path .act-artifacts"
+    run_act() {
+      local event="$1" file="$2" extra="${3:-}"
+      act "$event" --rm -W ".github/workflows/$file" --artifact-server-path .act-artifacts $extra
+    }
+    run_all() {
+      local event="$1"
+      for f in lint.yml test.yml build.yml; do
+        echo "=== CI ($event): $f ==="
+        run_act "$event" "$f"
+      done
+    }
     case "{{ cmd }}" in
       ci)
-        echo "=== CI (push event) ==="
-        act push $ARGS
+        run_all push
         ;;
       pr)
-        echo "=== CI (pull_request event) ==="
-        act pull_request $ARGS
+        run_all pull_request
         ;;
       all)
-        echo "=== CI (push event) ==="
-        act push $ARGS
-        echo "=== CI (pull_request event) ==="
-        act pull_request $ARGS
+        run_all push
+        run_all pull_request
         ;;
       lint)
         echo "=== Lint ==="
-        act push --rm -W .github/workflows/ci.yml -j lint
+        run_act push lint.yml -j lint
         ;;
       lint-yml)
         echo "=== Lint YAML ==="
-        act push --rm -W .github/workflows/ci.yml -j lint-yml
+        run_act push lint.yml -j lint-yml
         ;;
       test)
         echo "=== Test ==="
-        act push --rm -W .github/workflows/ci.yml -j test
+        run_act push test.yml -j test
         ;;
       build)
         echo "=== Build ==="
-        act push --rm -W .github/workflows/ci.yml -j build
+        run_act push build.yml -j build
         ;;
       release)
         echo "=== Release ==="
@@ -76,6 +82,8 @@ act-clean event="push":
     git worktree add --detach "$tmp" HEAD >/dev/null
     trap 'git worktree remove --force "$tmp"; rm -rf "$tmp"' EXIT
     cp .actrc "$tmp/.actrc"
-    echo "Running act {{ event }} on fresh checkout: $tmp"
-    cd "$tmp"
-    act {{ event }} --rm -W .github/workflows/ci.yml --artifact-server-path "$tmp/.act-artifacts"
+    for f in lint.yml test.yml build.yml; do
+      echo "Running act {{ event }} on fresh checkout: $tmp ($f)"
+      cd "$tmp"
+      act {{ event }} --rm -W ".github/workflows/$f" --artifact-server-path "$tmp/.act-artifacts"
+    done
