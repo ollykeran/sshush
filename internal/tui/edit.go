@@ -52,7 +52,7 @@ type EditScreen struct {
 	// saveDiffRendered is set after a successful save; shows the comment change.
 	saveDiffRendered string
 
-	focus     int
+	ring      FocusRing
 	width     int
 	height    int
 	status    string
@@ -76,7 +76,7 @@ func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 		commentIn:    comment,
 		saveBtn:      saveBtn,
 		zonePrefix:   prefix,
-		focus:        editFocusSelectFile,
+		ring:         NewFocusRing(3),
 	}
 }
 
@@ -143,7 +143,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.commentIn.SetValue(msg.comment)
 		s.status = "loaded: " + utils.DisplayPath(msg.filePath)
 		s.statusErr = false
-		s.focus = editFocusComment
+		s.ring.SetIndex(editFocusComment)
 		return s, s.commentIn.Focus()
 
 	case editSaveMsg:
@@ -155,7 +155,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.statusErr = false
 			s.saveDiffRendered = ""
 			s.originalComment = s.commentIn.Value()
-			s.focus = editFocusComment
+			s.ring.SetIndex(editFocusComment)
 			s.saveBtn.Focused = false
 			s.saveBtn.ClearPress()
 			return s, s.commentIn.Focus()
@@ -176,7 +176,7 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.fileSelector.Visible() {
 			return s, s.fileSelector.Update(msg)
 		}
-		if s.focus == editFocusComment && s.commentIn.Focused() {
+		if s.ring.Index() == editFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
 		}
 		return s.handleKeys(msg)
@@ -187,12 +187,12 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if s.rawKey == nil && inZoneBounds(s.zonePrefix+"select-file", x, y) {
-		s.focus = editFocusSelectFile
+		s.ring.SetIndex(editFocusSelectFile)
 		return s, s.fileSelector.Show()
 	}
 	if s.rawKey != nil {
 		if inZoneBounds(s.zonePrefix+"comment", x, y) {
-			s.focus = editFocusComment
+			s.ring.SetIndex(editFocusComment)
 			s.saveBtn.Focused = false
 			cmd := s.commentIn.Focus()
 			if pos := sectionBoxCursorPos(s.zonePrefix+"comment", x, y); pos >= 0 {
@@ -202,14 +202,14 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 		}
 		if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
 			s.commentIn.Blur()
-			s.focus = editFocusSave
+			s.ring.SetIndex(editFocusSave)
 			s.saveBtn.Focused = true
 			s.saveBtn.Active = btn
 			if btn == 1 {
 				s.commentIn.SetValue(s.originalComment)
 				s.status = "reset to original"
 				s.statusErr = false
-				s.focus = editFocusComment
+				s.ring.SetIndex(editFocusComment)
 				s.saveBtn.Focused = false
 				s.saveBtn.ClearPress()
 				return s, s.commentIn.Focus()
@@ -222,7 +222,7 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 			if comment == strings.TrimSpace(s.originalComment) {
 				s.status = "no changes"
 				s.statusErr = false
-				s.focus = editFocusComment
+				s.ring.SetIndex(editFocusComment)
 				s.saveBtn.Focused = false
 				return s, s.commentIn.Focus()
 			}
@@ -241,7 +241,7 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
-		if s.focus == editFocusSave {
+		if s.ring.Index() == editFocusSave {
 			return s, navToTabBarCmd()
 		}
 		return s, tea.Quit
@@ -250,7 +250,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		return s, s.advanceFocus(-1)
 	case "left", "h", "right", "l":
-		if s.rawKey != nil && s.focus == editFocusSave {
+		if s.rawKey != nil && s.ring.Index() == editFocusSave {
 			if msg.String() == "left" || msg.String() == "h" {
 				s.saveBtn.Left()
 			} else {
@@ -260,7 +260,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 	case "enter":
-		switch s.focus {
+		switch s.ring.Index() {
 		case editFocusSelectFile:
 			return s, s.fileSelector.Show()
 		case editFocusComment:
@@ -275,7 +275,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				s.commentIn.SetValue(s.originalComment)
 				s.status = "reset to original"
 				s.statusErr = false
-				s.focus = editFocusComment
+				s.ring.SetIndex(editFocusComment)
 				s.saveBtn.Focused = false
 				s.saveBtn.ClearPress()
 				return s, s.commentIn.Focus()
@@ -328,27 +328,30 @@ func (s *EditScreen) editGoBack() {
 	s.commentIn.SetValue("")
 	s.status = ""
 	s.statusErr = false
-	s.focus = editFocusSelectFile
+	s.ring.SetIndex(editFocusSelectFile)
 	s.saveBtn.Focused = false
 	s.saveBtn.ClearPress()
 }
 
 func (s *EditScreen) advanceFocus(dir int) tea.Cmd {
 	s.commentIn.Blur()
-	next := s.focus + dir
-	maxFocus := editFocusSelectFile
-	if s.rawKey != nil {
-		maxFocus = editFocusSave
+	s.ring.SetSkip(func(i int) bool {
+		return s.rawKey == nil && i > editFocusSelectFile
+	})
+	if dir < 0 {
+		if s.ring.Prev() {
+			return navToTabBarCmd()
+		}
+	} else {
+		s.ring.Next()
+		// Don't wrap past save when key loaded: clamp if wrapped to select while on save path
+		if s.rawKey != nil && s.ring.Index() == editFocusSelectFile {
+			// wrapped from save → stay on save
+			s.ring.SetIndex(editFocusSave)
+		}
 	}
-	if next < editFocusSelectFile {
-		return navToTabBarCmd()
-	}
-	if next > maxFocus {
-		next = maxFocus
-	}
-	s.focus = next
-	s.saveBtn.Focused = s.focus == editFocusSave
-	if s.focus == editFocusComment {
+	s.saveBtn.Focused = s.ring.Index() == editFocusSave
+	if s.ring.Index() == editFocusComment {
 		return s.commentIn.Focus()
 	}
 	return nil
@@ -383,7 +386,7 @@ func (s *EditScreen) View() tea.View {
 	if s.rawKey == nil {
 		selectStyle := st.AccentStyle
 		selectLabel := "  Select key file"
-		if active && s.focus == editFocusSelectFile {
+		if active && s.ring.Index() == editFocusSelectFile {
 			selectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
 			selectLabel = "> Select key file"
 		}
@@ -391,13 +394,7 @@ func (s *EditScreen) View() tea.View {
 	} else {
 		sections = append(sections, "")
 
-		infoW := w * 3 / 4
-		if infoW > sectionBoxMaxWidth {
-			infoW = sectionBoxMaxWidth
-		}
-		if infoW < sectionBoxMinWidth {
-			infoW = sectionBoxMinWidth
-		}
+		infoW := SectionWidth(w)
 
 		sections = append(sections, st.SectionBox("Public Key",
 			st.AccentStyle.Render(truncate(s.pubKeyStr, infoW-6)), infoW, false))
@@ -405,10 +402,10 @@ func (s *EditScreen) View() tea.View {
 		sections = append(sections, st.SectionBox("Fingerprint",
 			st.AccentStyle.Render(s.fingerprint), infoW, false))
 
-		sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), infoW, active && s.focus == editFocusComment)))
+		sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), infoW, active && s.ring.Index() == editFocusComment)))
 
 		// Save + Diff in one full-width box so right edge aligns with boxes above
-		s.saveBtn.Focused = active && s.focus == editFocusSave
+		s.saveBtn.Focused = active && s.ring.Index() == editFocusSave
 		savePart := " " + s.saveBtn.View(st)
 		comment := strings.TrimSpace(s.commentIn.Value())
 		orig := strings.TrimSpace(s.originalComment)
@@ -419,7 +416,7 @@ func (s *EditScreen) View() tea.View {
 			diffPart = st.DimStyle.Render("  (no changes)")
 		}
 		inner := lipgloss.JoinHorizontal(lipgloss.Top, savePart, "    ", diffPart)
-		sections = append(sections, st.SectionBox("Save / Diff", inner, infoW, active && s.focus == editFocusSave))
+		sections = append(sections, st.SectionBox("Save / Diff", inner, infoW, active && s.ring.Index() == editFocusSave))
 	}
 
 	if s.rawKey == nil && s.status != "" {

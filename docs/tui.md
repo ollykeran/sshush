@@ -8,47 +8,101 @@ See also: [Config](config.md) | [Setup](setup.md)
 
 ```mermaid
 flowchart TD
-  Skeleton[Skeleton root]
+  Skeleton[Skeleton chrome]
+  Page[Page interface]
   Agent[AgentScreen]
   Create[CreateScreen]
   Edit[EditScreen]
   Export[ExportScreen]
   Vault["VaultScreen (vault mode only)"]
-  Skeleton --> Agent
-  Skeleton --> Create
-  Skeleton --> Edit
-  Skeleton --> Export
+  Skeleton --> Page
+  Page --> Agent
+  Page --> Create
+  Page --> Edit
+  Page --> Export
   Skeleton -.-> Vault
 ```
 
 Text view:
 
 ```
-Skeleton (root)
-├── AgentScreen   (page 0: Agent tab)
-├── CreateScreen  (page 1: Create tab)
-├── EditScreen    (page 2: Edit tab)
-├── ExportScreen  (page 3: Export tab)
-└── VaultScreen   (page 4: Vault tab; registered only when agentBackendMode == "vault")
+Skeleton (chrome only)
+├── AgentScreen   (page id "agent")
+├── CreateScreen  (page id "create")
+├── EditScreen    (page id "edit")
+├── ExportScreen  (page id "export")
+└── VaultScreen   (page id "vault"; registered only when [agent].vault = true and [vault].vault_path is set)
 ```
 
-- **Skeleton**: Layout shell with tabs, header, footer, help overlay. Owns pages and widgets. Routes input to the active page.
-- **AgentScreen**: Manages keys in the SSH agent. Table of loaded keys, buttons (Start/Stop/Reload), found keys, file picker for adding, passphrase for lock/unlock.
-- **CreateScreen**: Key generation form. Key type, options, comment, directory, filename, save button.
-- **EditScreen**: Edit key comments. Load from file or agent, edit comment, save.
-- **ExportScreen**: Export public keys. Load from file or agent, copy to clipboard or save to file.
-- **VaultScreen**: Vault identity management, mirroring `sshush vault` subcommands. Only registered when `[agent].vault = true` and `[vault].vault_path` is set; the tab bar shows no Vault entry in keys mode. The Agent tab remains page 0 and the default landing tab in every mode.
+- **Skeleton**: Tabs, theme picker, help overlay, outer border/footer. Routes keys/mouse to the active page. Does not own daemon button logic (see `agent_chrome.go`).
+- **AgentScreen**: Keys table, found keys, file picker, passphrase, comment overlay. Implements `HeaderTools` and `GlobalHotkeys` (`s/x/r/L/u/d`).
+- **CreateScreen / EditScreen / ExportScreen**: Forms and actions using shared `FocusRing`, `KeyMap`, `SectionWidth`, `ButtonRow`.
+- **VaultScreen**: Vault identity management, mirroring `sshush vault` subcommands. Only registered when `[agent].vault = true` and `[vault].vault_path` is set; the tab bar shows no Vault entry in keys mode. The Agent tab remains page 0 and the default landing tab in every mode. Does not implement `HeaderTools`/`GlobalHotkeys`; claims its own row-delete `d` via `HandleDKey` instead (see Event order below).
+
+### Page contracts (`page.go`)
+
+| Interface | Methods |
+|-----------|---------|
+| **Page** | `tea.Model`, `HasModal() bool`, `HasActiveTextInput() bool`, `StatusTextRaw() (string, bool)` |
+| **HelpProvider** | `HelpEntries() []string` |
+| **HeaderTools** | `HeaderToolsView(focused bool) string`, `HeaderToolsFocused() bool`, `HeaderToolsUpdate(msg tea.Msg) tea.Cmd`, `HeaderToolsHandleMouse(x, y int) (handled bool, cmd tea.Cmd)` |
+| **GlobalHotkeys** | `HandleGlobalKey(key string, pageActive bool) (handled bool, cmd tea.Cmd, side tea.Msg)` |
+| **AsyncMsgRouter** | `HandlesAsync(msg tea.Msg) bool` |
+| **ScreenEnter** | `OnScreenEnter()` |
+
+`side` from `HandleGlobalKey` is a chrome message Skeleton applies in the same Update turn (e.g. `ActivateHeaderToolsMsg`). `VaultStateMsg` is unidirectional Agent → Skeleton for the footer vault padlock.
+
+`HandleDKey() (tea.Cmd, bool)` is a separate, narrower ad-hoc hook (not part of `page.go`) that lets a page claim the `d` key for its own row-delete action; it takes priority over `AgentScreen`'s global `d` hotkey (see Event order).
+
+Chrome nav focus for header tools is `navFocusHeaderTools` (`navFocusDaemon` remains an alias for older tests).
+
+## Event order
+
+1. Help / theme overlays (Skeleton)
+2. Modal open on active page → page owns keys (except ctrl+c)
+3. Header tools focused (`navFocusHeaderTools`) → `HeaderToolsUpdate`
+4. `d` key, active page implements `HandleDKey` → page claims it (e.g. `VaultScreen` row delete), else falls through to global hotkeys
+5. Global hotkeys (`HandleGlobalKey`) when not in text input / theme-picker save conflict
+6. Tab bar chrome keys, else forward to active page `Update` (screen FocusRing / custom focus)
+7. Async messages → pages that `HandlesAsync(msg)` (else active page)
+
+Mouse: chrome zones first; then `HeaderToolsHandleMouse` (handled miss returns `false`); else page.
+
+## Focus and keys
+
+- **FocusRing** (`focus.go`): index-based slots via `NewFocusRing(n)`, `SetSkip`, `SetIndex`, `Next` / `Prev` (and no-wrap variants). Create/Edit/Export use this; they do not store `Focusable` items. `Focusable` exists for optional richer wrappers later. `AgentScreen` and `VaultScreen` still use a manual `focus int` field, not `FocusRing`.
+- **KeyMap** (`keymap.go`): shared bindings (`KeyUp`/`KeyDown`/…, daemon keys). Prefer `KeyMatches` / `KeyMatchesString` over raw string switches.
+- **Layout** (`layout.go`): `ContentWidth`, `SectionWidth` (3/4 content, clamp 60–120), `SectionInnerWidth`, `SectionGap`.
+
+Zone IDs: `{pagePrefix}{kind}-{id}` (e.g. ButtonRow `ZonePrefix+label`, agent rows `{prefix}key-N`).
+
+## Testing
+
+- **Package `tui`**: Update-injection tests next to screens (`agent_nav_test.go`, `create_test.go`, `edit_test.go`, `export_focus_test.go` / `export_nav_test.go`, `focus_test.go`, `skeleton_footer_test.go`).
+- **`internal/tui/tuittest`**: harness for external packages that must import `tui` without cycles (`Harness.Send` / `Resize` / `Key`, `WaitForZone`).
+
+Official Charm `teatest` targets Bubbletea v1; this project uses Bubbletea v2, so keep Update-injection until a v2-compatible path exists.
 
 ## Message Flow
 
 Messages flow from tea.Cmd functions to Update. Custom message types carry async results.
+
+### Chrome
+
+| Message | Purpose |
+|---------|---------|
+| NavToTabBarMsg | Move focus to tab bar |
+| ActivateHeaderToolsMsg | Focus header tools / ensure agent tab |
+| ExitHeaderToolsMsg | Leave header tools; restore prior tab |
+| VaultStateMsg | Footer vault lock display (Agent → Skeleton) |
+| ThemeChangedMsg | Refresh styles on all pages |
 
 ### Agent Screen
 
 | Message | Source Cmd | Purpose |
 |---------|------------|---------|
 | agentKeysMsg | fetchAgentKeysCmd | Keys loaded from socket (or error) |
-| agentStatusMsg | startDaemonCmd, stopDaemonCmd, reloadDaemonCmd, addKeyToAgentCmd, removeKeyFromAgentCmd | Status text for banner |
+| agentStatusMsg | start/stop/reload/add/remove cmds | Status text for banner |
 | agentDaemonStateMsg | checkDaemonCmd | Daemon running/stopped |
 | foundKeysMsg | discoverKeysCmd | Discovered key paths from config |
 | agentLockResultMsg | lockAgentCmd | Lock result |
@@ -62,7 +116,7 @@ filepath registry, writes the new comment to the key file (and `.pub` companion 
 present), persists it to the vault when the agent is vault-backed, and reloads the
 key in the agent. See `internal/tui/comment_overlay.go`.
 
-### Create Screen
+### Create / Edit / Export
 
 | Message | Source Cmd | Purpose |
 |---------|------------|---------|
@@ -111,11 +165,12 @@ Because of that routing, VaultScreen implements `Refresh() tea.Cmd` (returning `
 | Component | Package | Used In | Purpose |
 |-----------|---------|---------|---------|
 | table | charm.land/bubbles/v2/table | AgentScreen, EditScreen, ExportScreen (KeyTable), VaultScreen | Display key/identity lists |
-| textinput | charm.land/bubbles/v2/textinput | CreateScreen, EditScreen, ExportScreen, VaultScreen | Comment, directory, filename, passphrase, recovery phrase |
+| textinput | charm.land/bubbles/v2/textinput | CreateScreen, EditScreen, ExportScreen, VaultScreen, AgentScreen (passphrase) | Comment, directory, filename, passphrase, recovery phrase |
 | filepicker | charm.land/bubbles (StyledFilePicker) | AgentScreen, EditScreen, ExportScreen, VaultScreen | Select key files |
 | ButtonRow | internal/tui/components | All screens | Action buttons (key type, Start/Stop, Save, etc.) |
 | KeyTable | internal/tui/components | AgentScreen, EditScreen, ExportScreen | Table + zone markup (3 columns: type/fingerprint/comment) |
-| Lipgloss | charm.land/lipgloss | theme.go, all View() | Styling, layout |
+| FocusRing | internal/tui | CreateScreen, EditScreen, ExportScreen | Focus order (see Focus and keys above) |
+| Lipgloss | charm.land/lipgloss/v2 | theme.go, all View() | Styling, layout |
 
 VaultScreen's identity table needs 5 columns (fingerprint/loaded/autoload/comment/type), so it uses `charm.land/bubbles/v2/table` directly rather than the 3-column `KeyTable` wrapper, styled via the same `keyTableStyles` helper so colors and selection highlighting match exactly. Row-click hit testing reuses the single-zone-plus-offset technique from `KeyTable.HandleMouse` (mark the whole table view, compute the row from the click's Y offset) instead of per-row zone marks.
 
@@ -124,20 +179,15 @@ VaultScreen's identity table needs 5 columns (fingerprint/loaded/autoload/commen
 ### Skeleton
 
 - **Init**: Batches Init() of all pages.
-- **Update**: Handles tab switching, NavToTabBarMsg, WindowSizeMsg. Forwards screen-specific messages to the active page (e.g. agentKeysMsg only to page 0).
-- **View**: Renders tab bar, header, footer, help overlay, and delegates content to active page's View().
+- **Update**: Chrome (tabs, theme, help, `navFocusHeaderTools`). Applies `VaultStateMsg` to footer. Forwards via Page / HeaderTools / GlobalHotkeys / AsyncMsgRouter (`agent_chrome.go` for Agent).
+- **View**: Tab bar + optional `HeaderToolsView`, footer, help; body = active page View.
 
 ### AgentScreen
 
-- **Init**: fetchAgentKeysCmd, checkDaemonCmd, discoverKeysCmd.
-- **Update**: Handles agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, foundKeysMsg, lock/unlock results, key/button/mouse input.
-- **View**: Loaded keys table (primary, centered), found keys section below, file picker or passphrase input when active.
-
-#### Agent navigation
-
-Skeleton has three nav layers: tab bar (`navFocusTabs`), screen content (`navFocusScreen`), and daemon controls in the header (`navFocusDaemon`, entered with `d` when not removing a key).
-
-On the Agent tab with screen focus, the **Loaded Keys** table is the default focus (`agentFocusTable`). Entering the screen from the tab bar (`down`/`j`/`enter`) selects the first loaded key immediately; the bordered box is display-only.
+- **Init**: fetch keys, daemon, vault, discover.
+- **Update**: agent msgs, table/found/passphrase/file picker.
+- **View**: Loaded keys (centered), found keys; modals when active.
+- **Header tools**: entered with `d` (unless removing a selected loaded key). `s/x/r/L/u` work from any tab via GlobalHotkeys.
 
 | Key | Table focused | Found Keys focused |
 |-----|---------------|-------------------|
@@ -152,21 +202,18 @@ Loaded keys and Found Keys share the same section layout: title, bordered box at
 
 ### CreateScreen
 
-- **Init**: None (form is static initially).
-- **Update**: Handles keyGenDoneMsg, form input (type, options, comment, dir, filename), save.
-- **View**: Key type row, options row, comment input, dir input, filename input, save button.
+FocusRing: Type → Options (skip for ed25519) → Comment → Dir → Filename → Save.
 
 ### EditScreen
 
-- **Init**: None.
-- **Update**: Handles editKeyLoadedMsg, editAgentKeysMsg, editSaveMsg, file picker, agent table, comment input.
-- **View**: Load-from-file / load-from-agent, comment input, save button.
+FocusRing: Select file → Comment → Save (comment/save skipped until a key is loaded).
 
 ### ExportScreen
 
 - **Init**: None.
 - **Update**: Handles exportKeyLoadedMsg, exportAgentKeysMsg, exportCopyMsg, exportSaveMsg, file picker, agent table.
 - **View**: Load source, pub key display, copy/save actions.
+- FocusRing: Load file → Load agent → (agent table modal) → Pub key → Copy → Save. Copy/Save use `ButtonRow`.
 
 ### VaultScreen
 
