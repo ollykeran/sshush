@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"os"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
@@ -48,11 +49,34 @@ type agentUnlockResultMsg struct {
 	err error
 }
 
+// vaultStatusMsg reports the live backend mode of the running agent and, for vault
+// agents, whether the vault is locked (master key absent).
+type vaultStatusMsg struct {
+	mode      string // "vault" or "keys"
+	reachable bool   // agent socket reachable and state readable
+	locked    bool   // vault mode only: master key absent
+}
+
+// vaultPollMsg requests a periodic re-check of the vault lock state. gen identifies
+// the poll chain; stale chains are dropped after daemon stop/start.
+type vaultPollMsg struct {
+	gen int
+}
+
 const (
 	agentFocusButtons = iota
 	agentFocusTable
 	agentFocusFound
 	agentFocusPassphrase
+)
+
+// Indices into AgentScreen.buttons.Labels.
+const (
+	btnStart = iota
+	btnStop
+	btnReload
+	btnLock
+	btnUnlock
 )
 
 // AgentScreen is the agent tab: keys table, Start/Stop/Reload buttons, add/remove keys, lock/unlock.
@@ -79,6 +103,11 @@ type AgentScreen struct {
 	showPass   bool
 	passAction string // "lock" or "unlock"
 
+	vaultMode    string // live backend mode from the running agent ("vault"/"keys")
+	vaultLocked  bool   // true when the running vault agent reports locked
+	vaultKnown   bool   // true when the vault lock state has been read from a running agent
+	vaultPollGen int    // generation of the active vault poll chain
+
 	focus int
 }
 
@@ -91,7 +120,7 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '*'
 
-	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload")
+	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload", "[L]ock", "[u]nlock")
 	btns.Focused = true
 	btns.ZonePrefix = prefix + "ctrl-"
 
@@ -121,6 +150,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 	return tea.Batch(
 		fetchAgentKeysCmd(s.socketPath, false),
 		checkDaemonCmd(s.socketPath),
+		checkVaultStateCmd(s.socketPath),
 		discoverKeysCmd(),
 	)
 }
@@ -128,7 +158,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -180,6 +210,17 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			s.sk.UpdateWidgetValue(daemonStatusWidgetID(), state)
 		}
+		if msg.running {
+			// Start a fresh vault poll chain; bumping the generation drops any stale chain.
+			s.vaultPollGen++
+			return s, pollVaultStateCmd(s.socketPath, s.vaultPollGen)
+		}
+		s.vaultKnown = false
+		s.vaultLocked = false
+		s.vaultPollGen++
+		if s.sk != nil {
+			s.sk.UpdateVaultState("", false, false)
+		}
 		return s, nil
 
 	case ButtonFlashDoneMsg:
@@ -203,7 +244,10 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		s.keyTable.SetRows(rows)
 		s.statusErr = false
-		if msg.refresh {
+		if s.vaultKnown && s.vaultLocked {
+			s.status = "vault locked - press u to unlock"
+			s.statusErr = true
+		} else if msg.refresh {
 			s.status = fmt.Sprintf("refreshed %d key(s)", len(rows))
 		} else if len(rows) == 0 {
 			s.status = "no keys loaded"
@@ -231,9 +275,10 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, tea.Batch(
 				fetchAgentKeysCmd(s.socketPath, false),
 				checkDaemonCmd(s.socketPath),
+				checkVaultStateCmd(s.socketPath),
 			)
 		}
-		return s, checkDaemonCmd(s.socketPath)
+		return s, tea.Batch(checkDaemonCmd(s.socketPath), checkVaultStateCmd(s.socketPath))
 
 	case foundKeysMsg:
 		s.foundKeys = msg.paths
@@ -248,9 +293,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = "agent locked"
 			s.statusErr = false
+			// Reset the cached lock state so the follow-up check refreshes it.
+			s.vaultKnown = false
+			s.vaultLocked = false
 		}
 		s.focus = agentFocusTable
-		return s, fetchAgentKeysCmd(s.socketPath, true)
+		return s, tea.Batch(fetchAgentKeysCmd(s.socketPath, true), checkVaultStateCmd(s.socketPath))
 
 	case agentUnlockResultMsg:
 		s.showPass = false
@@ -261,9 +309,39 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = "agent unlocked"
 			s.statusErr = false
+			// Reset the cached lock state so the follow-up check refreshes it.
+			s.vaultKnown = false
+			s.vaultLocked = false
 		}
 		s.focus = agentFocusTable
-		return s, fetchAgentKeysCmd(s.socketPath, true)
+		return s, tea.Batch(fetchAgentKeysCmd(s.socketPath, true), checkVaultStateCmd(s.socketPath))
+
+	case vaultStatusMsg:
+		s.vaultMode = msg.mode
+		if msg.reachable {
+			s.vaultKnown = true
+			s.vaultLocked = msg.locked
+			if s.vaultLocked {
+				s.status = "vault locked - press u to unlock"
+				s.statusErr = true
+			}
+		} else {
+			s.vaultKnown = false
+			s.vaultLocked = false
+		}
+		if s.sk != nil {
+			s.sk.UpdateVaultState(s.vaultMode, s.vaultLocked, s.vaultKnown)
+		}
+		return s, nil
+
+	case vaultPollMsg:
+		if msg.gen != s.vaultPollGen || !s.daemonRunning {
+			return s, nil
+		}
+		return s, tea.Batch(
+			checkVaultStateCmd(s.socketPath),
+			pollVaultStateCmd(s.socketPath, msg.gen),
+		)
 
 	case tea.MouseReleaseMsg:
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
@@ -347,20 +425,10 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case "L":
-		s.showPass = true
-		s.passAction = "lock"
-		s.passInput.SetValue("")
-		s.passInput.Placeholder = "lock passphrase"
-		s.focus = agentFocusPassphrase
-		return s, s.passInput.Focus()
+		return s, s.startLock()
 
-	case "U":
-		s.showPass = true
-		s.passAction = "unlock"
-		s.passInput.SetValue("")
-		s.passInput.Placeholder = "unlock passphrase"
-		s.focus = agentFocusPassphrase
-		return s, s.passInput.Focus()
+	case "u":
+		return s, s.startPassphrase("unlock")
 	}
 
 	if s.focus == agentFocusTable {
@@ -408,22 +476,55 @@ func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 
 func (s *AgentScreen) pressButton(btn int) (tea.Model, tea.Cmd) {
 	s.buttons.Active = btn
+	switch btn {
+	case btnLock:
+		return s, s.startLock()
+	case btnUnlock:
+		return s, s.startPassphrase("unlock")
+	}
 	s.buttons.Press()
 	s.statusErr = false
 
 	var action tea.Cmd
 	switch btn {
-	case 0: // Start
+	case btnStart: // Start
 		s.status = "starting..."
 		action = startDaemonCmd(s.configPath, s.socketPath)
-	case 1: // Stop
+	case btnStop: // Stop
 		s.status = "stopping..."
 		action = stopDaemonCmd()
-	case 2: // Reload
+	case btnReload: // Reload
 		s.status = "reloading..."
 		action = reloadDaemonCmd(s.configPath, s.socketPath)
 	}
 	return s, tea.Batch(action, ButtonFlashCmd())
+}
+
+// startPassphrase opens the lock/unlock passphrase prompt for the given action ("lock"/"unlock").
+func (s *AgentScreen) startPassphrase(action string) tea.Cmd {
+	s.showPass = true
+	s.passAction = action
+	s.passInput.SetValue("")
+	if action == "lock" {
+		s.passInput.Placeholder = "lock passphrase"
+	} else {
+		s.passInput.Placeholder = "unlock passphrase"
+	}
+	s.focus = agentFocusPassphrase
+	return s.passInput.Focus()
+}
+
+// startLock begins locking the agent. A live vault agent locks without a passphrase:
+// the daemon wipes the in-memory master key, so the global unlock key already held is
+// simply discarded. Keys-mode agents need a passphrase (it becomes the unlock key), so
+// the passphrase prompt is shown instead.
+func (s *AgentScreen) startLock() tea.Cmd {
+	if s.vaultMode == "vault" {
+		s.statusErr = false
+		s.status = "locking..."
+		return lockVaultCmd(s.socketPath)
+	}
+	return s.startPassphrase("lock")
 }
 
 func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
@@ -493,6 +594,9 @@ func (s *AgentScreen) View() tea.View {
 
 	st := s.sk.Styles()
 	keyBox := s.keyTable.FocusedBoxView(st, active && s.focus == agentFocusTable)
+	if s.vaultKnown && s.vaultLocked {
+		keyBox = s.keyTable.WarnBoxView(st)
+	}
 
 	var sections []string
 	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
@@ -629,6 +733,8 @@ func (s *AgentScreen) HelpEntries() []string {
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
 		st.HelpRow("d / bksp", "Remove key"),
+		st.HelpRow("L", "Lock vault"),
+		st.HelpRow("u", "Unlock vault"),
 		"",
 	}
 }
@@ -718,10 +824,50 @@ func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	}
 }
 
+// lockVaultCmd locks the vault agent immediately. Locking needs no passphrase: the
+// daemon wipes the in-memory master key.
+func lockVaultCmd(socketPath string) tea.Cmd {
+	return func() tea.Msg {
+		return agentLockResultMsg{err: agent.LockSocket(socketPath, nil)}
+	}
+}
+
 func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
 		return agentUnlockResultMsg{err: agent.UnlockSocket(socketPath, []byte(passphrase))}
 	}
+}
+
+// checkVaultState queries the running agent for its backend mode and, for vault agents,
+// whether the vault is locked.
+func checkVaultState(socketPath string) vaultStatusMsg {
+	mode, live := agent.LiveBackendMode(socketPath)
+	if !live {
+		return vaultStatusMsg{}
+	}
+	if mode != "vault" {
+		return vaultStatusMsg{mode: mode, reachable: true}
+	}
+	resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
+	if err != nil || len(resp) != 1 {
+		return vaultStatusMsg{mode: mode}
+	}
+	return vaultStatusMsg{mode: mode, reachable: true, locked: resp[0] == 1}
+}
+
+func checkVaultStateCmd(socketPath string) tea.Cmd {
+	return func() tea.Msg {
+		return checkVaultState(socketPath)
+	}
+}
+
+// pollVaultStateCmd schedules the next periodic vault state check. Only the poll chain
+// matching the current generation is kept; daemon stop/start bumps the generation to
+// drop stale chains.
+func pollVaultStateCmd(socketPath string, gen int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return vaultPollMsg{gen: gen}
+	})
 }
 
 func discoverKeysCmd() tea.Cmd {
