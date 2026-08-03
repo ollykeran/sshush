@@ -106,8 +106,10 @@ const (
 	agentKeysTableHeightDiv     = 5
 	defaultViewWidth            = 80
 	defaultViewHeight           = 24
-	defaultKeyTableHeight       = 8
+	defaultKeyTableHeight       = 10
 	defaultExportAgentKeysRows  = 5
+	agentLoadedKeysMaxRows      = 10
+	foundKeysMaxVisible         = 6
 )
 
 var themePresetOrder = theme.PresetNamesOrdered()
@@ -291,6 +293,171 @@ func (s *Skeleton) agentScreen() *AgentScreen {
 	}
 	agent, _ := s.pages[0].model.(*AgentScreen)
 	return agent
+}
+
+func (s *Skeleton) enterAgentScreenFocus() {
+	s.navFocus = navFocusScreen
+	if s.activeTab == 0 {
+		if agent := s.agentScreen(); agent != nil {
+			agent.focusFirstLoadedKey()
+		}
+	}
+}
+
+func (s *Skeleton) handleMouseEvent(x, y int, pageMsg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m := pageMsg.(type) {
+	case tea.MouseClickMsg:
+		if m.Button != tea.MouseLeft || s.showHelp {
+			return s, nil
+		}
+	case tea.MouseReleaseMsg:
+		if m.Button != tea.MouseLeft || s.showHelp {
+			return s, nil
+		}
+	default:
+		return s, nil
+	}
+	if inZoneBounds("footer-help", x, y) {
+		s.showHelp = true
+		return s, nil
+	}
+	if inZoneBounds("footer-theme", x, y) {
+		modalActive := false
+		if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok {
+			modalActive = m.HasModal()
+		}
+		if !modalActive {
+			s.showThemePicker = true
+			s.themePickerIndex = s.currentThemePickerIndex()
+			s.themePickerScrollOffset = 0
+			s.themeBeforePicker = s.theme
+			s.themeMessage = ""
+			s.themePickerClampIndexAndScroll()
+			s.navFocus = navFocusScreen
+		}
+		return s, nil
+	}
+	if s.showThemePicker {
+		order := s.themePickerOrder()
+		for i, p := range s.pages {
+			if inZoneBounds("tab-"+p.title, x, y) {
+				cmd := s.SetTheme(s.themeBeforePicker)
+				s.showThemePicker = false
+				s.navFocus = navFocusTabs
+				return s, tea.Batch(cmd, s.switchTab(i))
+			}
+		}
+		if agent := s.agentScreen(); agent != nil {
+			if btn := agent.buttons.HandleMouse(x, y); btn >= 0 {
+				cmd := s.SetTheme(s.themeBeforePicker)
+				s.showThemePicker = false
+				agent.buttons.Active = btn
+				_, pressCmd := agent.pressButton(btn)
+				if agent.HasModal() {
+					s.navFocus = navFocusScreen
+				} else if s.navFocus != navFocusDaemon {
+					s.navFocusBeforeDaemon = s.navFocus
+					s.activeTabBeforeDaemon = s.activeTab
+					s.navFocus = navFocusDaemon
+				}
+				if s.activeTab != 0 {
+					return s, tea.Batch(cmd, s.switchTab(0), pressCmd)
+				}
+				return s, tea.Batch(cmd, pressCmd)
+			}
+		}
+		visibleCount := themePickerMaxVisible
+		if len(order) < visibleCount {
+			visibleCount = len(order)
+		}
+		start := s.themePickerScrollOffset
+		if start+visibleCount > len(order) {
+			start = len(order) - visibleCount
+			if start < 0 {
+				start = 0
+			}
+		}
+		for j := 0; j < visibleCount; j++ {
+			if inZoneBounds("theme-picker-"+strconv.Itoa(j), x, y) {
+				idx := start + j
+				if idx < len(order) {
+					s.themePickerIndex = idx
+					s.themePickerClampIndexAndScroll()
+					s.themeMessage = order[idx] + " - loaded"
+					s.themeMessageGeneration++
+					if t, ok := s.themeForPickerChoice(order[idx]); ok {
+						return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd(s.themeMessageGeneration))
+					}
+				}
+				return s, nil
+			}
+		}
+		if inZoneBounds("theme-picker-save", x, y) {
+			if s.themePickerIndex >= 0 && s.themePickerIndex < len(order) && s.configPath != "" {
+				presetName := order[s.themePickerIndex]
+				if presetName == "custom" {
+					section := &config.ThemeSection{
+						Text: s.theme.Text, Focus: s.theme.Focus, Accent: s.theme.Accent,
+						Error: s.theme.Error, Warning: s.theme.Warning,
+					}
+					if err := config.WriteThemeToPath(s.configPath, "", section); err != nil {
+						s.themeMessage = "save failed"
+						s.themeMessageGeneration++
+					} else {
+						s.themeBeforePicker = s.theme
+						s.themeMessage = "custom - saved"
+						s.themeMessageGeneration++
+					}
+				} else {
+					if err := config.WriteThemeToPath(s.configPath, presetName, nil); err != nil {
+						s.themeMessage = "save failed"
+						s.themeMessageGeneration++
+					} else {
+						s.themeBeforePicker = s.theme
+						s.themeMessage = presetName + " - saved"
+						s.themeMessageGeneration++
+					}
+				}
+			}
+			s.showThemePicker = false
+			return s, themeMessageTimeoutCmd(s.themeMessageGeneration)
+		}
+		cmd := s.SetTheme(s.themeBeforePicker)
+		s.showThemePicker = false
+		return s, cmd
+	}
+	for i, p := range s.pages {
+		if inZoneBounds("tab-"+p.title, x, y) {
+			s.navFocus = navFocusTabs
+			return s, s.switchTab(i)
+		}
+	}
+	if agent := s.agentScreen(); agent != nil {
+		if btn := agent.buttons.HandleMouse(x, y); btn >= 0 {
+			agent.buttons.Active = btn
+			_, cmd := agent.pressButton(btn)
+			if agent.HasModal() {
+				s.navFocus = navFocusScreen
+			} else if s.navFocus != navFocusDaemon {
+				s.navFocusBeforeDaemon = s.navFocus
+				s.activeTabBeforeDaemon = s.activeTab
+				s.navFocus = navFocusDaemon
+			}
+			if s.activeTab != 0 {
+				return s, tea.Batch(s.switchTab(0), cmd)
+			}
+			return s, cmd
+		}
+	}
+	if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
+		updated, cmd := s.pages[s.activeTab].model.Update(pageMsg)
+		s.pages[s.activeTab].model = updated
+		return s, cmd
+	}
+	s.navFocus = navFocusScreen
+	updated, cmd := s.pages[s.activeTab].model.Update(pageMsg)
+	s.pages[s.activeTab].model = updated
+	return s, cmd
 }
 
 func (s *Skeleton) navMoveLeft() (tea.Model, tea.Cmd) {
@@ -504,10 +671,20 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 
-		// 'd' key: enter daemon (when not in text field)
+		// 'd' key: remove selected agent key on table, else enter daemon (when not in text field)
 		if key == "d" {
-			tip, hasInput := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool })
-			if !hasInput || !tip.HasActiveTextInput() {
+			textInputActive := false
+			if tip, ok := s.pages[s.activeTab].model.(interface{ HasActiveTextInput() bool }); ok {
+				textInputActive = tip.HasActiveTextInput()
+			}
+			if !textInputActive {
+				if s.navFocus == navFocusScreen && s.activeTab == 0 {
+					if agent := s.agentScreen(); agent != nil && agent.focus == agentFocusTable && !agent.HasModal() {
+						updated, cmd := agent.Update(msg)
+						s.pages[0].model = updated
+						return s, cmd
+					}
+				}
 				return s.enterDaemonFocus()
 			}
 		}
@@ -526,13 +703,13 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case containsKey(s.KeyMap.SwitchTabRight, key):
 				return s.navMoveRight()
 			case key == "down" || key == "j":
-				s.navFocus = navFocusScreen
+				s.enterAgentScreenFocus()
 				return s, nil
 			case key == "up" || key == "k":
 				s.navFocus = navFocusTabs
 				return s, nil
 			case key == "enter":
-				s.navFocus = navFocusScreen
+				s.enterAgentScreenFocus()
 				return s, nil
 			case key == "?":
 				s.showHelp = true
@@ -671,156 +848,10 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.showHelp = true
 			return s, nil
 		}
+	case tea.MouseClickMsg:
+		return s.handleMouseEvent(msg.X, msg.Y, msg)
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.showHelp {
-			return s, nil
-		}
-		if inZoneBounds("footer-help", msg.X, msg.Y) {
-			s.showHelp = true
-			return s, nil
-		}
-		if inZoneBounds("footer-theme", msg.X, msg.Y) {
-			modalActive := false
-			if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok {
-				modalActive = m.HasModal()
-			}
-			if !modalActive {
-				s.showThemePicker = true
-				s.themePickerIndex = s.currentThemePickerIndex()
-				s.themePickerScrollOffset = 0
-				s.themeBeforePicker = s.theme
-				s.themeMessage = ""
-				s.themePickerClampIndexAndScroll()
-				s.navFocus = navFocusScreen
-			}
-			return s, nil
-		}
-		if s.showThemePicker {
-			order := s.themePickerOrder()
-			// If click is on tab or daemon, close picker (revert) and let that handle the click
-			for i, p := range s.pages {
-				if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
-					cmd := s.SetTheme(s.themeBeforePicker)
-					s.showThemePicker = false
-					s.navFocus = navFocusTabs
-					return s, tea.Batch(cmd, s.switchTab(i))
-				}
-			}
-			if agent := s.agentScreen(); agent != nil {
-				if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
-					cmd := s.SetTheme(s.themeBeforePicker)
-					s.showThemePicker = false
-					agent.buttons.Active = btn
-					_, pressCmd := agent.pressButton(btn)
-					if agent.HasModal() {
-						s.navFocus = navFocusScreen
-					} else if s.navFocus != navFocusDaemon {
-						s.navFocusBeforeDaemon = s.navFocus
-						s.activeTabBeforeDaemon = s.activeTab
-						s.navFocus = navFocusDaemon
-					}
-					if s.activeTab != 0 {
-						return s, tea.Batch(cmd, s.switchTab(0), pressCmd)
-					}
-					return s, tea.Batch(cmd, pressCmd)
-				}
-			}
-			// Theme menu zones: visible rows are theme-picker-0 .. theme-picker-(visible-1), mapping to order indices start+j
-			visibleCount := themePickerMaxVisible
-			if len(order) < visibleCount {
-				visibleCount = len(order)
-			}
-			start := s.themePickerScrollOffset
-			if start+visibleCount > len(order) {
-				start = len(order) - visibleCount
-				if start < 0 {
-					start = 0
-				}
-			}
-			for j := 0; j < visibleCount; j++ {
-				if inZoneBounds("theme-picker-"+strconv.Itoa(j), msg.X, msg.Y) {
-					idx := start + j
-					if idx < len(order) {
-						s.themePickerIndex = idx
-						s.themePickerClampIndexAndScroll()
-						s.themeMessage = order[idx] + " - loaded"
-						s.themeMessageGeneration++
-						if t, ok := s.themeForPickerChoice(order[idx]); ok {
-							return s, tea.Batch(s.SetTheme(t), themeMessageTimeoutCmd(s.themeMessageGeneration))
-						}
-					}
-					return s, nil
-				}
-			}
-			if inZoneBounds("theme-picker-save", msg.X, msg.Y) {
-				if s.themePickerIndex >= 0 && s.themePickerIndex < len(order) && s.configPath != "" {
-					presetName := order[s.themePickerIndex]
-					if presetName == "custom" {
-						section := &config.ThemeSection{
-							Text: s.theme.Text, Focus: s.theme.Focus, Accent: s.theme.Accent,
-							Error: s.theme.Error, Warning: s.theme.Warning,
-						}
-						if err := config.WriteThemeToPath(s.configPath, "", section); err != nil {
-							s.themeMessage = "save failed"
-							s.themeMessageGeneration++
-						} else {
-							s.themeBeforePicker = s.theme
-							s.themeMessage = "custom - saved"
-							s.themeMessageGeneration++
-						}
-					} else {
-						if err := config.WriteThemeToPath(s.configPath, presetName, nil); err != nil {
-							s.themeMessage = "save failed"
-							s.themeMessageGeneration++
-						} else {
-							s.themeBeforePicker = s.theme
-							s.themeMessage = presetName + " - saved"
-							s.themeMessageGeneration++
-						}
-					}
-				}
-				s.showThemePicker = false
-				return s, themeMessageTimeoutCmd(s.themeMessageGeneration)
-			}
-			// Click outside theme menu: close without saving
-			cmd := s.SetTheme(s.themeBeforePicker)
-			s.showThemePicker = false
-			return s, cmd
-		}
-		// Check tab and daemon zones before modal so user can always click to navigate away
-		for i, p := range s.pages {
-			if inZoneBounds("tab-"+p.title, msg.X, msg.Y) {
-				s.navFocus = navFocusTabs
-				return s, s.switchTab(i)
-			}
-		}
-		if agent := s.agentScreen(); agent != nil {
-			if btn := agent.buttons.HandleMouse(msg.X, msg.Y); btn >= 0 {
-				agent.buttons.Active = btn
-				_, cmd := agent.pressButton(btn)
-				if agent.HasModal() {
-					s.navFocus = navFocusScreen
-				} else if s.navFocus != navFocusDaemon {
-					s.navFocusBeforeDaemon = s.navFocus
-					s.activeTabBeforeDaemon = s.activeTab
-					s.navFocus = navFocusDaemon
-				}
-				if s.activeTab != 0 {
-					return s, tea.Batch(s.switchTab(0), cmd)
-				}
-				return s, cmd
-			}
-		}
-		if modal, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && modal.HasModal() {
-			updated, cmd := s.pages[s.activeTab].model.Update(msg)
-			s.pages[s.activeTab].model = updated
-			return s, cmd
-		}
-		// Click was not on tab or navbar; pass to page and focus screen so keys reach it
-		s.navFocus = navFocusScreen
-		updated, cmd := s.pages[s.activeTab].model.Update(msg)
-		s.pages[s.activeTab].model = updated
-		return s, cmd
+		return s.handleMouseEvent(msg.X, msg.Y, msg)
 	}
 
 	switch msg := msg.(type) {
