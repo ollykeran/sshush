@@ -30,9 +30,9 @@ Skeleton (root)
 ```
 
 - **Skeleton**: Layout shell with tabs, header, footer, help overlay. Owns pages and widgets. Routes input to the active page.
-- **AgentScreen**: Manages keys in the SSH agent. Table of loaded keys, buttons (Start/Stop/Reload), found keys, file picker for adding, passphrase for lock/unlock, inline overlay for editing a key's comment.
+- **AgentScreen**: Manages keys in the SSH agent. Table of loaded keys, buttons (Start/Stop/Reload), found keys, file picker for adding, passphrase for lock/unlock.
 - **CreateScreen**: Key generation form. Key type, options, comment, directory, filename, save button.
-- **EditScreen**: Edit key comments. Load from file or agent, edit comment, save.
+- **EditScreen**: Edit key comments. Load from a private key file or from a key currently loaded in the agent (which for the vault backend lists the vault's identities), edit comment, save. Saving a file-loaded key rewrites the key file; saving an agent-loaded key also persists the comment in the vault config (vault backend) and reloads the key in the running agent. All load/save failures surface as status errors.
 - **ExportScreen**: Export public keys. Load from file or agent, copy to clipboard or save to file.
 
 ## Message Flow
@@ -49,10 +49,7 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 | foundKeysMsg | discoverKeysCmd | Discovered key paths from config |
 | agentLockResultMsg | lockAgentCmd | Lock result |
 | agentUnlockResultMsg | unlockAgentCmd | Unlock result |
-| agentEditCommentMsg | editAgentKeyCommentCmd | Key comment edit result (or error) |
 | ButtonFlashDoneMsg | ButtonFlashCmd | Button flash animation done |
-
-The agent tab also supports editing the comment of the selected key with `e` (open overlay, type a new comment, Enter to save, esc to cancel). Saving updates the key file on disk when the source path is resolvable from `key_paths`, persists the comment in the vault config for the vault backend, and reloads the key in the running agent.
 
 ### Create Screen
 
@@ -64,9 +61,11 @@ The agent tab also supports editing the comment of the selected key with `e` (op
 
 | Message | Source Cmd | Purpose |
 |---------|------------|---------|
-| editKeyLoadedMsg | load key from file | Key loaded (or error) |
-| editAgentKeysMsg | fetch agent keys | Keys from agent for selection |
-| editSaveMsg | save Cmd | Save result |
+| editKeyLoadedMsg | editLoadKeyCmd, editLoadAgentKeyCmd | Key loaded from file or agent (or error) |
+| editAgentKeysMsg | editFetchAgentKeysCmd | Keys currently loaded in the agent for selection |
+| editSaveMsg | editSaveKeyCmd, editSaveAgentKeyCmd | Save result |
+
+The edit tab offers "Load from file" and "Load from agent". "Load from agent" lists the keys currently loaded in the running agent (for the vault backend, the vault's loaded identities); picking one loads it into the same comment edit form. Saving an agent-loaded key resolves its source file via `key_paths`, rewrites the key file when known, persists the comment in the vault config for the vault backend, and reloads the key in the running agent.
 
 ### Export Screen
 
