@@ -1,4 +1,4 @@
-name: CI
+name: test
 
 on:
   push:
@@ -10,25 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.12.2
-
-  lint-yml:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: reviewdog/action-actionlint@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -76,23 +57,3 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-tag: coverage-report
           file-path: cover-report.md
-
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, darwin]
-        goarch: [amd64, arm64]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: go build -o /dev/null ./cmd/sshush
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-      - run: go build -o /dev/null ./cmd/sshushd
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
