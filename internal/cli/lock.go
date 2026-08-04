@@ -6,6 +6,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -35,6 +36,11 @@ func runLock(cmd *cobra.Command, _ []string) error {
 	}
 	switch mode {
 	case "vault":
+		resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
+		if extErr == nil && len(resp) == 1 && resp[0] == 1 {
+			style.NewOutput().Info("Vault is already locked.").PrintErr()
+			return nil
+		}
 		conn, err := net.Dial("unix", socketPath)
 		if err != nil {
 			return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()

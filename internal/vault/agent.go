@@ -1,10 +1,13 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/ollykeran/sshush/internal/openssh"
@@ -15,6 +18,13 @@ import (
 // ExtensionAddKeyOpts is the extension type for adding a key with autoload option.
 // Payload: 4-byte big-endian PEM length, PEM bytes, 1 byte autoload (0 or 1).
 const ExtensionAddKeyOpts = "add-key-opts"
+
+// ExtensionQuery is the OpenSSH-defined extension that lists supported extension names.
+const ExtensionQuery = "query"
+
+// ExtensionUnlockRecovery unlocks the vault with the BIP-39 recovery phrase.
+// Payload: UTF-8 space-separated mnemonic words.
+const ExtensionUnlockRecovery = "unlock-recovery"
 
 // ExtensionVaultSessionLoad loads a non-autoload identity into the current agent session
 // (see sessionAutoload0). Payload: UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
@@ -39,9 +49,40 @@ func NewVaultAgent(store *VaultStore) *VaultAgent {
 	return &VaultAgent{store: store, sessionAutoload0: make(map[string]struct{})}
 }
 
+// purgeExpired removes identities whose lifetime has elapsed, mirroring the
+// x/crypto keyring's lazy drop on List/Sign. No-op when the vault is locked.
+func (a *VaultAgent) purgeExpired() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.masterKey == nil {
+		return nil
+	}
+	now := time.Now()
+	var expired []string
+	for _, id := range a.store.AllIdentities() {
+		if !id.ExpiresAt.IsZero() && now.After(id.ExpiresAt) {
+			expired = append(expired, id.Fingerprint)
+		}
+	}
+	if len(expired) == 0 {
+		return nil
+	}
+	for _, fp := range expired {
+		a.store.RemoveIdentity(fp)
+		delete(a.sessionAutoload0, fp)
+	}
+	if err := a.store.Save(); err != nil {
+		return fmt.Errorf("vault: save store: %w", err)
+	}
+	return nil
+}
+
 // List returns identities that are autoload=1 or in the session set (added this run with autoload=0).
 // When locked (no master key), returns an empty list per SSH agent protocol (locked agents return empty).
 func (a *VaultAgent) List() ([]*sshagent.Key, error) {
+	if err := a.purgeExpired(); err != nil {
+		return nil, err
+	}
 	a.mu.RLock()
 	if a.masterKey == nil {
 		a.mu.RUnlock()
@@ -69,12 +110,24 @@ func (a *VaultAgent) List() ([]*sshagent.Key, error) {
 
 // Add encrypts the private key and adds it to the store with autoload=false,
 // and adds the fingerprint to the session set so the key is visible until restart.
+// Constraints the vault cannot honor (confirm, constraint extensions, certificates)
+// are rejected so clients are never silently mis-served (OpenSSH reply rule).
 func (a *VaultAgent) Add(key sshagent.AddedKey) error {
+	if key.ConfirmBeforeUse {
+		return errors.New("agent: confirm before use constraint is not supported")
+	}
+	if len(key.ConstraintExtensions) > 0 {
+		return errors.New("agent: constraint extensions are present but not supported")
+	}
+	if key.Certificate != nil {
+		return errors.New("agent: certificate identities are not supported")
+	}
 	return a.addKeyWithAutoload(key, false, "")
 }
 
 // addKeyWithAutoload adds the key with the given autoload.
 // When autoload is false, the fingerprint is added to sessionAutoload0 so the key is visible until restart.
+// A nonzero LifetimeSecs on key is honored: the identity expires and is lazily dropped.
 func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool, keyFilepath string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -105,6 +158,9 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool, ke
 		Filepath:      keyFilepath,
 		Autoload:      autoload,
 	}
+	if key.LifetimeSecs > 0 {
+		id.ExpiresAt = time.Now().UTC().Add(time.Duration(key.LifetimeSecs) * time.Second)
+	}
 	if err := a.store.AddOrReplaceIdentity(id); err != nil {
 		return fmt.Errorf("vault: store identity: %w", err)
 	}
@@ -117,7 +173,8 @@ func (a *VaultAgent) addKeyWithAutoload(key sshagent.AddedKey, autoload bool, ke
 	return nil
 }
 
-// Remove deletes the identity with the given public key.
+// Remove deletes the identity with the given public key. Fails if the key is not
+// present (OpenSSH reply rule).
 func (a *VaultAgent) Remove(key ssh.PublicKey) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -125,8 +182,11 @@ func (a *VaultAgent) Remove(key ssh.PublicKey) error {
 		return errLocked
 	}
 	fp := fingerprint(key)
+	removed := a.store.RemoveIdentity(fp)
 	delete(a.sessionAutoload0, fp)
-	a.store.RemoveIdentity(fp)
+	if !removed {
+		return errKeyNotFound
+	}
 	if err := a.store.Save(); err != nil {
 		return fmt.Errorf("vault: save store: %w", err)
 	}
@@ -149,13 +209,15 @@ func (a *VaultAgent) RemoveAll() error {
 }
 
 // Lock wipes the master key from memory; Sign will fail until Unlock.
+// Fails if the vault is already locked (OpenSSH reply rule).
 func (a *VaultAgent) Lock(passphrase []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.masterKey != nil {
-		wipe(a.masterKey)
-		a.masterKey = nil
+	if a.masterKey == nil {
+		return errAgentLocked
 	}
+	wipe(a.masterKey)
+	a.masterKey = nil
 	return nil
 }
 
@@ -181,9 +243,13 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 }
 
 // Unlock derives the master key from passphrase and verifies the canary.
+// Fails if the vault is already unlocked (OpenSSH reply rule).
 func (a *VaultAgent) Unlock(passphrase []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.masterKey != nil {
+		return errAgentNotLocked
+	}
 	meta := a.store.GetMetadata()
 	if meta == nil || len(meta.Salt) == 0 || len(meta.Canary) == 0 {
 		return errWrongPassphrase
@@ -202,9 +268,10 @@ func (a *VaultAgent) Unlock(passphrase []byte) error {
 	return nil
 }
 
-// Sign decrypts the key blob, signs data, then zeros the decrypted buffer.
+// signerForKey decrypts the identity blob for key and returns an ssh.Signer.
 // Only allows signing for keys that are listed (autoload=true or in session set).
-func (a *VaultAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+// The decrypted key material is wiped before returning.
+func (a *VaultAgent) signerForKey(key ssh.PublicKey) (ssh.Signer, error) {
 	a.mu.RLock()
 	if a.masterKey == nil {
 		a.mu.RUnlock()
@@ -233,6 +300,18 @@ func (a *VaultAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error
 	if err != nil {
 		return nil, fmt.Errorf("vault: create signer: %w", err)
 	}
+	return signer, nil
+}
+
+// Sign decrypts the key blob, signs data, then zeros the decrypted buffer.
+func (a *VaultAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
+	if err := a.purgeExpired(); err != nil {
+		return nil, err
+	}
+	signer, err := a.signerForKey(key)
+	if err != nil {
+		return nil, err
+	}
 	return signer.Sign(nil, data)
 }
 
@@ -241,9 +320,34 @@ func (a *VaultAgent) Signers() ([]ssh.Signer, error) {
 	return nil, errNotImplemented
 }
 
-// SignWithFlags implements ExtendedAgent (task 3.2); stub.
+// SignWithFlags implements ExtendedAgent, mirroring the OpenSSH / x/crypto
+// keyring: flags == 0 signs with the default algorithm; rsa-sha2-256/512 use
+// SignWithAlgorithm; any other flags are unsupported.
 func (a *VaultAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags sshagent.SignatureFlags) (*ssh.Signature, error) {
-	return a.Sign(key, data)
+	if flags == 0 {
+		return a.Sign(key, data)
+	}
+	if err := a.purgeExpired(); err != nil {
+		return nil, err
+	}
+	signer, err := a.signerForKey(key)
+	if err != nil {
+		return nil, err
+	}
+	var algorithm string
+	switch flags {
+	case sshagent.SignatureFlagRsaSha256:
+		algorithm = ssh.KeyAlgoRSASHA256
+	case sshagent.SignatureFlagRsaSha512:
+		algorithm = ssh.KeyAlgoRSASHA512
+	default:
+		return nil, fmt.Errorf("vault: unsupported signature flags: %d", flags)
+	}
+	algorithmSigner, ok := signer.(ssh.AlgorithmSigner)
+	if !ok {
+		return nil, fmt.Errorf("vault: key does not support non-default signature algorithm: %T", signer)
+	}
+	return algorithmSigner.SignWithAlgorithm(nil, data, algorithm)
 }
 
 // ExtensionVaultLocked is the extension type for querying whether the vault is locked.
@@ -305,8 +409,24 @@ func (a *VaultAgent) setIdentityAutoload(fp string, on bool) error {
 }
 
 // Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
-// "vault-session-load", and "vault-set-autoload".
+// "vault-session-load", "vault-set-autoload", and the OpenSSH "query" extension.
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if extensionType == ExtensionQuery {
+		// OpenSSH's ssh-agent returns one SSH string per extension name.
+		names := []string{
+			ExtensionQuery,
+			ExtensionVaultLocked,
+			ExtensionUnlockRecovery,
+			ExtensionAddKeyOpts,
+			ExtensionVaultSessionLoad,
+			ExtensionVaultSetAutoload,
+		}
+		var buf bytes.Buffer
+		for _, name := range names {
+			buf.Write(ssh.Marshal(struct{ Name string }{Name: name}))
+		}
+		return buf.Bytes(), nil
+	}
 	if extensionType == ExtensionVaultLocked {
 		a.mu.RLock()
 		locked := a.masterKey == nil
@@ -316,7 +436,7 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		}
 		return []byte{0}, nil
 	}
-	if extensionType == "unlock-recovery" {
+	if extensionType == ExtensionUnlockRecovery {
 		mnemonic := strings.Join(strings.Fields(strings.TrimSpace(string(contents))), " ")
 		if err := a.UnlockWithRecovery(mnemonic); err != nil {
 			return nil, fmt.Errorf("vault: unlock recovery: %w", err)
