@@ -28,3 +28,5 @@ jobs:
       - uses: reviewdog/action-actionlint@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: ${{ env.ACT == 'true' && 'local' || 'github-pr-check' }}
+          filter_mode: ${{ env.ACT == 'true' && 'nofilter' || 'file' }}
