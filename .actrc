@@ -2,3 +2,4 @@
 --container-architecture linux/amd64
 --bind
 --container-options -u 1000:1000
+--env HOME=/tmp
