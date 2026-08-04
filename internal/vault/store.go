@@ -31,14 +31,15 @@ type VaultMetadata struct {
 
 // Identity is one vault identity: fingerprint, public key, encrypted private key blob, and metadata.
 type Identity struct {
-	Fingerprint   string `json:"fingerprint"`
-	PublicKey     []byte `json:"public_key"`
-	EncryptedBlob []byte `json:"encrypted_blob"`
-	Comment       string `json:"comment,omitempty"`
-	Filepath      string `json:"filepath,omitempty"`
-	AccessTime    string `json:"access_time,omitempty"`
-	AddedAt       string `json:"added_at,omitempty"`
-	Autoload      bool   `json:"autoload"`
+	Fingerprint   string    `json:"fingerprint"`
+	PublicKey     []byte    `json:"public_key"`
+	EncryptedBlob []byte    `json:"encrypted_blob"`
+	Comment       string    `json:"comment,omitempty"`
+	Filepath      string    `json:"filepath,omitempty"`
+	AccessTime    string    `json:"access_time,omitempty"`
+	AddedAt       string    `json:"added_at,omitempty"`
+	Autoload      bool      `json:"autoload"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 }
 
 // VaultStore holds the vault path, in-memory metadata and identities, and a mutex.
@@ -202,17 +203,22 @@ func (s *VaultStore) AddOrReplaceIdentity(id Identity) error {
 }
 
 // RemoveIdentity removes the identity with the given fingerprint. Call Save() after.
-func (s *VaultStore) RemoveIdentity(fingerprint string) {
+// Returns true if an identity was removed, false if none matched.
+func (s *VaultStore) RemoveIdentity(fingerprint string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
+	removed := false
 	for _, id := range s.identities {
 		if id.Fingerprint != fingerprint {
 			s.identities[n] = id
 			n++
+		} else {
+			removed = true
 		}
 	}
 	s.identities = s.identities[:n]
+	return removed
 }
 
 // RemoveAllIdentities removes all identities. Call Save() after.
