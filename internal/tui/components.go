@@ -121,8 +121,6 @@ func (kt *KeyTable) SetRows(rows []table.Row) {
 	}
 }
 
-const agentTableHeaderLines = 2
-
 // AgentView renders the key table for the agent screen. Selection background is
 // applied per cell so the full row (type, fingerprint, comment) highlights.
 func (kt KeyTable) AgentView(highlightCursor bool, st Styles) string {
