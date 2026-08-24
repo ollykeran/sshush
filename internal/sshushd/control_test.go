@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ollykeran/sshush/internal/readypipe"
 )
 
 func TestStartServerDaemon_alreadyRunningPort(t *testing.T) {
@@ -146,6 +148,27 @@ func TestStartDaemon_alreadyRunning(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "daemon already running") {
 		t.Errorf("expected 'daemon already running' in error, got %q", err.Error())
+	}
+}
+
+func TestStartDaemon_surfacesChildFailureMessage(t *testing.T) {
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "sshushd")
+	script := "#!/bin/sh\neval \"printf '%s' 'stub failure message' >&${" + readypipe.EnvVar + "}\"\nexit 1\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	dir := unixSocketTempDir(t)
+	socketPath := filepath.Join(dir, "daemon.sock")
+
+	err := StartDaemon("", socketPath)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "stub failure message") {
+		t.Errorf("expected error to contain the child's real message, got %q", err.Error())
 	}
 }
 

@@ -10,8 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/runtime"
 )
+
+// readyTimeout is the dead-man's-switch: how long the parent waits for the
+// child to signal readiness (or failure) over the readiness pipe before
+// giving up. It is a safety net for a truly hung child, not the primary
+// mechanism — the child signals as soon as it actually knows its state.
+const readyTimeout = 5 * time.Second
 
 // StartDaemon starts sshushd with SSHUSH_CONFIG and waits for socket readiness.
 func StartDaemon(configPath, socketPath string) error {
@@ -34,11 +41,21 @@ func StartDaemon(configPath, socketPath string) error {
 	child.Stdin = nil
 	child.Stdout = nil
 	child.Stderr = nil
+
+	rp, err := readypipe.New()
+	if err != nil {
+		return fmt.Errorf("sshushd: readiness pipe: %w", err)
+	}
+	defer rp.Close()
+	rp.Attach(child)
+
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("sshushd: start failed: %w", err)
 	}
-	if !WaitForSocket(socketPath, 50, 10*time.Millisecond) {
-		return fmt.Errorf("sshushd: started but socket %s not ready", socketPath)
+	rp.CloseWrite()
+
+	if err := rp.Wait(readyTimeout); err != nil {
+		return fmt.Errorf("sshushd: %w", err)
 	}
 	return nil
 }
@@ -74,17 +91,23 @@ func StartServerDaemon(configPath string, port int) error {
 	child.Stdin = nil
 	child.Stdout = nil
 	child.Stderr = nil
+
+	rp, err := readypipe.New()
+	if err != nil {
+		return fmt.Errorf("sshushd: readiness pipe: %w", err)
+	}
+	defer rp.Close()
+	rp.Attach(child)
+
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("sshushd: start server failed: %w", err)
 	}
-	for i := 0; i < 50; i++ {
-		if conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond); err == nil {
-			conn.Close()
-			return nil
-		}
-		time.Sleep(20 * time.Millisecond)
+	rp.CloseWrite()
+
+	if err := rp.Wait(readyTimeout); err != nil {
+		return fmt.Errorf("sshushd: %w", err)
 	}
-	return fmt.Errorf("sshushd: started but port %d not ready", port)
+	return nil
 }
 
 // ReloadDaemon stops any existing daemon and starts a new one.
