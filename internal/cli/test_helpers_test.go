@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -97,6 +98,54 @@ func startTestAgent(t *testing.T) (socketPath string, client sshagent.ExtendedAg
 	t.Cleanup(func() { conn.Close() })
 
 	return socketPath, sshagent.NewClient(conn)
+}
+
+// startTestVaultAgent starts an in-process vault-backed SSH agent on a temp unix
+// socket, unlocked with passphrase. Returns the socket path and the vault store,
+// so tests can assert on persisted identities. The agent is shut down when the
+// test completes.
+func startTestVaultAgent(t *testing.T, passphrase []byte) (socketPath string, store *vault.VaultStore, client sshagent.ExtendedAgent) {
+	t.Helper()
+	dir := unixSocketTempDir(t)
+	socketPath = filepath.Join(dir, "agent.sock")
+
+	vaultPath := filepath.Join(dir, "vault.json")
+	store, err := vault.Open(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.Init(store, passphrase); err != nil {
+		t.Fatal(err)
+	}
+	va := vault.NewVaultAgent(store)
+	if err := va.Unlock(passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	go func() {
+		_ = agent.ListenAndServe(ctx, socketPath, va)
+	}()
+
+	var conn net.Conn
+	for i := 0; i < 50; i++ {
+		conn, err = net.Dial("unix", socketPath)
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("dial agent socket: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	return socketPath, store, sshagent.NewClient(conn)
 }
 
 // writeFakeEditor creates a shell script at dir/name that writes newComment
