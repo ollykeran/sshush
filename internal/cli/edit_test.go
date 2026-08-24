@@ -137,6 +137,18 @@ func TestRunEdit_omittedCommentOpensEditor(t *testing.T) {
 	assertPrivKeyComment(t, privPath, "editor-comment")
 }
 
+func TestRunEdit_commentFlagRejectsNewline(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "original")
+
+	err := runEdit(privPath, "", "foo\nbar", true, false, "", "")
+	if err == nil {
+		t.Fatal("expected error for newline in comment")
+	}
+	assertPrivKeyComment(t, privPath, "original")
+}
+
 func TestRunEdit_pubFileUpdated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
