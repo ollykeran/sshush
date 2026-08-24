@@ -47,7 +47,7 @@ sshush edit my-key-comment --comment 'updated'`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEdit(args[0], editorFlag, commentFlag, copyFlag, outputFlag, filepathFlag)
+			return runEdit(args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
 		},
 	}
 	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
@@ -231,7 +231,7 @@ func reloadKeyInAgent(socketPath, privateKeyPath, newComment string) error {
 	return nil
 }
 
-func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, filepathFlag string) error {
+func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
 	privateKeyPath, err := resolveEditPath(arg, filepathFlag)
 	if err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
@@ -255,7 +255,12 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 	fingerprint := ssh.FingerprintSHA256(signer.PublicKey())
 
 	comment := commentFlag
-	if strings.TrimSpace(comment) == "" {
+	if commentFlagSet {
+		comment = strings.TrimSpace(comment)
+		if comment == "" {
+			return style.NewOutput().Error("comment cannot be empty").AsError()
+		}
+	} else {
 		comment, err = editcomment.EditCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
 			if errors.Is(err, editcomment.ErrExitedWithoutSaving) {
@@ -264,11 +269,10 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 			}
 			return style.NewOutput().Error(err.Error()).AsError()
 		}
-	}
-	comment = strings.TrimSpace(comment)
-
-	if comment == "" {
-		return style.NewOutput().Error("comment cannot be empty").AsError()
+		comment = strings.TrimSpace(comment)
+		if comment == "" {
+			return style.NewOutput().Error("comment cannot be empty").AsError()
+		}
 	}
 
 	printCommentDiff(parsed.Comment, comment).Print()
