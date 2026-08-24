@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
 
 	gliderlabs "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -23,6 +24,9 @@ type Server struct {
 	ListenAddr  string
 	AuthKeys    AuthKeySource
 	HostKeyPath string
+	// Ready, if set, is called once the TCP listener is accepting
+	// connections, before ListenAndServe blocks serving them.
+	Ready func()
 }
 
 // ListenAndServe starts the SSH server on s.ListenAddr. It does not return until the server exits.
@@ -40,7 +44,14 @@ func (s *Server) ListenAndServe() error {
 		}
 		opts = append(opts, gliderlabs.HostKeyPEM(pem))
 	}
-	if err := gliderlabs.ListenAndServe(s.ListenAddr, s.handleSession, opts...); err != nil {
+	ln, err := net.Listen("tcp", s.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
+	}
+	if s.Ready != nil {
+		s.Ready()
+	}
+	if err := gliderlabs.Serve(ln, s.handleSession, opts...); err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
 	}
 	return nil

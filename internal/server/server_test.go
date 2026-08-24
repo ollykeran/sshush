@@ -16,6 +16,45 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestServer_ListenAndServe_ReadyCalledOnListenSuccess(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := sshagent.NewKeyring()
+	if err := keyring.Add(sshagent.AddedKey{PrivateKey: priv}); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	ready := make(chan struct{})
+	srv := &Server{
+		ListenAddr: addr,
+		AuthKeys:   &AgentAuth{Agent: keyring},
+		Ready:      func() { close(ready) },
+	}
+	go func() { _ = srv.ListenAndServe() }()
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("Ready callback was not called")
+	}
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Errorf("listener should accept connections once ready fired: %v", err)
+	} else {
+		conn.Close()
+	}
+}
+
 func TestServer_ListenAndServe_sessionMessage(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

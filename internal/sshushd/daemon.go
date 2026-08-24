@@ -14,6 +14,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/server"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
@@ -60,7 +61,8 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 // RunDaemonOnly runs the agent daemon in the current process: detaches from terminal,
 // writes pidfile, loads keys (or uses vault when vaultPath is set), and serves on the socket.
 // Call only from the sshushd binary. Removes pidfile and socket on exit.
-func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
+// ready, if non-nil, is signaled once the socket is accepting connections.
+func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
 	absSocket, err := filepath.Abs(cfg.SocketPath)
 	if err != nil {
 		return fmt.Errorf("socket path: %w", err)
@@ -102,7 +104,7 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
-	err = agent.ListenAndServe(ctx, socketPath, ext)
+	err = agent.ListenAndServe(ctx, socketPath, ext, agent.WithReady(ready.Ready))
 	if err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
 			return fmt.Errorf("agent already running at %s", utils.DisplayPath(socketPath))
@@ -115,7 +117,8 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string) error {
 // RunServerOnly runs the TCP SSH server daemon in the current process: detaches, writes pidfile,
 // and runs the server (connecting to the agent socket for auth when [server].authorized_keys is not set).
 // Call only from the sshushd binary when invoked with --server. Removes pidfile on exit.
-func RunServerOnly(cfg config.Config, pidFilePath string) error {
+// ready, if non-nil, is signaled once the listener is accepting connections.
+func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
 	if cfg.ServerListenPort <= 0 {
 		return fmt.Errorf("[server].listen_port must be set in config (e.g. listen_port = 2222 under [server])")
 	}
@@ -157,6 +160,7 @@ func RunServerOnly(cfg config.Config, pidFilePath string) error {
 		ListenAddr:  listenAddr,
 		AuthKeys:    authSource,
 		HostKeyPath: cfg.ServerHostKey,
+		Ready:       ready.Ready,
 	}
 	return srv.ListenAndServe()
 }
