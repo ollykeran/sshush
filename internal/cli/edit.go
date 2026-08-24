@@ -295,8 +295,8 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 		}
 		srcPubPath := privateKeyPath + ".pub"
 		if _, statErr := os.Stat(srcPubPath); statErr == nil {
-			if writeErr := os.WriteFile(destPath+".pub", []byte(keys.FormatPublicKey(signer, comment)), 0o644); writeErr != nil {
-				return style.NewOutput().Error(fmt.Sprintf("write public key: %v", writeErr)).AsError()
+			if writeErr := keys.WritePub(rawKey, comment, destPath+".pub"); writeErr != nil {
+				return style.NewOutput().Error(writeErr.Error()).AsError()
 			}
 		}
 	} else {
