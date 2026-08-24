@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -86,6 +87,10 @@ func runCreate(keyType string, bits int, comment, outputPath string, force bool)
 	keyType = strings.ToLower(strings.TrimSpace(keyType))
 	if keyType != "ed25519" && keyType != "rsa" && keyType != "ecdsa" {
 		return style.NewOutput().Error("unsupported key type (use ed25519, rsa, or ecdsa)").AsError()
+	}
+
+	if err := editcomment.Validate(comment); err != nil {
+		return style.NewOutput().Error(err.Error()).AsError()
 	}
 
 	if keyType == "rsa" {

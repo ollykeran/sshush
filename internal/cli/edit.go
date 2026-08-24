@@ -260,6 +260,9 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 		if comment == "" {
 			return style.NewOutput().Error("comment cannot be empty").AsError()
 		}
+		if err := editcomment.Validate(comment); err != nil {
+			return style.NewOutput().Error(err.Error()).AsError()
+		}
 	} else {
 		comment, err = editcomment.EditCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {

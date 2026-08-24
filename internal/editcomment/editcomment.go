@@ -13,6 +13,15 @@ import (
 // ErrExitedWithoutSaving is returned when the user exits the editor without saving changes.
 var ErrExitedWithoutSaving = errors.New("editcomment: exited without saving")
 
+// Validate rejects comments containing embedded newlines, since comments are written
+// as a single line into PEM key headers and .pub/authorized_keys-style files.
+func Validate(comment string) error {
+	if strings.ContainsAny(comment, "\r\n") {
+		return errors.New("comment cannot contain newlines")
+	}
+	return nil
+}
+
 // EditCommentWithEditor writes currentComment to a temp file, runs editor on it, and returns trimmed content if changed.
 func EditCommentWithEditor(currentComment, editor string) (string, error) {
 	tmp, err := os.CreateTemp("", "sshush-comment-*")
@@ -49,6 +58,9 @@ func EditCommentWithEditor(currentComment, editor string) (string, error) {
 	trimmed := strings.TrimSpace(string(edited))
 	if trimmed == strings.TrimSpace(currentComment) {
 		return "", ErrExitedWithoutSaving
+	}
+	if err := Validate(trimmed); err != nil {
+		return "", err
 	}
 	return trimmed, nil
 }
