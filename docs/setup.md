@@ -54,3 +54,5 @@ eval $(sshush)
 On macOS with zsh, put it in `~/.zshrc`. With bash, use `~/.bashrc` or `~/.bash_profile` as you prefer. If sshush auto-setup created or updated your rc file, you may already have this line.
 
 On login, `sshush` will start the daemon if needed and export `SSH_AUTH_SOCK` so `ssh`, `git`, and other tools can use your keys.
+
+Starting the daemon waits for it to confirm it's actually ready rather than guessing on a fixed delay, so this works reliably even when the shell startup environment is busy (many rc scripts launching at once). If startup does fail, the error shown is the daemon's actual failure reason (bad config, a vault problem, and so on), not a generic timeout. See [Architecture: Daemon startup](architecture.md#daemon-startup) for how this works.
