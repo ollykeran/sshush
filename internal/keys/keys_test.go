@@ -165,6 +165,31 @@ func TestLoadKeyMaterial_setsFilepath(t *testing.T) {
 	}
 }
 
+func TestWritePub(t *testing.T) {
+	dir := t.TempDir()
+	priv, _, err := Generate("ed25519", 0, "write-pub-test")
+	if err != nil {
+		t.Fatalf("Generate(): %v", err)
+	}
+	raw, err := ssh.ParseRawPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("ParseRawPrivateKey(): %v", err)
+	}
+
+	pubPath := filepath.Join(dir, "id_ed25519.pub")
+	if err := WritePub(raw, "new-pub-comment", pubPath); err != nil {
+		t.Fatalf("WritePub(): %v", err)
+	}
+
+	pubData, err := os.ReadFile(pubPath)
+	if err != nil {
+		t.Fatalf("read .pub: %v", err)
+	}
+	if !strings.Contains(string(pubData), "new-pub-comment") {
+		t.Fatalf(".pub file missing comment: %s", string(pubData))
+	}
+}
+
 func TestFormatPublicKey(t *testing.T) {
 	priv, _, err := Generate("ed25519", 0, "fmt")
 	if err != nil {

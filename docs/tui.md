@@ -50,6 +50,13 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 | agentLockResultMsg | lockAgentCmd | Lock result |
 | agentUnlockResultMsg | unlockAgentCmd | Unlock result |
 | ButtonFlashDoneMsg | ButtonFlashCmd | Button flash animation done |
+| commentOverlaySavedMsg | saveCommentOverlayCmd | Comment edit save result (see below) |
+
+**Comment overlay**: pressing `e` on a selected key in the loaded-keys table opens a
+small comment-edit overlay. Saving resolves the key's source file from the agent's
+filepath registry, writes the new comment to the key file (and `.pub` companion if
+present), persists it to the vault when the agent is vault-backed, and reloads the
+key in the agent. See `internal/tui/comment_overlay.go`.
 
 ### Create Screen
 
