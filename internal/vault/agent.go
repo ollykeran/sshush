@@ -34,6 +34,10 @@ const ExtensionVaultSessionLoad = "vault-session-load"
 // fingerprint length, UTF-8 fingerprint bytes, 1 byte (0 = off, 1 = on).
 const ExtensionVaultSetAutoload = "vault-set-autoload"
 
+// ExtensionVaultSetComment sets Identity.Comment on disk. Payload: 4-byte big-endian
+// fingerprint length, UTF-8 fingerprint bytes, 4-byte big-endian comment length, UTF-8 comment.
+const ExtensionVaultSetComment = "vault-set-comment"
+
 // VaultAgent implements sshagent.ExtendedAgent, storing private keys encrypted
 // in a JSON vault. Master key is held in memory when unlocked and wiped on Lock().
 type VaultAgent struct {
@@ -408,8 +412,42 @@ func (a *VaultAgent) setIdentityAutoload(fp string, on bool) error {
 	return nil
 }
 
+// setIdentityComment persists a new Comment for an identity without touching key material.
+// An empty comment is stored as "".
+func (a *VaultAgent) setIdentityComment(fp, comment string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.masterKey == nil {
+		return errLocked
+	}
+	ids := a.store.AllIdentities()
+	var id Identity
+	ok := false
+	for i := range ids {
+		if ids[i].Fingerprint == fp {
+			id = ids[i]
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return errKeyNotFound
+	}
+	if id.Comment == comment {
+		return nil
+	}
+	id.Comment = comment
+	if err := a.store.AddOrReplaceIdentity(id); err != nil {
+		return fmt.Errorf("vault: store identity: %w", err)
+	}
+	if err := a.store.Save(); err != nil {
+		return fmt.Errorf("vault: save store: %w", err)
+	}
+	return nil
+}
+
 // Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
-// "vault-session-load", "vault-set-autoload", and the OpenSSH "query" extension.
+// "vault-session-load", "vault-set-autoload", "vault-set-comment", and the OpenSSH "query" extension.
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
 	if extensionType == ExtensionQuery {
 		// OpenSSH's ssh-agent returns one SSH string per extension name.
@@ -420,6 +458,7 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 			ExtensionAddKeyOpts,
 			ExtensionVaultSessionLoad,
 			ExtensionVaultSetAutoload,
+			ExtensionVaultSetComment,
 		}
 		var buf bytes.Buffer
 		for _, name := range names {
@@ -524,6 +563,26 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		}
 		if err := a.setIdentityAutoload(fp, flag == 1); err != nil {
 			return nil, fmt.Errorf("vault: set-autoload: %w", err)
+		}
+		return []byte("ok"), nil
+	}
+	if extensionType == ExtensionVaultSetComment {
+		if len(contents) < 8 {
+			return nil, fmt.Errorf("vault: set-comment: payload too short (%d bytes)", len(contents))
+		}
+		fpLen := int(binary.BigEndian.Uint32(contents[:4]))
+		if 8+fpLen > len(contents) {
+			return nil, fmt.Errorf("vault: set-comment: fingerprint length %d exceeds payload", fpLen)
+		}
+		fp := string(contents[4 : 4+fpLen])
+		commentOffset := 4 + fpLen
+		commentLen := int(binary.BigEndian.Uint32(contents[commentOffset : commentOffset+4]))
+		if commentOffset+4+commentLen != len(contents) {
+			return nil, fmt.Errorf("vault: set-comment: comment length %d does not match payload size", commentLen)
+		}
+		comment := string(contents[commentOffset+4 : commentOffset+4+commentLen])
+		if err := a.setIdentityComment(fp, comment); err != nil {
+			return nil, fmt.Errorf("vault: set-comment: %w", err)
 		}
 		return []byte("ok"), nil
 	}

@@ -185,6 +185,7 @@ func TestExtension_Query(t *testing.T) {
 		ExtensionAddKeyOpts,
 		ExtensionVaultSessionLoad,
 		ExtensionVaultSetAutoload,
+		ExtensionVaultSetComment,
 	}
 	if len(names) != len(want) {
 		t.Fatalf("query names: want %v, got %v", want, names)

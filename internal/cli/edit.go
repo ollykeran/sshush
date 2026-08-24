@@ -324,6 +324,19 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 		}
 	}
 
+	// Persist the comment in the vault when the agent uses the vault backend, so the
+	// on-disk key file and the config stay in sync. Only existing identities are updated.
+	if sockErr == nil {
+		if mode, live := agent.LiveBackendMode(socketPath); live && mode == "vault" {
+			payload := vault.BuildSetCommentPayload(fingerprint, comment)
+			if _, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); extErr != nil {
+				out.Warn("key file updated on disk but vault comment not updated: " + extErr.Error())
+			} else {
+				out.Success("updated comment in vault")
+			}
+		}
+	}
+
 	out.Print()
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/runtime"
+	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -286,6 +287,49 @@ func TestRunEdit_exitWithoutSaving_keyNotModified(t *testing.T) {
 	}
 
 	assertPrivKeyComment(t, privPath, "original-comment")
+}
+
+func TestRunEdit_vaultBackend_persistsCommentToVault(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv
+	dir := t.TempDir()
+	privPath := writeTestKey(t, dir, "id_ed25519", "before-vault")
+
+	socketPath, store, _ := startTestVaultAgent(t, []byte("vault-persist-test"))
+	if err := vault.AddPrivateKeyFileToSocket(socketPath, privPath, true); err != nil {
+		t.Fatalf("AddPrivateKeyFileToSocket: %v", err)
+	}
+
+	keyData, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawKey, err := ssh.ParseRawPrivateKey(keyData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(rawKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := ssh.FingerprintSHA256(signer.PublicKey())
+
+	t.Setenv("SSH_AUTH_SOCK", socketPath)
+
+	if err := runEdit(privPath, "", "after-vault", true, false, "", ""); err != nil {
+		t.Fatalf("runEdit: %v", err)
+	}
+
+	ids := store.AllIdentities()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 identity in vault, got %d", len(ids))
+	}
+	if ids[0].Fingerprint != fp {
+		t.Fatalf("identity fingerprint: got %q, want %q", ids[0].Fingerprint, fp)
+	}
+	if ids[0].Comment != "after-vault" {
+		t.Errorf("vault identity comment: got %q, want %q", ids[0].Comment, "after-vault")
+	}
+	assertPrivKeyComment(t, privPath, "after-vault")
 }
 
 // --- assertion helpers ---
