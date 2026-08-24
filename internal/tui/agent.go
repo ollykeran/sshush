@@ -103,6 +103,8 @@ type AgentScreen struct {
 	showPass   bool
 	passAction string // "lock" or "unlock"
 
+	commentOverlay commentOverlay
+
 	vaultMode    string // live backend mode from the running agent ("vault"/"keys")
 	vaultLocked  bool   // true when the running vault agent reports locked
 	vaultKnown   bool   // true when the vault lock state has been read from a running agent
@@ -128,22 +130,23 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
-		sk:           sk,
-		keyTable:     kt,
-		buttons:      btns,
-		zonePrefix:   prefix,
-		configPath:   configPath,
-		socketPath:   socketPath,
-		status:       "loading...",
-		loadedFPs:    make(map[string]bool),
-		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
-		passInput:    pi,
-		focus:        agentFocusTable,
+		sk:             sk,
+		keyTable:       kt,
+		buttons:        btns,
+		zonePrefix:     prefix,
+		configPath:     configPath,
+		socketPath:     socketPath,
+		status:         "loading...",
+		loadedFPs:      make(map[string]bool),
+		fileSelector:   NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
+		passInput:      pi,
+		commentOverlay: newCommentOverlay(),
+		focus:          agentFocusTable,
 	}
 }
 
 func (s *AgentScreen) HasModal() bool {
-	return s.fileSelector.Visible() || s.showPass
+	return s.fileSelector.Visible() || s.showPass || s.commentOverlay.active
 }
 
 func (s *AgentScreen) Init() tea.Cmd {
@@ -334,18 +337,32 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case tea.MouseClickMsg:
-		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
 
+	case commentOverlaySavedMsg:
+		s.commentOverlay.Hide()
+		if msg.err != nil {
+			s.status = msg.err.Error()
+			s.statusErr = true
+			return s, nil
+		}
+		s.status = "comment updated"
+		s.statusErr = false
+		return s, fetchAgentKeysCmd(s.socketPath, true)
+
 	case tea.KeyPressMsg:
+		if s.commentOverlay.active {
+			return s, s.commentOverlay.Update(msg, s.socketPath)
+		}
 		if s.showPass {
 			return s.handlePassInput(msg)
 		}
@@ -434,6 +451,12 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "backspace", "delete", "d":
 		if s.focus == agentFocusTable {
 			return s.removeSelectedKey()
+		}
+		return s, nil
+
+	case "e":
+		if s.focus == agentFocusTable {
+			return s.editSelectedKeyComment()
 		}
 		return s, nil
 
@@ -560,6 +583,16 @@ func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
 	return s, removeKeyFromAgentCmd(s.socketPath, fp)
 }
 
+// editSelectedKeyComment opens the comment overlay for the currently selected key row.
+func (s *AgentScreen) editSelectedKeyComment() (tea.Model, tea.Cmd) {
+	row := s.keyTable.SelectedRow()
+	if row == nil {
+		return s, nil
+	}
+	keyType, fp, comment := row[0], row[1], row[2]
+	return s, s.commentOverlay.Show(fp, keyType, comment)
+}
+
 func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 	visible := s.visibleFoundKeys()
 	if s.foundSelected >= len(visible) {
@@ -669,6 +702,15 @@ func (s *AgentScreen) View() tea.View {
 		title := st.SectionTitleStyle.Render("Enter " + s.passAction + " passphrase")
 		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 			title+"\n"+st.FocusedBorderStyle.Render(s.passInput.View())))
+	}
+
+	if s.commentOverlay.active {
+		innerW := width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
+			s.commentOverlay.View(s.sk.Styles(), sectionBoxWidth(width))))
 	}
 
 	w := width
@@ -826,6 +868,7 @@ func (s *AgentScreen) HelpEntries() []string {
 	return []string{
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow("e", "Edit comment"),
 		st.HelpRow("d / bksp", "Remove key"),
 		st.HelpRow("L", "Lock vault"),
 		st.HelpRow("u", "Unlock vault"),
