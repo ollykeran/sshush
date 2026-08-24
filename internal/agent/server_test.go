@@ -82,6 +82,30 @@ func TestListenAndServe_ListKeys(t *testing.T) {
 	}
 }
 
+func TestListenAndServe_WithReady_CalledOnListenSuccess(t *testing.T) {
+	dir := unixSocketTempDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyring := sshagent.NewKeyring().(sshagent.ExtendedAgent)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	ready := make(chan struct{})
+	go func() {
+		_ = ListenAndServe(ctx, socketPath, keyring, WithReady(func() { close(ready) }))
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("WithReady callback was not called")
+	}
+
+	if _, err := net.Dial("unix", socketPath); err != nil {
+		t.Errorf("socket should be dialable once ready fired: %v", err)
+	}
+}
+
 func TestListenAndServe_Sign(t *testing.T) {
 	_, client := startServerKeyring(t, "sign-test")
 	keys, err := client.List()

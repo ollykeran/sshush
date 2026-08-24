@@ -23,7 +23,24 @@ type errStyled struct {
 func (e *errStyled) Error() string { return e.styled }
 func (e *errStyled) Unwrap() error { return e.err }
 
-func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent) error {
+// Option configures optional ListenAndServe behavior.
+type Option func(*options)
+
+type options struct {
+	ready func()
+}
+
+// WithReady registers a callback invoked once the listener is accepting
+// connections, before ListenAndServe blocks in its accept loop.
+func WithReady(fn func()) Option {
+	return func(o *options) { o.ready = fn }
+}
+
+func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent, opts ...Option) error {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
 		return fmt.Errorf("agent: create socket directory %s: %w", filepath.Dir(socketPath), err)
 	}
@@ -37,6 +54,10 @@ func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.Ext
 		return fmt.Errorf("agent: listen on %s: %w", socketPath, err)
 	}
 	defer listener.Close()
+
+	if o.ready != nil {
+		o.ready()
+	}
 
 	go func() {
 		<-ctx.Done()
