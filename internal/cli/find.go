@@ -58,8 +58,12 @@ func runFind(noDefaults, recursive bool, findPaths ...string) error {
 	}
 	out.Info("search paths: " + strings.Join(displaySearch, " "))
 	out.Spacer()
-	for _, path := range paths {
-		out.Info(utils.DisplayPath(path))
+	for _, kp := range paths {
+		if kp.IsSymlink {
+			out.Info(utils.DisplayPath(kp.Path) + " -> " + utils.DisplayPath(kp.RealPath))
+			continue
+		}
+		out.Info(utils.DisplayPath(kp.Path))
 	}
 	out.Print()
 	return nil
