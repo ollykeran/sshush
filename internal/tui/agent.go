@@ -38,7 +38,7 @@ type agentDaemonStateMsg struct {
 }
 
 type foundKeysMsg struct {
-	paths []string
+	paths []utils.KeyPath
 }
 
 type agentLockResultMsg struct {
@@ -93,7 +93,7 @@ type AgentScreen struct {
 	width         int
 	height        int
 
-	foundKeys     []string
+	foundKeys     []utils.KeyPath
 	foundSelected int
 	loadedFPs     map[string]bool
 
@@ -598,8 +598,8 @@ func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 	if s.foundSelected >= len(visible) {
 		return s, nil
 	}
-	path := visible[s.foundSelected]
-	return s, addKeyToAgentCmd(s.socketPath, path)
+	kp := visible[s.foundSelected]
+	return s, addKeyToAgentCmd(s.socketPath, kp.Path)
 }
 
 func (s *AgentScreen) focusFirstLoadedKey() {
@@ -640,7 +640,7 @@ func (s *AgentScreen) loadedKeysTableHeight() int {
 	return h
 }
 
-func (s *AgentScreen) foundKeysMaxIndex(visible []string) int {
+func (s *AgentScreen) foundKeysMaxIndex(visible []utils.KeyPath) int {
 	if len(visible) == 0 {
 		return 0
 	}
@@ -662,10 +662,10 @@ func sectionBoxWidth(width int) int {
 	return boxW
 }
 
-func (s *AgentScreen) visibleFoundKeys() []string {
-	var visible []string
+func (s *AgentScreen) visibleFoundKeys() []utils.KeyPath {
+	var visible []utils.KeyPath
 	for _, p := range s.foundKeys {
-		pubKey, _, _, err := agent.ParseKeyFromPath(p)
+		pubKey, _, _, err := agent.ParseKeyFromPath(p.Path)
 		if err != nil {
 			visible = append(visible, p)
 			continue
@@ -831,7 +831,7 @@ func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
 	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top, title+"\n"+content)
 }
 
-func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
+func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active bool) string {
 	st := s.sk.Styles()
 	title := st.SectionTitleStyle.Render(" Found Keys")
 	var lines []string
@@ -840,14 +840,28 @@ func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) 
 		maxShow = len(visible)
 	}
 	for i := 0; i < maxShow; i++ {
-		style := st.AccentStyle
 		linePrefix := "  "
-		if active && s.focus == agentFocusFound && i == s.foundSelected {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
+		selected := active && s.focus == agentFocusFound && i == s.foundSelected
+		if selected {
 			linePrefix = "> "
 		}
-		rendered := style.Render(linePrefix + utils.DisplayPath(visible[i]))
-		rendered = zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), rendered)
+
+		var line string
+		if selected {
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
+			text := utils.DisplayPath(visible[i].Path)
+			if visible[i].IsSymlink {
+				text += " -> " + utils.DisplayPath(visible[i].RealPath)
+			}
+			line = style.Render(linePrefix + text)
+		} else if visible[i].IsSymlink {
+			name := st.FocusStyle.Render(utils.DisplayPath(visible[i].Path))
+			target := st.DimStyle.Render(" -> " + utils.DisplayPath(visible[i].RealPath))
+			line = st.AccentStyle.Render(linePrefix) + name + target
+		} else {
+			line = st.AccentStyle.Render(linePrefix + utils.DisplayPath(visible[i].Path))
+		}
+		rendered := zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), line)
 		lines = append(lines, rendered)
 	}
 	if len(visible) > maxShow {

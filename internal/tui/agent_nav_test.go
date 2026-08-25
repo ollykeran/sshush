@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/theme"
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 func waitForZone(id string) *zone.ZoneInfo {
@@ -166,7 +167,7 @@ func TestAgentTableDownAtLastRowEntersFoundKeys(t *testing.T) {
 	agent.focus = agentFocusTable
 	seedAgentKeyRows(agent, 3)
 	agent.keyTable.Table.SetCursor(2)
-	agent.foundKeys = []string{"/tmp/id_ed25519"}
+	agent.foundKeys = []utils.KeyPath{{Path: "/tmp/id_ed25519"}}
 	agent.loadedFPs = map[string]bool{}
 
 	_, _ = agent.Update(tea.KeyPressMsg{Code: 'j'})
@@ -357,9 +358,9 @@ func TestAgentMouseSelectsTableRow(t *testing.T) {
 func TestAgentFoundKeysSelectionClampedToVisible(t *testing.T) {
 	_, agent := newAgentTestSkeleton()
 	agent.focus = agentFocusFound
-	agent.foundKeys = make([]string, 10)
+	agent.foundKeys = make([]utils.KeyPath, 10)
 	for i := range agent.foundKeys {
-		agent.foundKeys[i] = fmt.Sprintf("/tmp/key%d", i)
+		agent.foundKeys[i] = utils.KeyPath{Path: fmt.Sprintf("/tmp/key%d", i)}
 	}
 	agent.loadedFPs = map[string]bool{}
 	agent.foundSelected = foundKeysMaxVisible - 1
