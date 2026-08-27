@@ -184,6 +184,7 @@ func TestExtension_Query(t *testing.T) {
 		ExtensionUnlockRecovery,
 		ExtensionAddKeyOpts,
 		ExtensionVaultSessionLoad,
+		ExtensionVaultSessionUnload,
 		ExtensionVaultSetAutoload,
 		ExtensionVaultSetComment,
 	}

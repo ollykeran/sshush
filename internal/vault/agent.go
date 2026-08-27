@@ -30,6 +30,11 @@ const ExtensionUnlockRecovery = "unlock-recovery"
 // (see sessionAutoload0). Payload: UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
 const ExtensionVaultSessionLoad = "vault-session-load"
 
+// ExtensionVaultSessionUnload hides an identity from the current agent session without
+// deleting it or touching its persisted autoload flag (see sessionUnload). Payload:
+// UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
+const ExtensionVaultSessionUnload = "vault-session-unload"
+
 // ExtensionVaultSetAutoload sets Identity.Autoload on disk. Payload: 4-byte big-endian
 // fingerprint length, UTF-8 fingerprint bytes, 1 byte (0 = off, 1 = on).
 const ExtensionVaultSetAutoload = "vault-set-autoload"
@@ -43,14 +48,19 @@ const ExtensionVaultSetComment = "vault-set-comment"
 type VaultAgent struct {
 	store            *VaultStore
 	mu               sync.RWMutex
-	masterKey        []byte             // nil when locked; wiped on Lock()
+	masterKey        []byte              // nil when locked; wiped on Lock()
 	sessionAutoload0 map[string]struct{} // fingerprints added this run with autoload=0 (visible until restart)
+	sessionUnloaded  map[string]struct{} // autoload=1 fingerprints hidden this run only (see sessionUnload)
 }
 
 // NewVaultAgent returns a VaultAgent that uses the given store. The vault is
 // locked (masterKey nil) until Unlock() is called.
 func NewVaultAgent(store *VaultStore) *VaultAgent {
-	return &VaultAgent{store: store, sessionAutoload0: make(map[string]struct{})}
+	return &VaultAgent{
+		store:            store,
+		sessionAutoload0: make(map[string]struct{}),
+		sessionUnloaded:  make(map[string]struct{}),
+	}
 }
 
 // purgeExpired removes identities whose lifetime has elapsed, mirroring the
@@ -74,6 +84,7 @@ func (a *VaultAgent) purgeExpired() error {
 	for _, fp := range expired {
 		a.store.RemoveIdentity(fp)
 		delete(a.sessionAutoload0, fp)
+		delete(a.sessionUnloaded, fp)
 	}
 	if err := a.store.Save(); err != nil {
 		return fmt.Errorf("vault: save store: %w", err)
@@ -101,7 +112,13 @@ func (a *VaultAgent) List() ([]*sshagent.Key, error) {
 	for _, fp := range sessionFPs {
 		sessionSet[fp] = struct{}{}
 	}
-	rows, err := a.store.ListIdentitiesForAgent(sessionSet)
+	a.mu.RLock()
+	hiddenSet := make(map[string]struct{}, len(a.sessionUnloaded))
+	for fp := range a.sessionUnloaded {
+		hiddenSet[fp] = struct{}{}
+	}
+	a.mu.RUnlock()
+	rows, err := a.store.ListIdentitiesForAgent(sessionSet, hiddenSet)
 	if err != nil {
 		return nil, fmt.Errorf("vault: list identities: %w", err)
 	}
@@ -188,6 +205,7 @@ func (a *VaultAgent) Remove(key ssh.PublicKey) error {
 	fp := fingerprint(key)
 	removed := a.store.RemoveIdentity(fp)
 	delete(a.sessionAutoload0, fp)
+	delete(a.sessionUnloaded, fp)
 	if !removed {
 		return errKeyNotFound
 	}
@@ -206,6 +224,7 @@ func (a *VaultAgent) RemoveAll() error {
 	}
 	a.store.RemoveAllIdentities()
 	a.sessionAutoload0 = make(map[string]struct{})
+	a.sessionUnloaded = make(map[string]struct{})
 	if err := a.store.Save(); err != nil {
 		return fmt.Errorf("vault: save store: %w", err)
 	}
@@ -369,10 +388,33 @@ func (a *VaultAgent) sessionLoad(fp string) error {
 	if !found {
 		return errKeyNotFound
 	}
+	delete(a.sessionUnloaded, fp)
 	if autoload {
 		return nil
 	}
 	a.sessionAutoload0[fp] = struct{}{}
+	return nil
+}
+
+// sessionUnload hides an identity from List()/Sign() for this session only, without
+// touching its persisted autoload flag or deleting it from the vault. This is the
+// reverse of sessionLoad for the common case: an autoload=1 identity that the TUI's
+// Agent tab "removes" from the running agent should disappear from the session (LOADED
+// becomes "no" in the Vault tab) but remain in the vault for the next unlock/restart.
+// A later sessionLoad call for the same fingerprint clears this and makes it visible
+// again immediately.
+func (a *VaultAgent) sessionUnload(fp string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.masterKey == nil {
+		return errLocked
+	}
+	_, _, found := a.store.GetIdentity(fp)
+	if !found {
+		return errKeyNotFound
+	}
+	delete(a.sessionAutoload0, fp)
+	a.sessionUnloaded[fp] = struct{}{}
 	return nil
 }
 
@@ -409,6 +451,7 @@ func (a *VaultAgent) setIdentityAutoload(fp string, on bool) error {
 	if on {
 		delete(a.sessionAutoload0, fp)
 	}
+	delete(a.sessionUnloaded, fp)
 	return nil
 }
 
@@ -447,7 +490,8 @@ func (a *VaultAgent) setIdentityComment(fp, comment string) error {
 }
 
 // Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
-// "vault-session-load", "vault-set-autoload", "vault-set-comment", and the OpenSSH "query" extension.
+// "vault-session-load", "vault-session-unload", "vault-set-autoload", "vault-set-comment", and the
+// OpenSSH "query" extension.
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
 	if extensionType == ExtensionQuery {
 		// OpenSSH's ssh-agent returns one SSH string per extension name.
@@ -457,6 +501,7 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 			ExtensionUnlockRecovery,
 			ExtensionAddKeyOpts,
 			ExtensionVaultSessionLoad,
+			ExtensionVaultSessionUnload,
 			ExtensionVaultSetAutoload,
 			ExtensionVaultSetComment,
 		}
@@ -544,6 +589,16 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		}
 		if err := a.sessionLoad(fp); err != nil {
 			return nil, fmt.Errorf("vault: session-load: %w", err)
+		}
+		return []byte("ok"), nil
+	}
+	if extensionType == ExtensionVaultSessionUnload {
+		fp := strings.TrimSpace(string(contents))
+		if fp == "" {
+			return nil, fmt.Errorf("vault: session-unload: empty fingerprint")
+		}
+		if err := a.sessionUnload(fp); err != nil {
+			return nil, fmt.Errorf("vault: session-unload: %w", err)
 		}
 		return []byte("ok"), nil
 	}
