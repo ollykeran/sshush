@@ -36,10 +36,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	mode := "keys"
+	vaultPath := ""
 	if env.Config != nil {
 		mode = env.Config.AgentBackendMode()
+		vaultPath = env.Config.VaultPathForAgent()
 	}
-	m := tui.NewTUI(configPath, socketPath, th, mode)
+	m := tui.NewTUI(configPath, socketPath, th, mode, vaultPath)
 	_, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return fmt.Errorf("cli: run tui: %w", err)

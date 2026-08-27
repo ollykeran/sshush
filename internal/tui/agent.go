@@ -574,12 +574,20 @@ func (s *AgentScreen) startLock() tea.Cmd {
 	return s.startPassphrase("lock")
 }
 
+// removeSelectedKey removes the selected key from the running agent. For a vault-backed
+// agent this only hides the key from the current session (LOADED becomes "no" in the
+// Vault tab); it does not delete the identity from the vault. Permanent deletion is only
+// available from the Vault tab's own remove action. Keys-mode agents have no persistent
+// storage to preserve, so removal there is the plain ssh-agent forget.
 func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
 	row := s.keyTable.SelectedRow()
 	if row == nil {
 		return s, nil
 	}
 	fp := row[1]
+	if s.vaultMode == "vault" {
+		return s, sessionUnloadVaultKeyCmd(s.socketPath, fp)
+	}
 	return s, removeKeyFromAgentCmd(s.socketPath, fp)
 }
 
@@ -956,6 +964,20 @@ func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 			return agentStatusMsg{text: "key not found", isErr: true}
 		}
 		return agentStatusMsg{text: "key removed"}
+	}
+}
+
+// sessionUnloadVaultKeyCmd hides a vault identity from the current agent session
+// (LOADED -> no) without deleting it from the vault or changing its persisted
+// autoload flag. Used by the Agent tab's remove key, since a vault-backed agent's
+// plain ssh-agent Remove permanently deletes the identity (that behavior is reserved
+// for the Vault tab's own remove action, matching sshush vault remove).
+func sessionUnloadVaultKeyCmd(socketPath, fingerprint string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := agent.CallExtension(socketPath, vault.ExtensionVaultSessionUnload, []byte(fingerprint)); err != nil {
+			return agentStatusMsg{text: "unload failed: " + err.Error(), isErr: true}
+		}
+		return agentStatusMsg{text: "key unloaded from session"}
 	}
 }
 

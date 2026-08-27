@@ -280,6 +280,11 @@ func (s *Skeleton) switchTab(idx int) tea.Cmd {
 	}
 	updated, cmd := s.pages[s.activeTab].model.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	s.pages[s.activeTab].model = updated
+	// Screens that hold data which can go stale while another tab is active (e.g. VaultScreen's
+	// identity table, refreshed after an unlock done from the Agent tab) implement Refresh.
+	if r, ok := s.pages[s.activeTab].model.(interface{ Refresh() tea.Cmd }); ok {
+		cmd = tea.Batch(cmd, r.Refresh())
+	}
 	// When landing on a tab that has a modal (e.g. filepicker), keep focus on navbar so user presses down to enter.
 	if m, ok := s.pages[s.activeTab].model.(interface{ HasModal() bool }); ok && m.HasModal() {
 		s.navFocus = navFocusTabs
@@ -683,6 +688,15 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						updated, cmd := agent.Update(msg)
 						s.pages[0].model = updated
 						return s, cmd
+					}
+				}
+				// Other screens can claim 'd' for their own row-delete action instead of
+				// entering daemon focus (see VaultScreen.HandleDKey).
+				if s.navFocus == navFocusScreen {
+					if h, ok := s.pages[s.activeTab].model.(interface{ HandleDKey() (tea.Cmd, bool) }); ok {
+						if cmd, handled := h.HandleDKey(); handled {
+							return s, cmd
+						}
 					}
 				}
 				return s.enterDaemonFocus()

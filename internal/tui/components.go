@@ -20,6 +20,9 @@ type ButtonRow struct {
 	Pressed    int
 	Focused    bool
 	ZonePrefix string
+	// Disabled marks buttons (by index into Labels) as unavailable: dimmed, and a
+	// no-op for callers that check it before acting on Press/HandleMouse results.
+	Disabled map[int]bool
 }
 
 // NewButtonRow creates a ButtonRow with the given labels.
@@ -51,6 +54,8 @@ func (b ButtonRow) View(st Styles) string {
 	for i, label := range b.Labels {
 		var style lipgloss.Style
 		switch {
+		case b.Disabled[i]:
+			style = st.DimStyle.Padding(0, 2)
 		case b.Pressed == i:
 			style = st.FocusedButtonStyle
 		case b.Active == i && b.Focused:
