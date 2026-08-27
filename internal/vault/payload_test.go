@@ -35,6 +35,36 @@ func TestBuildAddKeyOptsPayload_autoloadByte(t *testing.T) {
 	}
 }
 
+func TestBuildSetCommentPayload_roundTrip(t *testing.T) {
+	payload := BuildSetCommentPayload("SHA256:abc123", "new-comment")
+
+	fpLen := int(binary.BigEndian.Uint32(payload[:4]))
+	fp := string(payload[4 : 4+fpLen])
+	if fp != "SHA256:abc123" {
+		t.Fatalf("fingerprint: got %q, want %q", fp, "SHA256:abc123")
+	}
+	commentOffset := 4 + fpLen
+	commentLen := int(binary.BigEndian.Uint32(payload[commentOffset : commentOffset+4]))
+	comment := string(payload[commentOffset+4 : commentOffset+4+commentLen])
+	if comment != "new-comment" {
+		t.Fatalf("comment: got %q, want %q", comment, "new-comment")
+	}
+	if commentOffset+4+commentLen != len(payload) {
+		t.Fatalf("payload has trailing bytes: len=%d, consumed=%d", len(payload), commentOffset+4+commentLen)
+	}
+}
+
+func TestBuildSetCommentPayload_emptyComment(t *testing.T) {
+	payload := BuildSetCommentPayload("SHA256:xyz", "")
+
+	fpLen := int(binary.BigEndian.Uint32(payload[:4]))
+	commentOffset := 4 + fpLen
+	commentLen := int(binary.BigEndian.Uint32(payload[commentOffset : commentOffset+4]))
+	if commentLen != 0 {
+		t.Fatalf("comment length: got %d, want 0", commentLen)
+	}
+}
+
 func TestBuildAddKeyOptsPayload_filepathRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "id_ed25519")

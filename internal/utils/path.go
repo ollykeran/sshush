@@ -56,12 +56,25 @@ func DisplayPath(path string) string {
 	return ContractHomeDirectory(p)
 }
 
+// KeyPath is a discovered private key file path. If the path is a symlink,
+// RealPath holds its resolved target (for exa-style "name -> target" display).
+type KeyPath struct {
+	Path      string
+	RealPath  string
+	IsSymlink bool
+}
+
 // DiscoverKeyPaths finds valid private key files in searchDirs.
 // If cwd is true, adds current directory. If ssh is true, adds ~/.ssh.
 // If recursive is true, walks subdirectories.
-func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) []string {
+//
+// Entries are deduped by resolved (symlink-following) real path: a symlink
+// and its target discovered separately collapse into a single KeyPath, shown
+// in its symlink form (Path is the symlink, RealPath is the target).
+func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) []KeyPath {
 	seen := make(map[string]bool)
-	var paths []string
+	seenReal := make(map[string]int) // real path -> index into paths
+	var paths []KeyPath
 
 	addPath := func(p string) {
 		abs, err := filepath.Abs(p)
@@ -71,11 +84,26 @@ func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) [
 		if seen[abs] {
 			return
 		}
-		if _, err := os.Stat(abs); err != nil {
+		info, err := os.Lstat(abs)
+		if err != nil {
 			return
 		}
 		seen[abs] = true
-		paths = append(paths, abs)
+
+		isSymlink := info.Mode()&os.ModeSymlink != 0
+		real := abs
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			real = resolved
+		}
+
+		if idx, ok := seenReal[real]; ok {
+			if isSymlink && !paths[idx].IsSymlink {
+				paths[idx] = KeyPath{Path: abs, RealPath: real, IsSymlink: true}
+			}
+			return
+		}
+		seenReal[real] = len(paths)
+		paths = append(paths, KeyPath{Path: abs, RealPath: real, IsSymlink: isSymlink})
 	}
 
 	// if configPath != "" {

@@ -47,7 +47,7 @@ sshush edit my-key-comment --comment 'updated'`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEdit(args[0], editorFlag, commentFlag, copyFlag, outputFlag, filepathFlag)
+			return runEdit(args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
 		},
 	}
 	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
@@ -231,7 +231,7 @@ func reloadKeyInAgent(socketPath, privateKeyPath, newComment string) error {
 	return nil
 }
 
-func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, filepathFlag string) error {
+func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
 	privateKeyPath, err := resolveEditPath(arg, filepathFlag)
 	if err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
@@ -255,7 +255,15 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 	fingerprint := ssh.FingerprintSHA256(signer.PublicKey())
 
 	comment := commentFlag
-	if strings.TrimSpace(comment) == "" {
+	if commentFlagSet {
+		comment = strings.TrimSpace(comment)
+		if comment == "" {
+			return style.NewOutput().Error("comment cannot be empty").AsError()
+		}
+		if err := editcomment.Validate(comment); err != nil {
+			return style.NewOutput().Error(err.Error()).AsError()
+		}
+	} else {
 		comment, err = editcomment.EditCommentWithEditor(parsed.Comment, runtime.ResolveEditor(editorFlag))
 		if err != nil {
 			if errors.Is(err, editcomment.ErrExitedWithoutSaving) {
@@ -264,11 +272,10 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 			}
 			return style.NewOutput().Error(err.Error()).AsError()
 		}
-	}
-	comment = strings.TrimSpace(comment)
-
-	if comment == "" {
-		return style.NewOutput().Error("comment cannot be empty").AsError()
+		comment = strings.TrimSpace(comment)
+		if comment == "" {
+			return style.NewOutput().Error("comment cannot be empty").AsError()
+		}
 	}
 
 	printCommentDiff(parsed.Comment, comment).Print()
@@ -288,8 +295,8 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 		}
 		srcPubPath := privateKeyPath + ".pub"
 		if _, statErr := os.Stat(srcPubPath); statErr == nil {
-			if writeErr := os.WriteFile(destPath+".pub", []byte(keys.FormatPublicKey(signer, comment)), 0o644); writeErr != nil {
-				return style.NewOutput().Error(fmt.Sprintf("write public key: %v", writeErr)).AsError()
+			if writeErr := keys.WritePub(rawKey, comment, destPath+".pub"); writeErr != nil {
+				return style.NewOutput().Error(writeErr.Error()).AsError()
 			}
 		}
 	} else {
@@ -314,6 +321,19 @@ func runEdit(arg, editorFlag, commentFlag string, copyFlag bool, outputFlag, fil
 			out.Warn("key updated on disk but agent reload failed: " + reloadErr.Error())
 		} else {
 			out.Success("reloaded key in agent")
+		}
+	}
+
+	// Persist the comment in the vault when the agent uses the vault backend, so the
+	// on-disk key file and the config stay in sync. Only existing identities are updated.
+	if sockErr == nil {
+		if mode, live := agent.LiveBackendMode(socketPath); live && mode == "vault" {
+			payload := vault.BuildSetCommentPayload(fingerprint, comment)
+			if _, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); extErr != nil {
+				out.Warn("key file updated on disk but vault comment not updated: " + extErr.Error())
+			} else {
+				out.Success("updated comment in vault")
+			}
 		}
 	}
 

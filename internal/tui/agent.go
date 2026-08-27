@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"os"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
@@ -37,7 +38,7 @@ type agentDaemonStateMsg struct {
 }
 
 type foundKeysMsg struct {
-	paths []string
+	paths []utils.KeyPath
 }
 
 type agentLockResultMsg struct {
@@ -48,11 +49,34 @@ type agentUnlockResultMsg struct {
 	err error
 }
 
+// vaultStatusMsg reports the live backend mode of the running agent and, for vault
+// agents, whether the vault is locked (master key absent).
+type vaultStatusMsg struct {
+	mode      string // "vault" or "keys"
+	reachable bool   // agent socket reachable and state readable
+	locked    bool   // vault mode only: master key absent
+}
+
+// vaultPollMsg requests a periodic re-check of the vault lock state. gen identifies
+// the poll chain; stale chains are dropped after daemon stop/start.
+type vaultPollMsg struct {
+	gen int
+}
+
 const (
 	agentFocusButtons = iota
 	agentFocusTable
 	agentFocusFound
 	agentFocusPassphrase
+)
+
+// Indices into AgentScreen.buttons.Labels.
+const (
+	btnStart = iota
+	btnStop
+	btnReload
+	btnLock
+	btnUnlock
 )
 
 // AgentScreen is the agent tab: keys table, Start/Stop/Reload buttons, add/remove keys, lock/unlock.
@@ -69,7 +93,7 @@ type AgentScreen struct {
 	width         int
 	height        int
 
-	foundKeys     []string
+	foundKeys     []utils.KeyPath
 	foundSelected int
 	loadedFPs     map[string]bool
 
@@ -78,6 +102,13 @@ type AgentScreen struct {
 	passInput  textinput.Model
 	showPass   bool
 	passAction string // "lock" or "unlock"
+
+	commentOverlay commentOverlay
+
+	vaultMode    string // live backend mode from the running agent ("vault"/"keys")
+	vaultLocked  bool   // true when the running vault agent reports locked
+	vaultKnown   bool   // true when the vault lock state has been read from a running agent
+	vaultPollGen int    // generation of the active vault poll chain
 
 	focus int
 }
@@ -91,7 +122,7 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	pi.EchoMode = textinput.EchoPassword
 	pi.EchoCharacter = '*'
 
-	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload")
+	btns := NewButtonRow("[s]tart", "[x]stop", "[r]eload", "[L]ock", "[u]nlock")
 	btns.Focused = true
 	btns.ZonePrefix = prefix + "ctrl-"
 
@@ -99,28 +130,30 @@ func NewAgentScreen(sk *Skeleton, configPath, socketPath string) *AgentScreen {
 	kt.ZonePrefix = prefix + "keys-"
 
 	return &AgentScreen{
-		sk:           sk,
-		keyTable:     kt,
-		buttons:      btns,
-		zonePrefix:   prefix,
-		configPath:   configPath,
-		socketPath:   socketPath,
-		status:       "loading...",
-		loadedFPs:    make(map[string]bool),
-		fileSelector: NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
-		passInput:    pi,
-		focus:        agentFocusTable,
+		sk:             sk,
+		keyTable:       kt,
+		buttons:        btns,
+		zonePrefix:     prefix,
+		configPath:     configPath,
+		socketPath:     socketPath,
+		status:         "loading...",
+		loadedFPs:      make(map[string]bool),
+		fileSelector:   NewFileSelector(ModeLoadFile, "Select key file", sk.Styles()),
+		passInput:      pi,
+		commentOverlay: newCommentOverlay(),
+		focus:          agentFocusTable,
 	}
 }
 
 func (s *AgentScreen) HasModal() bool {
-	return s.fileSelector.Visible() || s.showPass
+	return s.fileSelector.Visible() || s.showPass || s.commentOverlay.active
 }
 
 func (s *AgentScreen) Init() tea.Cmd {
 	return tea.Batch(
 		fetchAgentKeysCmd(s.socketPath, false),
 		checkDaemonCmd(s.socketPath),
+		checkVaultStateCmd(s.socketPath),
 		discoverKeysCmd(),
 	)
 }
@@ -128,7 +161,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, foundKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -139,26 +172,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
 		s.height = msg.Height
-		tableH := s.height - tableHeaderRows
-		if tableH > maxTableHeight {
-			tableH = maxTableHeight
-		}
-		if tableH < minTableHeight {
-			tableH = minTableHeight
-		}
-		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 		s.fileSelector.SetHeight(max(s.height-fileSelectorHeightReserve, fileSelectorMinHeight))
 		return s, nil
 
 	case ThemeChangedMsg:
-		tableH := s.height - tableHeaderRows
-		if tableH > maxTableHeight {
-			tableH = maxTableHeight
-		}
-		if tableH < minTableHeight {
-			tableH = minTableHeight
-		}
-		s.keyTable.SetSize(s.width, tableH, s.sk.Styles())
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 		return s, nil
 
 	case FileSelectedMsg:
@@ -180,6 +199,17 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			s.sk.UpdateWidgetValue(daemonStatusWidgetID(), state)
 		}
+		if msg.running {
+			// Start a fresh vault poll chain; bumping the generation drops any stale chain.
+			s.vaultPollGen++
+			return s, pollVaultStateCmd(s.socketPath, s.vaultPollGen)
+		}
+		s.vaultKnown = false
+		s.vaultLocked = false
+		s.vaultPollGen++
+		if s.sk != nil {
+			s.sk.UpdateVaultState("", false, false)
+		}
 		return s, nil
 
 	case ButtonFlashDoneMsg:
@@ -191,7 +221,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.status = msg.err.Error()
 			s.statusErr = true
 			s.keyTable.SetRows(nil)
+			s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
 			s.loadedFPs = make(map[string]bool)
+			s.syncTableSelection()
 			return s, nil
 		}
 		rows := make([]table.Row, len(msg.keys))
@@ -202,8 +234,13 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.loadedFPs[fp] = true
 		}
 		s.keyTable.SetRows(rows)
+		s.keyTable.SetSize(s.width, s.loadedKeysTableHeight(), s.sk.Styles())
+		s.syncTableSelection()
 		s.statusErr = false
-		if msg.refresh {
+		if s.vaultKnown && s.vaultLocked {
+			s.status = "vault locked - press u to unlock"
+			s.statusErr = true
+		} else if msg.refresh {
 			s.status = fmt.Sprintf("refreshed %d key(s)", len(rows))
 		} else if len(rows) == 0 {
 			s.status = "no keys loaded"
@@ -213,10 +250,10 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.focus == agentFocusFound {
 			visible := s.visibleFoundKeys()
 			if len(visible) == 0 {
-				s.focus = agentFocusTable
+				s.focusFirstLoadedKey()
 				s.foundSelected = 0
-			} else if s.foundSelected >= len(visible) {
-				s.foundSelected = len(visible) - 1
+			} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
+				s.foundSelected = s.foundKeysMaxIndex(visible)
 			}
 		}
 		return s, nil
@@ -231,9 +268,10 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, tea.Batch(
 				fetchAgentKeysCmd(s.socketPath, false),
 				checkDaemonCmd(s.socketPath),
+				checkVaultStateCmd(s.socketPath),
 			)
 		}
-		return s, checkDaemonCmd(s.socketPath)
+		return s, tea.Batch(checkDaemonCmd(s.socketPath), checkVaultStateCmd(s.socketPath))
 
 	case foundKeysMsg:
 		s.foundKeys = msg.paths
@@ -248,9 +286,12 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = "agent locked"
 			s.statusErr = false
+			// Reset the cached lock state so the follow-up check refreshes it.
+			s.vaultKnown = false
+			s.vaultLocked = false
 		}
 		s.focus = agentFocusTable
-		return s, fetchAgentKeysCmd(s.socketPath, true)
+		return s, tea.Batch(fetchAgentKeysCmd(s.socketPath, true), checkVaultStateCmd(s.socketPath))
 
 	case agentUnlockResultMsg:
 		s.showPass = false
@@ -261,17 +302,67 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = "agent unlocked"
 			s.statusErr = false
+			// Reset the cached lock state so the follow-up check refreshes it.
+			s.vaultKnown = false
+			s.vaultLocked = false
 		}
 		s.focus = agentFocusTable
-		return s, fetchAgentKeysCmd(s.socketPath, true)
+		return s, tea.Batch(fetchAgentKeysCmd(s.socketPath, true), checkVaultStateCmd(s.socketPath))
 
-	case tea.MouseReleaseMsg:
-		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass {
+	case vaultStatusMsg:
+		s.vaultMode = msg.mode
+		if msg.reachable {
+			s.vaultKnown = true
+			s.vaultLocked = msg.locked
+			if s.vaultLocked {
+				s.status = "vault locked - press u to unlock"
+				s.statusErr = true
+			}
+		} else {
+			s.vaultKnown = false
+			s.vaultLocked = false
+		}
+		if s.sk != nil {
+			s.sk.UpdateVaultState(s.vaultMode, s.vaultLocked, s.vaultKnown)
+		}
+		return s, nil
+
+	case vaultPollMsg:
+		if msg.gen != s.vaultPollGen || !s.daemonRunning {
+			return s, nil
+		}
+		return s, tea.Batch(
+			checkVaultStateCmd(s.socketPath),
+			pollVaultStateCmd(s.socketPath, msg.gen),
+		)
+
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
 		return s.handleMouse(msg.X, msg.Y)
 
+	case tea.MouseReleaseMsg:
+		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
+			return s, nil
+		}
+		return s.handleMouse(msg.X, msg.Y)
+
+	case commentOverlaySavedMsg:
+		s.commentOverlay.Hide()
+		if msg.err != nil {
+			s.status = msg.err.Error()
+			s.statusErr = true
+			return s, nil
+		}
+		s.status = "comment updated"
+		s.statusErr = false
+		return s, fetchAgentKeysCmd(s.socketPath, true)
+
 	case tea.KeyPressMsg:
+		if s.commentOverlay.active {
+			return s, s.commentOverlay.Update(msg, s.socketPath)
+		}
 		if s.showPass {
 			return s.handlePassInput(msg)
 		}
@@ -283,6 +374,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if s.focus == agentFocusTable {
 		cmd := s.keyTable.Update(msg)
+		s.syncTableSelection()
 		return s, cmd
 	}
 	return s, nil
@@ -296,12 +388,18 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		switch s.focus {
 		case agentFocusTable:
+			if s.keyTable.Table.Cursor() > 0 {
+				cmd := s.keyTable.Update(msg)
+				s.syncTableSelection()
+				return s, cmd
+			}
+			s.syncTableSelection()
 			return s, navToTabBarCmd()
 		case agentFocusFound:
 			if s.foundSelected > 0 {
 				s.foundSelected--
 			} else {
-				s.focus = agentFocusTable
+				s.focusFirstLoadedKey()
 			}
 		}
 		return s, nil
@@ -309,13 +407,23 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		switch s.focus {
 		case agentFocusTable:
+			rows := s.keyTable.Table.Rows()
+			cursor := s.keyTable.Table.Cursor()
+			if len(rows) > 0 && cursor < len(rows)-1 {
+				cmd := s.keyTable.Update(msg)
+				s.syncTableSelection()
+				return s, cmd
+			}
 			visible := s.visibleFoundKeys()
 			if len(visible) > 0 {
 				s.focus = agentFocusFound
 				s.foundSelected = 0
+				s.syncTableSelection()
 			}
 		case agentFocusFound:
-			if s.foundSelected < len(s.visibleFoundKeys())-1 {
+			visible := s.visibleFoundKeys()
+			maxIdx := s.foundKeysMaxIndex(visible)
+			if s.foundSelected < maxIdx {
 				s.foundSelected++
 			}
 		}
@@ -346,25 +454,22 @@ func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 
-	case "L":
-		s.showPass = true
-		s.passAction = "lock"
-		s.passInput.SetValue("")
-		s.passInput.Placeholder = "lock passphrase"
-		s.focus = agentFocusPassphrase
-		return s, s.passInput.Focus()
+	case "e":
+		if s.focus == agentFocusTable {
+			return s.editSelectedKeyComment()
+		}
+		return s, nil
 
-	case "U":
-		s.showPass = true
-		s.passAction = "unlock"
-		s.passInput.SetValue("")
-		s.passInput.Placeholder = "unlock passphrase"
-		s.focus = agentFocusPassphrase
-		return s, s.passInput.Focus()
+	case "L":
+		return s, s.startLock()
+
+	case "u":
+		return s, s.startPassphrase("unlock")
 	}
 
 	if s.focus == agentFocusTable {
 		cmd := s.keyTable.Update(msg)
+		s.syncTableSelection()
 		return s, cmd
 	}
 	return s, nil
@@ -390,9 +495,19 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+	rows := s.keyTable.Table.Rows()
+	for i := range rows {
+		if inZoneBounds(fmt.Sprintf("%skey-%d", s.zonePrefix, i), x, y) {
+			s.focus = agentFocusTable
+			s.keyTable.Table.SetCursor(i)
+			s.syncTableSelection()
+			return s, nil
+		}
+	}
 	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
 		s.focus = agentFocusTable
 		s.keyTable.Table.SetCursor(row)
+		s.syncTableSelection()
 		return s, nil
 	}
 	visible := s.visibleFoundKeys()
@@ -408,22 +523,55 @@ func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 
 func (s *AgentScreen) pressButton(btn int) (tea.Model, tea.Cmd) {
 	s.buttons.Active = btn
+	switch btn {
+	case btnLock:
+		return s, s.startLock()
+	case btnUnlock:
+		return s, s.startPassphrase("unlock")
+	}
 	s.buttons.Press()
 	s.statusErr = false
 
 	var action tea.Cmd
 	switch btn {
-	case 0: // Start
+	case btnStart: // Start
 		s.status = "starting..."
 		action = startDaemonCmd(s.configPath, s.socketPath)
-	case 1: // Stop
+	case btnStop: // Stop
 		s.status = "stopping..."
 		action = stopDaemonCmd()
-	case 2: // Reload
+	case btnReload: // Reload
 		s.status = "reloading..."
 		action = reloadDaemonCmd(s.configPath, s.socketPath)
 	}
 	return s, tea.Batch(action, ButtonFlashCmd())
+}
+
+// startPassphrase opens the lock/unlock passphrase prompt for the given action ("lock"/"unlock").
+func (s *AgentScreen) startPassphrase(action string) tea.Cmd {
+	s.showPass = true
+	s.passAction = action
+	s.passInput.SetValue("")
+	if action == "lock" {
+		s.passInput.Placeholder = "lock passphrase"
+	} else {
+		s.passInput.Placeholder = "unlock passphrase"
+	}
+	s.focus = agentFocusPassphrase
+	return s.passInput.Focus()
+}
+
+// startLock begins locking the agent. A live vault agent locks without a passphrase:
+// the daemon wipes the in-memory master key, so the global unlock key already held is
+// simply discarded. Keys-mode agents need a passphrase (it becomes the unlock key), so
+// the passphrase prompt is shown instead.
+func (s *AgentScreen) startLock() tea.Cmd {
+	if s.vaultMode == "vault" {
+		s.statusErr = false
+		s.status = "locking..."
+		return lockVaultCmd(s.socketPath)
+	}
+	return s.startPassphrase("lock")
 }
 
 func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
@@ -435,19 +583,89 @@ func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
 	return s, removeKeyFromAgentCmd(s.socketPath, fp)
 }
 
+// editSelectedKeyComment opens the comment overlay for the currently selected key row.
+func (s *AgentScreen) editSelectedKeyComment() (tea.Model, tea.Cmd) {
+	row := s.keyTable.SelectedRow()
+	if row == nil {
+		return s, nil
+	}
+	keyType, fp, comment := row[0], row[1], row[2]
+	return s, s.commentOverlay.Show(fp, keyType, comment)
+}
+
 func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 	visible := s.visibleFoundKeys()
 	if s.foundSelected >= len(visible) {
 		return s, nil
 	}
-	path := visible[s.foundSelected]
-	return s, addKeyToAgentCmd(s.socketPath, path)
+	kp := visible[s.foundSelected]
+	return s, addKeyToAgentCmd(s.socketPath, kp.Path)
 }
 
-func (s *AgentScreen) visibleFoundKeys() []string {
-	var visible []string
+func (s *AgentScreen) focusFirstLoadedKey() {
+	s.focus = agentFocusTable
+	if rows := s.keyTable.Table.Rows(); len(rows) > 0 {
+		s.keyTable.Table.SetCursor(0)
+	}
+	s.syncTableSelection()
+}
+
+// syncTableSelection keeps row data visible and toggles row highlight only while
+// the loaded-keys list is the active focus target.
+func (s *AgentScreen) syncTableSelection() {
+	if s.sk == nil {
+		return
+	}
+	rows := s.keyTable.Table.Rows()
+	if len(rows) > 0 && s.keyTable.Table.Cursor() < 0 {
+		s.keyTable.Table.SetCursor(0)
+	}
+	highlighted := s.sk.ScreenActive() && s.focus == agentFocusTable && len(rows) > 0
+	s.keyTable.SetSelectionHighlighted(highlighted, s.sk.Styles())
+}
+
+func (s *AgentScreen) loadedKeysTableHeight() int {
+	rowCount := len(s.keyTable.Table.Rows())
+	if rowCount == 0 {
+		return minTableHeight
+	}
+	// Table view = header row + header rule + data rows.
+	h := rowCount + 2
+	if h > agentLoadedKeysMaxRows {
+		h = agentLoadedKeysMaxRows
+	}
+	if h < minTableHeight {
+		h = minTableHeight
+	}
+	return h
+}
+
+func (s *AgentScreen) foundKeysMaxIndex(visible []utils.KeyPath) int {
+	if len(visible) == 0 {
+		return 0
+	}
+	maxIdx := len(visible) - 1
+	if maxIdx >= foundKeysMaxVisible {
+		maxIdx = foundKeysMaxVisible - 1
+	}
+	return maxIdx
+}
+
+func sectionBoxWidth(width int) int {
+	boxW := width * 3 / 4
+	if boxW > sectionBoxMaxWidth {
+		boxW = sectionBoxMaxWidth
+	}
+	if boxW < sectionBoxMinWidth {
+		boxW = sectionBoxMinWidth
+	}
+	return boxW
+}
+
+func (s *AgentScreen) visibleFoundKeys() []utils.KeyPath {
+	var visible []utils.KeyPath
 	for _, p := range s.foundKeys {
-		pubKey, _, _, err := agent.ParseKeyFromPath(p)
+		pubKey, _, _, err := agent.ParseKeyFromPath(p.Path)
 		if err != nil {
 			visible = append(visible, p)
 			continue
@@ -486,16 +704,22 @@ func (s *AgentScreen) View() tea.View {
 			title+"\n"+st.FocusedBorderStyle.Render(s.passInput.View())))
 	}
 
+	if s.commentOverlay.active {
+		innerW := width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		return tea.NewView(lipgloss.Place(innerW, height, lipgloss.Center, lipgloss.Center,
+			s.commentOverlay.View(s.sk.Styles(), sectionBoxWidth(width))))
+	}
+
 	w := width
 	if w < 1 {
 		w = defaultViewWidth
 	}
 
-	st := s.sk.Styles()
-	keyBox := s.keyTable.FocusedBoxView(st, active && s.focus == agentFocusTable)
-
 	var sections []string
-	sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top, keyBox))
+	sections = append(sections, s.renderLoadedKeys(w, active))
 
 	visible := s.visibleFoundKeys()
 	if len(visible) > 0 {
@@ -505,6 +729,10 @@ func (s *AgentScreen) View() tea.View {
 	}
 
 	content := strings.Join(sections, "\n")
+	contentLines := strings.Count(content, "\n") + 1
+	if padTop := (height - contentLines) / 2; padTop > 0 {
+		content = strings.Repeat("\n", padTop) + content
+	}
 	return tea.NewView(content)
 }
 
@@ -585,36 +813,62 @@ func (s *AgentScreen) ControlButtonsInlineView(focused bool) string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
-func (s *AgentScreen) renderFoundKeys(visible []string, width int, active bool) string {
+func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
+	s.syncTableSelection()
+
+	st := s.sk.Styles()
+	title := st.SectionTitleStyle.Render(" Loaded Keys")
+
+	focused := active && s.focus == agentFocusTable && len(s.keyTable.Table.Rows()) > 0
+	border := st.UnfocusedBorderStyle
+	if s.vaultKnown && s.vaultLocked {
+		border = st.WarnBorderStyle
+	} else if focused {
+		border = st.FocusedBorderStyle
+	}
+
+	content := border.Render(s.keyTable.AgentViewMarked(s.zonePrefix, focused, st))
+	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top, title+"\n"+content)
+}
+
+func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active bool) string {
 	st := s.sk.Styles()
 	title := st.SectionTitleStyle.Render(" Found Keys")
 	var lines []string
-	maxShow := 6
+	maxShow := foundKeysMaxVisible
 	if len(visible) < maxShow {
 		maxShow = len(visible)
 	}
 	for i := 0; i < maxShow; i++ {
-		style := st.AccentStyle
 		linePrefix := "  "
-		if active && s.focus == agentFocusFound && i == s.foundSelected {
-			style = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
+		selected := active && s.focus == agentFocusFound && i == s.foundSelected
+		if selected {
 			linePrefix = "> "
 		}
-		rendered := style.Render(linePrefix + utils.DisplayPath(visible[i]))
-		rendered = zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), rendered)
+
+		var line string
+		if selected {
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color(s.sk.Theme().Focus)).Bold(true)
+			text := utils.DisplayPath(visible[i].Path)
+			if visible[i].IsSymlink {
+				text += " -> " + utils.DisplayPath(visible[i].RealPath)
+			}
+			line = style.Render(linePrefix + text)
+		} else if visible[i].IsSymlink {
+			name := st.FocusStyle.Render(utils.DisplayPath(visible[i].Path))
+			target := st.DimStyle.Render(" -> " + utils.DisplayPath(visible[i].RealPath))
+			line = st.AccentStyle.Render(linePrefix) + name + target
+		} else {
+			line = st.AccentStyle.Render(linePrefix + utils.DisplayPath(visible[i].Path))
+		}
+		rendered := zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), line)
 		lines = append(lines, rendered)
 	}
 	if len(visible) > maxShow {
 		lines = append(lines, st.DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
 	}
 	content := strings.Join(lines, "\n")
-	boxW := width * 3 / 4
-	if boxW > sectionBoxMaxWidth {
-		boxW = sectionBoxMaxWidth
-	}
-	if boxW < sectionBoxMinWidth {
-		boxW = sectionBoxMinWidth
-	}
+	boxW := sectionBoxWidth(width)
 	border := st.UnfocusedBorderStyle
 	if active && s.focus == agentFocusFound {
 		border = st.FocusedBorderStyle
@@ -628,7 +882,10 @@ func (s *AgentScreen) HelpEntries() []string {
 	return []string{
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow("e", "Edit comment"),
 		st.HelpRow("d / bksp", "Remove key"),
+		st.HelpRow("L", "Lock vault"),
+		st.HelpRow("u", "Unlock vault"),
 		"",
 	}
 }
@@ -718,10 +975,50 @@ func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	}
 }
 
+// lockVaultCmd locks the vault agent immediately. Locking needs no passphrase: the
+// daemon wipes the in-memory master key.
+func lockVaultCmd(socketPath string) tea.Cmd {
+	return func() tea.Msg {
+		return agentLockResultMsg{err: agent.LockSocket(socketPath, nil)}
+	}
+}
+
 func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
 		return agentUnlockResultMsg{err: agent.UnlockSocket(socketPath, []byte(passphrase))}
 	}
+}
+
+// checkVaultState queries the running agent for its backend mode and, for vault agents,
+// whether the vault is locked.
+func checkVaultState(socketPath string) vaultStatusMsg {
+	mode, live := agent.LiveBackendMode(socketPath)
+	if !live {
+		return vaultStatusMsg{}
+	}
+	if mode != "vault" {
+		return vaultStatusMsg{mode: mode, reachable: true}
+	}
+	resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
+	if err != nil || len(resp) != 1 {
+		return vaultStatusMsg{mode: mode}
+	}
+	return vaultStatusMsg{mode: mode, reachable: true, locked: resp[0] == 1}
+}
+
+func checkVaultStateCmd(socketPath string) tea.Cmd {
+	return func() tea.Msg {
+		return checkVaultState(socketPath)
+	}
+}
+
+// pollVaultStateCmd schedules the next periodic vault state check. Only the poll chain
+// matching the current generation is kept; daemon stop/start bumps the generation to
+// drop stale chains.
+func pollVaultStateCmd(socketPath string, gen int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return vaultPollMsg{gen: gen}
+	})
 }
 
 func discoverKeysCmd() tea.Cmd {

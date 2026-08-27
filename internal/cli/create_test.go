@@ -43,6 +43,19 @@ func TestRunCreate_ecdsa(t *testing.T) {
 	assertKeyPairExists(t, out, 0o600, 0o644)
 }
 
+func TestRunCreate_commentRejectsNewline(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "id_ed25519")
+
+	err := runCreate("ed25519", 0, "foo\nbar", out, false)
+	if err == nil {
+		t.Fatal("expected error for newline in comment")
+	}
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Error("key file should not be created when comment is invalid")
+	}
+}
+
 func TestRunCreate_invalidKeyType(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "id_dsa")

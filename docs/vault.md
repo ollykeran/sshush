@@ -57,6 +57,31 @@ OpenSSH’s `ssh-agent` loads **decrypted** key material into the agent and keep
 
 The vault does **not** remove the need to trust the machine while the agent is **unlocked**. It improves **at-rest** handling (one encrypted bundle, Argon2, AEAD) and gives a clear **lock** semantics tied to wiping the derived master key.
 
+## OpenSSH agent interop (primary target)
+
+The vault agent speaks the standard SSH agent protocol over `SSH_AUTH_SOCK`, served by `golang.org/x/crypto/ssh/agent` (`internal/agent/server.go`) with the same opcodes OpenSSH uses. Real OpenSSH clients (`ssh`, `ssh-add`, `scp`) talk to it directly. Behavior is **OpenSSH-first**: RFC 9987 / the IETF agent draft is a background reference only, used where it matches deployed OpenSSH.
+
+### Reply rules that match OpenSSH
+
+- **Lock / Unlock state**: locking an already-locked vault fails; unlocking an already-unlocked vault, or unlocking with the wrong passphrase, fails (OpenSSH reply rules).
+- **Remove of an unknown key**: `ssh-add -d` for a key the vault does not hold fails, like OpenSSH's SSH_AGENT_FAILURE.
+- **rsa-sha2 signing**: RSA identities sign with `rsa-sha2-256` / `rsa-sha2-512` when the client requests them (what `ssh` needs for modern RSA host/client auth). Non-RSA keys and unknown flag values are rejected.
+- **Add constraints**: `ssh-add -t` (lifetime) is honored — the identity expires and is dropped lazily on the next List/Sign. `ssh-add -c` (confirm), constraint extensions, and certificates are **rejected** rather than silently ignored, because the daemon has no confirm UI and cannot store cert identities.
+- **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `vault-locked`, `unlock-recovery`, `add-key-opts`, `vault-session-load`, `vault-set-autoload`.
+
+### Lock: wipe vs OpenSSH soft-lock
+
+OpenSSH's lock is a soft gate: keys stay in the agent and a passphrase gate is set. The vault lock is **stronger**: it wipes the derived master key from memory, so identities cannot be decrypted until unlock. At the protocol level both behave identically (locked → no identities listed, signing fails).
+
+### Out of scope
+
+- **Smartcard / PKCS#11** requests (opcodes 20/21/26) → FAILURE, the same class of failure as an OpenSSH agent without PKCS#11 support.
+- **Ed 448** keys — not in `golang.org/x/crypto/ssh` and not needed by common OpenSSH clients.
+- **Agent forwarding** — an SSH connection feature, not agent-socket work.
+- **Custom `ServeAgent`** — the wire stays on `x/crypto`.
+
+Background: OpenSSH `PROTOCOL.agent` and RFC 9987; where they diverge (notably extension success replies), this agent follows OpenSSH.
+
 ## Configuration prerequisites
 
 - **`sshush vault init`**: Set `[vault].vault_path` in config or pass `--vault-path`. Does not require the agent.

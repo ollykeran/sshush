@@ -50,6 +50,13 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 | agentLockResultMsg | lockAgentCmd | Lock result |
 | agentUnlockResultMsg | unlockAgentCmd | Unlock result |
 | ButtonFlashDoneMsg | ButtonFlashCmd | Button flash animation done |
+| commentOverlaySavedMsg | saveCommentOverlayCmd | Comment edit save result (see below) |
+
+**Comment overlay**: pressing `e` on a selected key in the loaded-keys table opens a
+small comment-edit overlay. Saving resolves the key's source file from the agent's
+filepath registry, writes the new comment to the key file (and `.pub` companion if
+present), persists it to the vault when the agent is vault-backed, and reloads the
+key in the agent. See `internal/tui/comment_overlay.go`.
 
 ### Create Screen
 
@@ -105,7 +112,24 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 
 - **Init**: fetchAgentKeysCmd, checkDaemonCmd, discoverKeysCmd.
 - **Update**: Handles agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, foundKeysMsg, lock/unlock results, key/button/mouse input.
-- **View**: Key table, found keys section, file picker or passphrase input when active.
+- **View**: Loaded keys table (primary, centered), found keys section below, file picker or passphrase input when active.
+
+#### Agent navigation
+
+Skeleton has three nav layers: tab bar (`navFocusTabs`), screen content (`navFocusScreen`), and daemon controls in the header (`navFocusDaemon`, entered with `d` when not removing a key).
+
+On the Agent tab with screen focus, the **Loaded Keys** table is the default focus (`agentFocusTable`). Entering the screen from the tab bar (`down`/`j`/`enter`) selects the first loaded key immediately; the bordered box is display-only.
+
+| Key | Table focused | Found Keys focused |
+|-----|---------------|-------------------|
+| `up` / `k` | Move cursor up; at first row, return to tab bar | Move selection up; at top, return to table |
+| `down` / `j` | Move cursor down; at last row, enter Found Keys (if any) | Move selection down (clamped to visible rows) |
+| `backspace` / `delete` / `d` | Remove selected loaded key | — |
+| Click row | Select row in table | Click found line adds key (unchanged) |
+
+`d` removes the selected loaded key when the Agent table is focused. On other tabs, when Found Keys is focused, or when a modal is open, `d` enters daemon controls instead.
+
+Loaded keys and Found Keys share the same section layout: title, bordered box at 3/4 content width. The loaded keys block is vertically centered in the screen content area.
 
 ### CreateScreen
 

@@ -44,15 +44,24 @@ func SaveWithComment(rawKey interface{}, comment, privPath string) error {
 
 	pubPath := privPath + ".pub"
 	if _, err := os.Stat(pubPath); err == nil {
-		signer, err := ssh.NewSignerFromKey(rawKey)
-		if err != nil {
-			return fmt.Errorf("create signer: %w", err)
-		}
-		pubLine := FormatPublicKey(signer, comment)
-		if err := os.WriteFile(pubPath, []byte(pubLine), 0o644); err != nil {
-			return fmt.Errorf("update .pub: %w", err)
+		if err := WritePub(rawKey, comment, pubPath); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+// WritePub writes the .pub companion file for rawKey with the given comment.
+// Unlike SaveWithComment, it always writes, regardless of whether pubPath already exists.
+func WritePub(rawKey interface{}, comment, pubPath string) error {
+	signer, err := ssh.NewSignerFromKey(rawKey)
+	if err != nil {
+		return fmt.Errorf("create signer: %w", err)
+	}
+	pubLine := FormatPublicKey(signer, comment)
+	if err := os.WriteFile(pubPath, []byte(pubLine), 0o644); err != nil {
+		return fmt.Errorf("write public key: %w", err)
+	}
 	return nil
 }

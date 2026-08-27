@@ -34,8 +34,16 @@ update-security:
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
-    if ! command -v govulncheck >/dev/null 2>&1; then
+    bin="$(command -v govulncheck || true)"
+    if [[ -z "$bin" ]]; then
         go install golang.org/x/vuln/cmd/govulncheck@latest
+    else
+        built="$(go version "$bin" 2>/dev/null | awk '{print $NF}')"
+        current="$(go env GOVERSION)"
+        if [[ "$built" != "$current" ]]; then
+            echo "Rebuilding govulncheck (${built:-unknown} -> ${current})..."
+            go install golang.org/x/vuln/cmd/govulncheck@latest
+        fi
     fi
     bumped=0
     for _ in $(seq 1 20); do

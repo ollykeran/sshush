@@ -1,5 +1,9 @@
 # sshush
 
+[![tests](https://github.com/ollykeran/sshush/actions/workflows/test.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/test.yml)
+[![build](https://github.com/ollykeran/sshush/actions/workflows/build.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/build.yml)
+[![lint](https://github.com/ollykeran/sshush/actions/workflows/lint.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/lint.yml)
+
 OpenSSH compatible agent over a Unix socket (`SSH_AUTH_SOCK`, same agent protocol as `ssh-agent`) with a TUI, themes, and a config file. I wanted the agent to stay out of the way for normal `ssh` use but still be easy to inspect and reload from dotfiles, without piling on shell wrapper scripts. Optional passphrase vault stores derived keys in one file.
 
 ## Compared to `ssh-agent`
@@ -23,7 +27,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 ## Features
 
 - **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
-- **Keys**: create, edit comment, find, export public key, validate.
+- **Keys**: create, edit comment, find, export public key, validate. Editing a key's comment (`sshush edit`, or the TUI's `e` key on a loaded agent key) also updates its `.pub` companion file when one exists alongside the private key, so the two stay in sync.
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).

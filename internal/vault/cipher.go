@@ -75,4 +75,9 @@ var (
 	errLocked          = errors.New("vault: vault is locked")
 	errWrongPassphrase = errors.New("vault: wrong passphrase")
 	errKeyNotFound     = errors.New("vault: key not found")
+
+	// errAgentLocked and errAgentNotLocked match OpenSSH / golang.org/x/crypto
+	// keyring strings so callers see consistent messages for lock/unlock state.
+	errAgentLocked    = errors.New("agent: locked")
+	errAgentNotLocked = errors.New("agent: not locked")
 )

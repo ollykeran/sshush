@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 )
 
@@ -114,6 +116,84 @@ func (kt *KeyTable) SetSize(width, height int, st Styles) {
 
 func (kt *KeyTable) SetRows(rows []table.Row) {
 	kt.Table.SetRows(rows)
+	if len(rows) > 0 && kt.Table.Cursor() < 0 {
+		kt.Table.SetCursor(0)
+	}
+}
+
+// AgentView renders the key table for the agent screen. Selection background is
+// applied per cell so the full row (type, fingerprint, comment) highlights.
+func (kt KeyTable) AgentView(highlightCursor bool, st Styles) string {
+	return kt.agentView("", highlightCursor, st)
+}
+
+// AgentViewMarked is like AgentView but registers one mouse zone per data row.
+func (kt KeyTable) AgentViewMarked(zonePrefix string, highlightCursor bool, st Styles) string {
+	return kt.agentView(zonePrefix, highlightCursor, st)
+}
+
+func (kt KeyTable) agentView(zonePrefix string, highlightCursor bool, st Styles) string {
+	styles := kt.agentTableStyles(highlightCursor, st)
+	cols := kt.Table.Columns()
+	rows := kt.Table.Rows()
+	cursor := kt.Table.Cursor()
+
+	var out []string
+	out = append(out, kt.tableHeaderLines()...)
+	for r, row := range rows {
+		selected := highlightCursor && r == cursor
+		line := kt.renderAgentRow(row, cols, styles, selected)
+		if zonePrefix != "" {
+			line = zone.Mark(fmt.Sprintf("%skey-%d", zonePrefix, r), line)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func (kt KeyTable) agentTableStyles(highlightCursor bool, st Styles) table.Styles {
+	rowW := kt.Table.Width()
+	if rowW < 1 {
+		rowW = keyTableMinTotalWidth + keyCellPadOverhead
+	}
+	styles := keyTableStyles(rowW, st)
+	if !highlightCursor {
+		styles.Selected = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(st.TableCellFgHex)).
+			Padding(0, 1)
+	}
+	return styles
+}
+
+func (kt KeyTable) tableHeaderLines() []string {
+	lines := strings.Split(kt.Table.View(), "\n")
+	if len(lines) >= 2 {
+		return lines[:2]
+	}
+	return lines
+}
+
+func (kt KeyTable) renderAgentRow(row table.Row, cols []table.Column, styles table.Styles, selected bool) string {
+	var parts []string
+	for i, value := range row {
+		if i >= len(cols) || cols[i].Width <= 0 {
+			continue
+		}
+		w := cols[i].Width
+		box := lipgloss.NewStyle().Width(w).MaxWidth(w).Inline(true)
+		text := box.Render(ansi.Truncate(value, w, "…"))
+		if selected {
+			parts = append(parts, styles.Selected.Render(text))
+		} else {
+			parts = append(parts, styles.Cell.Render(text))
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+func (kt *KeyTable) SetSelectionHighlighted(on bool, st Styles) {
+	styles := kt.agentTableStyles(on, st)
+	kt.Table.SetStyles(styles)
 }
 
 func (kt *KeyTable) Update(msg tea.Msg) tea.Cmd {
@@ -122,12 +202,16 @@ func (kt *KeyTable) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (kt KeyTable) View() string {
+func (kt KeyTable) markedView() string {
 	view := kt.Table.View()
 	if kt.ZonePrefix != "" {
 		view = zone.Mark(kt.ZonePrefix+"table", view)
 	}
 	return view
+}
+
+func (kt KeyTable) View() string {
+	return kt.markedView()
 }
 
 func (kt KeyTable) HandleMouse(x, y int) int {
@@ -158,11 +242,17 @@ func (kt KeyTable) FocusedBoxView(st Styles, focused bool) string {
 	if focused {
 		border = st.FocusedBorderStyle
 	}
-	return border.Render(kt.Table.View())
+	return border.Render(kt.markedView())
+}
+
+// WarnBoxView renders the key table with the warn-coloured border, used when the
+// vault is locked.
+func (kt KeyTable) WarnBoxView(st Styles) string {
+	return st.WarnBorderStyle.Render(kt.markedView())
 }
 
 func (kt KeyTable) BoxView(st Styles) string {
-	return st.UnfocusedBorderStyle.Render(kt.Table.View())
+	return st.UnfocusedBorderStyle.Render(kt.markedView())
 }
 
 func keyBoxInnerWidth(termWidth int) int {
@@ -179,7 +269,7 @@ func keyBoxInnerWidth(termWidth int) int {
 const (
 	keyTableMinTotalWidth = 36
 	keyTableTypeMinWidth  = 19
-	keyTableFPMinWidth     = 30
+	keyTableFPMinWidth    = 30
 	keyTableCommentMinW   = 20
 )
 
@@ -211,6 +301,7 @@ func keyTableColumns(w int) []table.Column {
 }
 
 func keyTableStyles(rowWidth int, st Styles) table.Styles {
+	_ = rowWidth
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -226,7 +317,7 @@ func keyTableStyles(rowWidth int, st Styles) table.Styles {
 		Foreground(lipgloss.Color(st.TableSelectedFgHex)).
 		Background(lipgloss.Color(st.TableSelectedBgHex)).
 		Bold(true).
-		Width(rowWidth)
+		Padding(0, 1)
 	return s
 }
 
