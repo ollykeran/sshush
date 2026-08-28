@@ -1,6 +1,18 @@
-# Run tests with race detection (optional: specific package)
-test pkg="./...":
-    go test {{ if pkg == "./..." { pkg } else { "./" + pkg } }} -v -race
+# Run tests with race detection (optional: specific package, --nocache to bypass Go's test cache)
+test *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=({{ args }})
+    pkg="./..."
+    extra=()
+    for a in "${args[@]+"${args[@]}"}"; do
+      if [ "$a" = "--nocache" ]; then
+        extra+=(-count=1)
+      else
+        pkg="$a"
+      fi
+    done
+    go test "$pkg" -v -race "${extra[@]+"${extra[@]}"}"
 
 # Run tests with coverage report (saved to benchmarks/)
 test-cover:
