@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone"
+	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
@@ -18,6 +19,7 @@ func (m footerTestModel) View() tea.View                      { return tea.NewVi
 
 func TestMain(m *testing.M) {
 	zone.NewGlobal()
+	kdf.SetInsecureFastParamsForTesting()
 	os.Exit(m.Run())
 }
 
