@@ -22,6 +22,7 @@ func TestLoad(t *testing.T) {
 			cfg := Config{
 				KeyPaths:   tc.wantKeyPaths,
 				SocketPath: tc.wantSocketPath,
+				AgentType:  AgentTypeKeys,
 			}
 			data, err := MarshalConfig(cfg)
 			if err != nil {
@@ -77,6 +78,7 @@ func TestLoad(t *testing.T) {
 		cfg := Config{
 			KeyPaths:   []string{"~/foo/id_ed25519"},
 			SocketPath: "~/.ssh/sshush.sock",
+			AgentType:  AgentTypeKeys,
 		}
 		data, err := MarshalConfig(cfg)
 		if err != nil {
@@ -111,6 +113,7 @@ func TestLoad(t *testing.T) {
 		cfg := Config{
 			KeyPaths:         []string{"/tmp/id_ed25519"},
 			SocketPath:       "/tmp/agent.sock",
+			AgentType:        AgentTypeKeys,
 			ServerListenPort: 2222,
 		}
 		data, err := MarshalConfig(cfg)
@@ -135,11 +138,11 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("marshal roundtrip preserves AgentVault and VaultPath", func(t *testing.T) {
+	t.Run("marshal roundtrip preserves AgentType vault and VaultPath", func(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/s.sock",
 			KeyPaths:   []string{"/tmp/k"},
-			AgentVault: true,
+			AgentType:  AgentTypeVault,
 			VaultPath:  "/tmp/v.json",
 		}
 		data, err := MarshalConfig(cfg)
@@ -154,8 +157,8 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
 		}
-		if !got.AgentVault || got.VaultPath != "/tmp/v.json" {
-			t.Fatalf("got AgentVault=%v VaultPath=%q", got.AgentVault, got.VaultPath)
+		if !got.IsVault() || got.VaultPath != "/tmp/v.json" {
+			t.Fatalf("got AgentType=%q VaultPath=%q", got.AgentType, got.VaultPath)
 		}
 	})
 
@@ -165,9 +168,10 @@ func TestLoad(t *testing.T) {
 			cfg  Config
 			want string
 		}{
-			{"vault agent", Config{AgentVault: true, VaultPath: "/v.json"}, "vault"},
-			{"keys only", Config{AgentVault: false, KeyPaths: []string{"/k"}, VaultPath: ""}, "keys"},
-			{"offline vault path keys agent", Config{AgentVault: false, KeyPaths: []string{"/k"}, VaultPath: "/v.json"}, "keys"},
+			{"vault agent", Config{AgentType: AgentTypeVault, VaultPath: "/v.json"}, "vault"},
+			{"keys only", Config{AgentType: AgentTypeKeys, KeyPaths: []string{"/k"}, VaultPath: ""}, "keys"},
+			{"offline vault path keys agent", Config{AgentType: AgentTypeKeys, KeyPaths: []string{"/k"}, VaultPath: "/v.json"}, "keys"},
+			{"external agent", Config{AgentType: AgentTypeExternal}, "keys"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -178,10 +182,10 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("vault_path with vault false keeps path for CLI", func(t *testing.T) {
+	t.Run("vault_path with type keys keeps path for CLI", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "config.toml")
-		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[vault]\nvault_path = \"/tmp/vault.json\"\n"
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\ntype = \"keys\"\nkey_paths = [\"/tmp/k\"]\n\n[vault]\nvault_path = \"/tmp/vault.json\"\n"
 		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -189,8 +193,8 @@ func TestLoad(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.AgentVault {
-			t.Fatal("expected AgentVault false")
+		if cfg.IsVault() {
+			t.Fatal("expected AgentType to not be vault")
 		}
 		if cfg.VaultPath != "/tmp/vault.json" {
 			t.Fatalf("VaultPath: got %q", cfg.VaultPath)
@@ -203,7 +207,7 @@ func TestLoad(t *testing.T) {
 	t.Run("theme.no_color is parsed from config file", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "config.toml")
-		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n\n[theme]\nno_color = true\n"
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\ntype = \"keys\"\nkey_paths = [\"/tmp/k\"]\n\n[theme]\nno_color = true\n"
 		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +223,7 @@ func TestLoad(t *testing.T) {
 	t.Run("theme.no_color defaults to false when absent", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgPath := filepath.Join(dir, "config.toml")
-		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = false\nkey_paths = [\"/tmp/k\"]\n"
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\ntype = \"keys\"\nkey_paths = [\"/tmp/k\"]\n"
 		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -236,6 +240,7 @@ func TestLoad(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/agent.sock",
 			KeyPaths:   []string{"/tmp/k"},
+			AgentType:  AgentTypeKeys,
 			Theme:      ThemeSection{NoColor: true},
 		}
 		data, err := MarshalConfig(cfg)
@@ -255,6 +260,85 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("marshal roundtrip preserves AgentType external", func(t *testing.T) {
+		cfg := Config{
+			SocketPath: "/tmp/s.sock",
+			KeyPaths:   []string{"/tmp/k"},
+			AgentType:  AgentTypeExternal,
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+		}
+		if !got.IsExternal() {
+			t.Fatalf("got AgentType=%q, want %q", got.AgentType, AgentTypeExternal)
+		}
+	})
+
+	t.Run("external type allows empty socket_path", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\ntype = \"external\"\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(cfgPath)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if cfg.SocketPath != "" {
+			t.Fatalf("SocketPath: got %q, want empty (resolved from SSH_AUTH_SOCK at the CLI layer)", cfg.SocketPath)
+		}
+		if !cfg.IsExternal() {
+			t.Fatalf("got AgentType=%q, want %q", cfg.AgentType, AgentTypeExternal)
+		}
+	})
+
+	t.Run("keys type still requires socket_path", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\ntype = \"keys\"\nkey_paths = [\"/tmp/k\"]\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(cfgPath); err == nil {
+			t.Fatal("expected error when socket_path is missing for type = \"keys\"")
+		}
+	})
+
+	t.Run("missing type is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		// Old-style config using the removed vault/external booleans, no type set.
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\nvault = true\nexternal = true\n\n[vault]\nvault_path = \"/tmp/vault.json\"\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(cfgPath); err == nil {
+			t.Fatal("expected error when [agent].type is missing")
+		}
+	})
+
+	t.Run("invalid type value is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.toml")
+		body := "[agent]\nsocket_path = \"/tmp/agent.sock\"\ntype = \"bogus\"\nkey_paths = [\"/tmp/k\"]\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(cfgPath); err == nil {
+			t.Fatal("expected error for invalid [agent].type value")
+		}
+	})
+
 	t.Run("relative socket_path is resolved against config file directory", func(t *testing.T) {
 		dir := t.TempDir()
 		cfgDir := filepath.Join(dir, "sshush")
@@ -262,7 +346,7 @@ func TestLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfgPath := filepath.Join(cfgDir, "config.toml")
-		body := "[agent]\nsocket_path = \"sshush.sock\"\nkey_paths = [\"/tmp/dummy-key\"]\nvault = false\n"
+		body := "[agent]\nsocket_path = \"sshush.sock\"\nkey_paths = [\"/tmp/dummy-key\"]\ntype = \"keys\"\n"
 		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}

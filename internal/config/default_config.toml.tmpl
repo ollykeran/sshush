@@ -1,8 +1,10 @@
 # Example config.toml
 [agent]
 socket_path = {{ printf "%q" .SocketPath }}
-vault = false
+type = "keys"
 key_paths = {{ .KeyPathsTOML }}
+# type = "vault"     # use [vault].vault_path as the agent backend instead of key_paths
+# type = "external"  # socket_path points at a foreign ssh-agent/1Password/etc.; sshush never starts/stops it
 
 # [vault]
 # vault_path = "~/.config/sshush/vault.json"
