@@ -33,7 +33,7 @@ On every run, before loading config, sshush runs `SetupConfig()`. It does two th
    - Writes `[agent].socket_path` (shown with `~` when under your home directory):
      - `$XDG_RUNTIME_DIR/sshush.sock` when `XDG_RUNTIME_DIR` is set (common on Linux desktops)
      - otherwise `~/.config/sshush/sshush.sock` (stable on macOS and minimal Linux environments)
-   - Writes `[agent].vault` = false and `[agent].key_paths` = discovered keys from `~/.ssh`
+   - Writes `[agent].type` = `"keys"` and `[agent].key_paths` = discovered keys from `~/.ssh`
    - Writes `[theme]` with `name = "default"` and commented custom colour hints
    - Appends commented-out `[vault]` and `[server]` sections with example keys so you can enable them later
    - Does not overwrite an existing config

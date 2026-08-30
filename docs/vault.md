@@ -85,7 +85,7 @@ Background: OpenSSH `PROTOCOL.agent` and RFC 9987; where they diverge (notably e
 ## Configuration prerequisites
 
 - **`sshush vault init`**: Set `[vault].vault_path` in config or pass `--vault-path`. Does not require the agent.
-- **Most other `sshush vault` subcommands**: Need config loaded (so `vault_path` resolves), and usually a **running** vault agent (`sshush start` with `[agent].vault = true`).
+- **Most other `sshush vault` subcommands**: Need config loaded (so `vault_path` resolves), and usually a **running** vault agent (`sshush start` with `[agent].type = "vault"`).
 - **`sshush vault list`**: Reads the vault file directly; if the running agent uses the same vault and is locked, the CLI may prompt to unlock so the **LOADED** column can be computed.
 
 Use `-c` / `--config` and `-s` / `--socket` as documented in global flags when needed.
@@ -132,7 +132,7 @@ sshush vault add <key_paths...> [--no-autoload]
 |------|---------|
 | `--no-autoload` | Store without autoload (visible until daemon restart only, unless you `vault load` later) |
 
-Requires `[agent].vault = true`, initialized vault, and `sshush start`. Default is autoload **on** (keys return after restart). In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
+Requires `[agent].type = "vault"`, initialized vault, and `sshush start`. Default is autoload **on** (keys return after restart). In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
 
 ### `vault remove`
 
@@ -187,7 +187,7 @@ No subcommand-specific flags beyond global `-c` / `-s`.
 
 ## TUI
 
-`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].vault = true` and `[vault].vault_path` is set — it mirrors every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
+`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it mirrors every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
 
 One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the `vault-session-unload` extension, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. `vault-session-unload` is the reverse of `vault-session-load`: payload is a UTF-8 SHA256 fingerprint, dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
 

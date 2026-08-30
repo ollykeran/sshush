@@ -31,13 +31,13 @@ Skeleton (chrome only)
 ├── CreateScreen  (page id "create")
 ├── EditScreen    (page id "edit")
 ├── ExportScreen  (page id "export")
-└── VaultScreen   (page id "vault"; registered only when [agent].vault = true and [vault].vault_path is set)
+└── VaultScreen   (page id "vault"; registered only when [agent].type = "vault" and [vault].vault_path is set)
 ```
 
 - **Skeleton**: Tabs, theme picker, help overlay, outer border/footer. Routes keys/mouse to the active page. Does not own daemon button logic (see `agent_chrome.go`).
 - **AgentScreen**: Keys table, found keys, file picker, passphrase, comment overlay. Implements `HeaderTools` and `GlobalHotkeys` (`s/x/r/L/u/d`).
 - **CreateScreen / EditScreen / ExportScreen**: Forms and actions using shared `FocusRing`, `KeyMap`, `SectionWidth`, `ButtonRow`.
-- **VaultScreen**: Vault identity management, mirroring `sshush vault` subcommands. Only registered when `[agent].vault = true` and `[vault].vault_path` is set; the tab bar shows no Vault entry in keys mode. The Agent tab remains page 0 and the default landing tab in every mode. Does not implement `HeaderTools`/`GlobalHotkeys`; claims its own row-delete `d` via `HandleDKey` instead (see Event order below).
+- **VaultScreen**: Vault identity management, mirroring `sshush vault` subcommands. Only registered when `[agent].type = "vault"` and `[vault].vault_path` is set (never for `"external"`, even if `vault_path` happens to be set); the tab bar shows no Vault entry otherwise. The Agent tab remains page 0 and the default landing tab in every mode. Does not implement `HeaderTools`/`GlobalHotkeys`; claims its own row-delete `d` via `HandleDKey` instead (see Event order below).
 
 ### Page contracts (`page.go`)
 
