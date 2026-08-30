@@ -22,6 +22,11 @@ func newStopCommand() *cobra.Command {
 }
 
 func runStop(cmd *cobra.Command, _ []string) error {
+	if env.Config != nil && env.Config.IsExternal() {
+		return style.NewOutput().
+			Error("[agent].type = \"external\": sshush does not manage this agent and will not stop it").
+			AsError()
+	}
 	pidFilePath := runtime.PidFilePath()
 	if err := sshushd.StopDaemon(pidFilePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
