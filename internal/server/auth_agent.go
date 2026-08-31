@@ -3,8 +3,8 @@ package server
 import (
 	"crypto/subtle"
 
-	sshagent "golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 // AgentAuth implements AuthKeySource using keys listed by an SSH agent.

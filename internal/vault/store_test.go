@@ -165,8 +165,8 @@ func TestVaultStore_AtomicWrite(t *testing.T) {
 	// Simulate crash: write different content to .tmp only (as if Save() wrote but did not rename)
 	tmpPath := path + ".tmp"
 	crashFile := VaultFile{
-		Version:  VaultFileVersion,
-		Metadata: &VaultMetadata{Salt: []byte("crashed_salt________"), Canary: []byte("crashed_canary______"), CreatedAt: "2025-01-03T00:00:00Z"},
+		Version:    VaultFileVersion,
+		Metadata:   &VaultMetadata{Salt: []byte("crashed_salt________"), Canary: []byte("crashed_canary______"), CreatedAt: "2025-01-03T00:00:00Z"},
 		Identities: nil,
 	}
 	data, _ := json.MarshalIndent(crashFile, "", "  ")

@@ -171,8 +171,8 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 	defer agentConn.Close()
 	signers := sshagent.NewClient(agentConn)
 	clientConfig := &ssh.ClientConfig{
-		User: "e2e",
-		Auth: []ssh.AuthMethod{ssh.PublicKeysCallback(signers.Signers)},
+		User:            "e2e",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeysCallback(signers.Signers)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         5 * time.Second,
 	}
@@ -365,8 +365,8 @@ func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
 	defer agentConn.Close()
 	signers := sshagent.NewClient(agentConn)
 	clientConfig := &ssh.ClientConfig{
-		User: "e2e",
-		Auth: []ssh.AuthMethod{ssh.PublicKeysCallback(signers.Signers)},
+		User:            "e2e",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeysCallback(signers.Signers)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         5 * time.Second,
 	}
