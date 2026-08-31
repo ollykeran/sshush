@@ -12,8 +12,8 @@ Options are grouped into TOML tables:
 
 | Section | Purpose |
 |---------|---------|
-| `[agent]` | Socket path, key paths, vault mode flag |
-| `[vault]` | Vault file path; required when `[agent].vault` is true, optional when false (for `sshush vault` CLI while the agent uses `key_paths`) |
+| `[agent]` | Socket path, key paths, agent backend type |
+| `[vault]` | Vault file path; required when `[agent].type` is `"vault"`, optional otherwise (for `sshush vault` CLI while the agent uses `key_paths`) |
 | `[server]` | TCP SSH server listen port and related paths |
 | `[theme]` | Colours (preset or custom hex) and plain output mode |
 
@@ -24,7 +24,7 @@ Older releases used top-level keys. Move values into the tables above. CLI overr
 **Checklist:**
 
 1. Move `socket_path`, `key_paths`, and any vault flag into `[agent]`.
-2. Add `vault = false` (or `true` for vault mode) under `[agent]`.
+2. Add `type = "keys"` (or `"vault"` for vault mode) under `[agent]` — see [Migration from the `[agent].vault` boolean](#migration-from-the-agentvault-boolean-breaking) below if you already have `vault = true/false`.
 3. Move `vault_path` into `[vault]` when you use vault mode or `sshush vault` CLI commands.
 4. Rename server keys: `server_listen` → `[server].listen_port`, `server_authorized_keys` → `[server].authorized_keys`, `server_host_key` → `[server].host_key`.
 5. Keep `[theme]` as-is.
@@ -45,7 +45,7 @@ name = "dracula"
 ```toml
 [agent]
 socket_path = "~/.ssh/sshush.sock"
-vault       = false
+type        = "keys"
 key_paths   = ["~/.ssh/id_ed25519"]
 
 [theme]
@@ -72,7 +72,7 @@ name = "dracula"
 ```toml
 [agent]
 socket_path = "~/.ssh/sshush.sock"
-vault       = false
+type        = "keys"
 key_paths   = ["~/.ssh/id_ed25519"]
 
 # [vault]
@@ -87,9 +87,21 @@ host_key        = "~/.ssh/host_key"
 name = "dracula"
 ```
 
-For vault-only use, set `[agent].vault = true`, put `vault_path` under `[vault]`, and omit or adjust `key_paths` as needed.
+For vault-only use, set `[agent].type = "vault"`, put `vault_path` under `[vault]`, and omit or adjust `key_paths` as needed.
 
-To run the agent from `key_paths` but still point `sshush vault list` (and other vault commands) at a file, set `[agent].vault = false`, keep `key_paths`, and set `[vault].vault_path`. The daemon uses the keyring; vault commands use the file on disk.
+To run the agent from `key_paths` but still point `sshush vault list` (and other vault commands) at a file, set `[agent].type = "keys"`, keep `key_paths`, and set `[vault].vault_path`. The daemon uses the keyring; vault commands use the file on disk.
+
+### Migration from the `[agent].vault` boolean (breaking)
+
+Older releases used `[agent].vault = true/false` plus (later) a separate `[agent].external = true/false`. Both were replaced by a single `[agent].type` string so the three backend modes are mutually exclusive by construction instead of by validation.
+
+| Old | New |
+|-----|-----|
+| `vault = false` | `type = "keys"` |
+| `vault = true` | `type = "vault"` |
+| `external = true` | `type = "external"` |
+
+`[agent].type` is now required; a config still using the old `vault`/`external` booleans without `type` fails to load with a clear error telling you to migrate.
 
 ## Config Flow
 
@@ -119,16 +131,16 @@ See also: [Setup](setup.md) | [TUI](tui.md)
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `socket_path` | Unix socket for the agent | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
-| `vault` | If true, use `[vault].vault_path` instead of loading only from `key_paths` | `true` / `false` |
-| `key_paths` | Paths to private keys to load when not in vault-only mode (optional when `vault = true` if you add keys after unlock) | `["~/.ssh/id_ed25519"]` |
+| `socket_path` | Unix socket for the agent. Required for `type = "vault"`/`"keys"`. Optional for `type = "external"` — falls back to `SSH_AUTH_SOCK`, resolved fresh on every run. | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
+| `type` | Agent backend: `"keys"` (in-memory keyring from `key_paths`), `"vault"` (use `[vault].vault_path` as the backend), or `"external"` (socket_path points at an agent sshush does not own). Required. | `"keys"` / `"vault"` / `"external"` |
+| `key_paths` | Paths to private keys to load when `type` is `"keys"` (optional for `"vault"` if you add keys after unlock; ignored for `"external"`) | `["~/.ssh/id_ed25519"]` |
 
 Example (in-memory keyring):
 
 ```toml
 [agent]
 socket_path = "~/.config/sshush/sshush.sock"
-vault       = false
+type        = "keys"
 key_paths   = ["~/.ssh/id_ed25519", "~/.ssh/id_rsa"]
 ```
 
@@ -137,7 +149,7 @@ Example (vault mode):
 ```toml
 [agent]
 socket_path = "~/.ssh/sshush.sock"
-vault       = true
+type        = "vault"
 
 [vault]
 vault_path = "~/.ssh/vault.json"
@@ -146,7 +158,18 @@ vault_path = "~/.ssh/vault.json"
 name = "dracula"
 ```
 
-When `vault` is true, `key_paths` is optional (you add keys with `sshush add` after unlocking). You must set either `vault = true` with `[vault].vault_path`, or `vault = false` with `key_paths` present.
+When `type` is `"vault"`, `key_paths` is optional (you add keys with `sshush add` after unlocking). You must set either `type = "vault"` with `[vault].vault_path`, or `type = "keys"` with `key_paths` and/or `[vault].vault_path` present.
+
+Example (external agent — sshush as a pure client of a foreign `ssh-agent`):
+
+```toml
+[agent]
+type = "external"
+```
+
+`socket_path` is **optional** for `type = "external"` (required for `"vault"`/`"keys"`): a real `ssh-agent` picks a new socket path every time it starts (e.g. `/tmp/ssh-XXXXXXXXXX/agent.NNNN`), so a fixed path in config would go stale. When omitted, sshush resolves the socket from `SSH_AUTH_SOCK` fresh on every command — the normal way a shell that ran `eval $(ssh-agent)` already exposes it. Set `socket_path` explicitly instead if your external agent listens on a stable path (some system-integrated agents do).
+
+With `type = "external"`, `sshush list`/`add`/`remove`/`lock`/`unlock` work against whatever agent is listening at `socket_path` (or `SSH_AUTH_SOCK`), but `sshush start`, `stop`, and `reload` refuse to start, stop, or restart anything there — start your own agent yourself.
 
 CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`.
 
@@ -154,9 +177,9 @@ CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`.
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `vault_path` | Path to the vault file (plaintext JSON; private keys stored encrypted per-identity). Required when `[agent].vault` is true; optional when false (for `sshush vault` CLI while the agent uses `key_paths`) | `"~/.ssh/vault.json"` |
+| `vault_path` | Path to the vault file (plaintext JSON; private keys stored encrypted per-identity). Required when `[agent].type` is `"vault"`; optional otherwise (for `sshush vault` CLI while the agent uses `key_paths`) | `"~/.ssh/vault.json"` |
 
-When `[agent].vault` is false, `[vault].vault_path` is optional and used only by `sshush vault` subcommands. The daemon ignores it and loads from `key_paths` instead.
+When `[agent].type` is not `"vault"`, `[vault].vault_path` is optional and used only by `sshush vault` subcommands. The daemon ignores it and loads from `key_paths` instead.
 
 ## `[server]`
 
@@ -177,11 +200,11 @@ Paths support `~` expansion. Set `listen_port`, then run `sshush server` to star
 
 ## Vault
 
-When `[agent].vault` is true and `[vault].vault_path` points to a vault file, the daemon uses that file instead of loading keys only from `key_paths`. The vault is a single plaintext JSON file (e.g. `vault.json`) so you can inspect its structure; private key material is stored as encrypted blobs per-identity. The master key is derived from your passphrase and is wiped when you run `sshush lock`.
+When `[agent].type` is `"vault"` and `[vault].vault_path` points to a vault file, the daemon uses that file instead of loading keys only from `key_paths`. The vault is a single plaintext JSON file (e.g. `vault.json`) so you can inspect its structure; private key material is stored as encrypted blobs per-identity. The master key is derived from your passphrase and is wiped when you run `sshush lock`.
 
 **One-time setup:**
 
-1. Set `[agent].vault = true` and `[vault].vault_path` (e.g. `"~/.ssh/vault.json"`). If you give a directory, `vault.json` is used inside it.
+1. Set `[agent].type = "vault"` and `[vault].vault_path` (e.g. `"~/.ssh/vault.json"`). If you give a directory, `vault.json` is used inside it.
 2. Run `sshush vault init` (optionally `--vault-path ...` if not using config). Set and confirm a passphrase; a 24-word recovery phrase is generated by default (also written as `recovery.txt` next to the vault). Pass `--no-recovery` to skip.
 
 **Master passphrase policy** (applies only at `vault init`, not when unlocking):
@@ -198,7 +221,7 @@ Strength checks are policy-based (length and character classes), not a statistic
 2. Add keys with the normal add command: `sshush add ~/.ssh/id_ed25519` (or `ssh-add - add`). There is no separate "vault add"; the same `sshush add` sends the key to the agent, and when the agent is a vault, it encrypts and stores it in the vault file.
 3. Lock when done: `sshush lock`. While locked, the agent reports **no** identities (same as OpenSSH agent when locked). Unlock again with `sshush unlock`; if the vault is already unlocked, `sshush unlock` prints that and does not prompt for a passphrase.
 
-If you start the daemon **without** vault mode, it uses the in-memory keyring and keys are never written to a vault file. To use the vault you must have `[agent].vault = true`, `[vault].vault_path` set, have run `vault init` once, and add keys with `sshush add` after unlocking.
+If you start the daemon **without** vault mode, it uses the in-memory keyring and keys are never written to a vault file. To use the vault you must have `[agent].type = "vault"`, `[vault].vault_path` set, have run `vault init` once, and add keys with `sshush add` after unlocking.
 
 If `ssh` still authenticates after lock, check that `SSH_AUTH_SOCK` points at sshush and that OpenSSH is not using another key via `IdentityFile` or a second agent (see `ssh -v`). Use `IdentitiesOnly` and agent-only identity settings if you need strict agent-only auth.
 

@@ -23,19 +23,32 @@ type ThemeSection struct {
 	NoColor bool   `toml:"no_color"`
 }
 
+// Agent backend types for [agent].type.
+const (
+	AgentTypeVault    = "vault"    // sshushd uses VaultPath as the agent backend.
+	AgentTypeKeys     = "keys"     // sshushd loads keys from KeyPaths into an in-memory keyring.
+	AgentTypeExternal = "external" // socket_path points at an agent sshush does not own; sshush never starts, stops, or reloads a daemon for it.
+)
+
 // Config is the runtime view of the TOML file (flat fields for callers).
 // On disk the file uses [agent], [vault], [server], and [theme] sections.
 type Config struct {
-	KeyPaths   []string // From [agent].key_paths; when AgentVault is false, keys load from these paths.
+	KeyPaths   []string // From [agent].key_paths; when AgentType is not "vault", keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
-	AgentVault bool     // From [agent].vault; when true, sshushd uses VaultPath as the agent backend.
-	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentVault is false).
+	AgentType  string   // From [agent].type: "vault", "keys", or "external".
+	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentType is not "vault").
 	Theme      ThemeSection
 
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
 	ServerHostKey        string // From [server].host_key.
 }
+
+// IsVault reports whether the agent uses the vault backend.
+func (c Config) IsVault() bool { return c.AgentType == AgentTypeVault }
+
+// IsExternal reports whether socket_path points at an agent sshush does not own.
+func (c Config) IsExternal() bool { return c.AgentType == AgentTypeExternal }
 
 // configDocument matches the on-disk TOML layout.
 type configDocument struct {
@@ -48,7 +61,7 @@ type configDocument struct {
 type agentSection struct {
 	SocketPath string   `toml:"socket_path"`
 	KeyPaths   []string `toml:"key_paths"`
-	Vault      bool     `toml:"vault"`
+	Type       string   `toml:"type"`
 }
 
 type vaultSection struct {
@@ -75,7 +88,7 @@ func toDocument(cfg Config) configDocument {
 	a := agentSection{
 		SocketPath: cfg.SocketPath,
 		KeyPaths:   cfg.KeyPaths,
-		Vault:      cfg.AgentVault,
+		Type:       cfg.AgentType,
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -163,49 +176,65 @@ func LoadConfig(path string) (Config, error) {
 
 // VaultPathForAgent returns the vault file path when the agent should use the vault backend; otherwise empty.
 func (c Config) VaultPathForAgent() string {
-	if !c.AgentVault || c.VaultPath == "" {
+	if !c.IsVault() || c.VaultPath == "" {
 		return ""
 	}
 	return c.VaultPath
 }
 
 // AgentBackendMode returns a short label for the agent storage backend: "vault" or "keys".
+// External agents are reported as "keys" since they never expose sshush's vault extensions.
 func (c Config) AgentBackendMode() string {
-	if c.VaultPathForAgent() != "" {
-		return "vault"
+	if c.IsVault() {
+		return AgentTypeVault
 	}
-	return "keys"
+	return AgentTypeKeys
 }
 
 func documentToConfig(doc *configDocument) (Config, error) {
-	if doc.Agent.SocketPath == "" {
+	switch doc.Agent.Type {
+	case AgentTypeVault, AgentTypeKeys, AgentTypeExternal:
+	default:
+		return Config{}, style.NewOutput().
+			Error("[agent].type is required and must be \"vault\", \"keys\", or \"external\"").
+			Info("Configs from before this option existed used [agent].vault = true/false; replace that with type = \"vault\" or type = \"keys\".").
+			AsError()
+	}
+
+	// socket_path is required for vault/keys (sshush owns and dials a fixed
+	// path), but optional for external: a real ssh-agent's socket often
+	// changes every launch, so it's resolved from SSH_AUTH_SOCK at runtime instead.
+	if doc.Agent.SocketPath == "" && doc.Agent.Type != AgentTypeExternal {
 		return Config{}, style.NewOutput().
 			Error("[agent].socket_path is required").
 			AsError()
 	}
 
 	vaultPath := doc.Vault.VaultPath
-	if doc.Agent.Vault {
+	switch doc.Agent.Type {
+	case AgentTypeVault:
 		if vaultPath == "" {
 			return Config{}, style.NewOutput().
-				Error("when [agent].vault is true, [vault].vault_path must be set").
+				Error("when [agent].type is \"vault\", [vault].vault_path must be set").
 				AsError()
 		}
-	} else {
+	case AgentTypeKeys:
 		hasKeys := doc.Agent.KeyPaths != nil
 		hasVaultPath := vaultPath != ""
 		if !hasKeys && !hasVaultPath {
 			return Config{}, style.NewOutput().
-				Error("config must set [agent].key_paths and/or [vault].vault_path when [agent].vault is false").
+				Error("config must set [agent].key_paths and/or [vault].vault_path when [agent].type is \"keys\"").
 				Info("Use key_paths for the agent; optional vault_path for sshush vault commands while the agent uses key_paths.").
 				AsError()
 		}
+	case AgentTypeExternal:
+		// No key material requirement: sshush is a pure client of an agent it does not manage.
 	}
 
 	cfg := Config{
 		SocketPath:           doc.Agent.SocketPath,
 		KeyPaths:             doc.Agent.KeyPaths,
-		AgentVault:           doc.Agent.Vault,
+		AgentType:            doc.Agent.Type,
 		VaultPath:            vaultPath,
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
@@ -158,6 +159,13 @@ func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config
 			cfg.KeyPaths = append(cfg.KeyPaths, utils.ExpandHomeDirectory(p))
 		}
 	}
+	// External agents (real ssh-agent, 1Password, etc.) often listen on a
+	// path that changes every launch (e.g. ssh-agent's /tmp/ssh-XXXXXX/agent.NNNN),
+	// so [agent].socket_path is optional for type = "external" — fall back to
+	// whatever SSH_AUTH_SOCK currently points at, resolved fresh on every run.
+	if cfg.IsExternal() && cfg.SocketPath == "" {
+		cfg.SocketPath = strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK"))
+	}
 	return cfg, nil
 }
 
@@ -206,10 +214,10 @@ func NewRootCommand() *cobra.Command {
 				}
 			}
 
-		cfg, err := LoadMergedConfig(configPath, overrides)
-		if err != nil {
-			return fmt.Errorf("cli: load merged config: %w", err)
-		}
+			cfg, err := LoadMergedConfig(configPath, overrides)
+			if err != nil {
+				return fmt.Errorf("cli: load merged config: %w", err)
+			}
 
 			env.Config = &cfg
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))

@@ -66,7 +66,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		if live && mode == "vault" {
 			if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
 				msg := err.Error()
-				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.AgentVault && env.Config.VaultPath != "" {
+				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.IsVault() && env.Config.VaultPath != "" {
 					msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
 				} else {
 					msg = "failed to add key: " + msg

@@ -78,6 +78,18 @@ func runReload(cmd *cobra.Command, _ []string) error {
 
 	// Socket changed or agent unreachable: stop the old daemon and start a new one.
 	if needsRestart {
+		if newCfg.IsExternal() {
+			if newCfg.SocketPath == "" {
+				return style.NewOutput().
+					Error("[agent].type = \"external\" but no socket found").
+					Info("Set [agent].socket_path, or export SSH_AUTH_SOCK before running sshush, then try again.").
+					AsError()
+			}
+			return style.NewOutput().
+				Error("cannot reconcile: no agent reachable at " + newCfg.SocketPath).
+				Info("[agent].type = \"external\": sshush will not stop/start a daemon here; ensure your external agent is running at that socket.").
+				AsError()
+		}
 		_ = sshushd.StopDaemon(pidFilePath) // best-effort; may already be gone
 		style.NewOutput().Info("restarting sshushd with new config...").Print()
 		return runStartDaemon(cmd)

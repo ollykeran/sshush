@@ -18,6 +18,7 @@ func TestLoadMergedConfig_noOverrides(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/tmp/agent.sock",
 		KeyPaths:   []string{"/tmp/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := config.LoadConfig(path)
@@ -39,6 +40,7 @@ func TestLoadMergedConfig_socketOverride(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/from/file.sock",
 		KeyPaths:   []string{"/tmp/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := LoadMergedConfig(path, LoadOverrides{
@@ -60,6 +62,7 @@ func TestLoadMergedConfig_keyAppend(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/tmp/sock",
 		KeyPaths:   []string{"/config/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := LoadMergedConfig(path, LoadOverrides{

@@ -43,10 +43,17 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			AsError()
 	}
 	if cfg.ServerAuthorizedKeys == "" && !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
-		return style.NewOutput().
-			Error("Agent not running.").
-			Info("Start the agent first with 'sshush start'.").
-			AsError()
+		out := style.NewOutput().Error("Agent not running.")
+		if cfg.IsExternal() {
+			if cfg.SocketPath == "" {
+				out.Info("[agent].type = \"external\" but no socket found; set [agent].socket_path or export SSH_AUTH_SOCK.")
+			} else {
+				out.Info("[agent].type = \"external\": start your external agent at " + cfg.SocketPath + " first.")
+			}
+		} else {
+			out.Info("Start the agent first with 'sshush start'.")
+		}
+		return out.AsError()
 	}
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
