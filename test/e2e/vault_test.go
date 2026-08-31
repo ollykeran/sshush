@@ -95,9 +95,9 @@ func writeE2EConfig(t *testing.T, dir, socketPath, vaultPath string, keyPaths []
 	b.WriteString("[agent]\n")
 	b.WriteString(fmt.Sprintf("socket_path = %q\n", socketPath))
 	if vaultPath != "" {
-		b.WriteString("vault = true\n")
+		b.WriteString("type = \"vault\"\n")
 	} else {
-		b.WriteString("vault = false\n")
+		b.WriteString("type = \"keys\"\n")
 	}
 	if len(keyPaths) > 0 {
 		quoted := make([]string, len(keyPaths))

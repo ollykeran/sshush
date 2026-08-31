@@ -66,6 +66,19 @@ func runStartDaemon(cmd *cobra.Command) error {
 		return nil
 	}
 
+	if cfg.IsExternal() {
+		if cfg.SocketPath == "" {
+			return style.NewOutput().
+				Error("[agent].type = \"external\" but no socket found").
+				Info("Set [agent].socket_path, or export SSH_AUTH_SOCK before running sshush, then try again.").
+				AsError()
+		}
+		return style.NewOutput().
+			Error("no agent reachable at " + utils.DisplayPath(cfg.SocketPath)).
+			Info("[agent].type = \"external\": sshush will not start a daemon here; start your external agent (ssh-agent, 1Password, etc.) and point socket_path/SSH_AUTH_SOCK at it.").
+			AsError()
+	}
+
 	out := style.NewOutput()
 	loadable := 0
 	for _, kp := range cfg.KeyPaths {

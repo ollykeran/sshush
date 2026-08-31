@@ -67,7 +67,7 @@ func unlockVaultAgentIfLocked(socketPath, resolvedVaultPath string) {
 		return
 	}
 	agentVaultFile := ""
-	if env.Config.AgentVault && env.Config.VaultPath != "" {
+	if env.Config.IsVault() && env.Config.VaultPath != "" {
 		agentVaultFile = vault.ResolveToFile(utils.ExpandHomeDirectory(env.Config.VaultPath))
 	}
 	if agentVaultFile == "" || resolvedVaultPath != agentVaultFile {
@@ -222,7 +222,7 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 	socketPath, sockErr := getSocketPath()
 	if sockErr == nil {
 		agentVaultFile := ""
-		if env.Config != nil && env.Config.AgentVault && env.Config.VaultPath != "" {
+		if env.Config != nil && env.Config.IsVault() && env.Config.VaultPath != "" {
 			agentVaultFile = vault.ResolveToFile(utils.ExpandHomeDirectory(env.Config.VaultPath))
 		}
 		if agentVaultFile != "" && vaultPath == agentVaultFile {
@@ -326,7 +326,7 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 		}
 		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
 			msg := err.Error()
-			if msg == "agent: generic extension failure" && env.Config.AgentVault && env.Config.VaultPath != "" {
+			if msg == "agent: generic extension failure" && env.Config.IsVault() && env.Config.VaultPath != "" {
 				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
 			} else {
 				msg = "failed to add key: " + msg
@@ -342,8 +342,8 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 
 func newVaultRemoveCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "remove <fingerprint|comment|key_path...>",
-		Short:   "Remove identity(ies) from the vault store",
+		Use:   "remove <fingerprint|comment|key_path...>",
+		Short: "Remove identity(ies) from the vault store",
 		Long: "Remove keys from the encrypted vault by SHA256 fingerprint, comment, or private key file path. " +
 			"Works even when the key is not listed by the agent (for example after restart with autoload off). " +
 			"Requires a running vault agent and an unlocked vault.",
@@ -420,12 +420,12 @@ func runVaultRemove(cmd *cobra.Command, args []string) error {
 
 func newVaultLoadCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "load <fingerprint|comment|key_path...>",
-		Short:   "Load non-autoload vault key(s) into this agent session",
+		Use:   "load <fingerprint|comment|key_path...>",
+		Short: "Load non-autoload vault key(s) into this agent session",
 		Long: "For identities stored with autoload off, mark them visible in the running agent until it restarts, " +
 			"so ssh can use them without the PEM file. Requires an unlocked vault agent.",
-		RunE:    runVaultLoad,
-		Args:    cobra.MinimumNArgs(1),
+		RunE: runVaultLoad,
+		Args: cobra.MinimumNArgs(1),
 	}
 	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
 	return cmd
@@ -468,9 +468,14 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 		}
 		_, err = agent.CallExtension(socketPath, vault.ExtensionVaultSessionLoad, []byte(id.Fingerprint))
 		if err != nil {
-			msg := err.Error()
-			if msg == "agent: generic extension failure" {
+			var msg string
+			switch {
+			case errors.Is(err, sshagent.ErrExtensionUnsupported):
+				msg = "this agent does not support vault session-load; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+			case err.Error() == "agent: generic extension failure":
 				msg = "vault load failed (wrong fingerprint, vault locked, or key already autoloads)"
+			default:
+				msg = err.Error()
 			}
 			return style.NewOutput().Error(msg).AsError()
 		}
@@ -548,9 +553,14 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 		payload := vault.BuildSetAutoloadPayload(id.Fingerprint, on)
 		_, err = agent.CallExtension(socketPath, vault.ExtensionVaultSetAutoload, payload)
 		if err != nil {
-			msg := err.Error()
-			if msg == "agent: generic extension failure" {
+			var msg string
+			switch {
+			case errors.Is(err, sshagent.ErrExtensionUnsupported):
+				msg = "this agent does not support vault set-autoload; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+			case err.Error() == "agent: generic extension failure":
 				msg = "vault autoload failed (vault locked or identity not found)"
+			default:
+				msg = err.Error()
 			}
 			return style.NewOutput().Error(msg).AsError()
 		}
@@ -573,7 +583,15 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	conn, err := net.Dial("unix", env.Config.SocketPath)
+	socketPath, err := getSocketPath()
+	if err != nil {
+		return style.NewOutput().Error("failed to get socket path").AsError()
+	}
+	mode, live := agent.LiveBackendMode(socketPath)
+	if !live || mode != "vault" {
+		return style.NewOutput().Error("vault unlock-recovery requires a running vault agent; set [agent].vault = true and run 'sshush start'").AsError()
+	}
+	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
 	}
@@ -589,11 +607,14 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	// Extension type and payload: we use "unlock-recovery" with mnemonic as contents
 	resp, err := client.Extension("unlock-recovery", []byte(mnemonic))
 	if err != nil {
-		msg := err.Error()
-		if msg == "agent: generic extension failure" {
+		var msg string
+		switch {
+		case errors.Is(err, sshagent.ErrExtensionUnsupported):
+			msg = "this agent does not support recovery unlock; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+		case err.Error() == "agent: generic extension failure":
 			msg = "unlock failed: wrong phrase or vault was created with --no-recovery. Use exactly 24 words, single spaces."
-		} else {
-			msg = "unlock with recovery failed: " + msg
+		default:
+			msg = "unlock with recovery failed: " + err.Error()
 		}
 		return style.NewOutput().Error(msg).AsError()
 	}
