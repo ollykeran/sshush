@@ -2,10 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
@@ -13,7 +13,6 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newStartCommand() *cobra.Command {
@@ -55,12 +54,11 @@ func runStartDaemon(cmd *cobra.Command) error {
 		}
 		out := style.NewOutput().
 			Success("* sshushd running at " + utils.DisplayPath(absSocket))
-		conn, err := net.Dial("unix", cfg.SocketPath)
+		session, err := agent.Open(cfg.SocketPath)
 		if err == nil {
-			defer conn.Close()
-			client := sshagent.NewClient(conn)
+			defer session.Close()
 			out.Spacer()
-			_ = AppendKeysTo(client, out, cfg.SocketPath, cfg.VaultPathForAgent())
+			_ = AppendKeysTo(session, out)
 		}
 		out.PrintErr()
 		return nil
@@ -137,10 +135,9 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 	}
 	out.Success("* sshushd started with socket: " + utils.DisplayPath(absSocket))
 
-	conn, err := net.Dial("unix", socketPath)
+	session, err := agent.Open(socketPath)
 	if err == nil {
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
+		defer session.Close()
 		if vp := cfg.VaultPathForAgent(); vp != "" {
 			resolvedVault := vault.ResolveToFile(vp)
 			store, openErr := vault.Open(resolvedVault)
@@ -156,7 +153,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 					out.Spacer()
 					out.Error("unlock skipped: " + err.Error())
 				} else {
-					if err := client.Unlock(passphrase); err != nil {
+					if err := session.Unlock(passphrase); err != nil {
 						out.Spacer()
 						out.Error("unlock failed: " + err.Error())
 					}
@@ -165,7 +162,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 			}
 		}
 		out.Spacer()
-		_ = AppendKeysTo(client, out, socketPath, cfg.VaultPathForAgent())
+		_ = AppendKeysTo(session, out)
 	}
 
 	out.PrintErr()

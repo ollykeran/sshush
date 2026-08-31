@@ -2,15 +2,12 @@ package cli
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newSelftestCommand() *cobra.Command {
@@ -50,16 +47,25 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 		out.Add(style.Focus("env:    ") + style.Success(fmt.Sprintf("SSH_AUTH_SOCK=%s  ✓", authSock)))
 	}
 
-	liveMode, liveOK := agent.LiveBackendMode(socketPath)
+	session, sessionErr := agent.Open(socketPath)
+	if sessionErr == nil {
+		defer session.Close()
+	}
+	var backend agent.Backend
+	liveOK := false
+	if sessionErr == nil {
+		if b, err := session.Backend(); err == nil {
+			backend, liveOK = b, true
+		}
+	}
 	if liveOK {
-		out.Add(style.Focus("agent:  ") + style.Success(liveMode+"  ✓"))
+		out.Add(style.Focus("agent:  ") + style.Success(backend.Mode+"  ✓"))
 	} else {
 		out.Add(style.Focus("agent:  ") + style.Err("unreachable"))
 	}
 
-	if liveMode == "vault" {
-		resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-		if extErr == nil && len(resp) == 1 && resp[0] == 1 {
+	if backend.Mode == "vault" {
+		if backend.VaultLocked {
 			out.Add(style.Focus("state:  ") + style.Err("locked"))
 		} else {
 			out.Add(style.Focus("state:  ") + style.Success("unlocked  ✓"))
@@ -76,7 +82,14 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 	}
 	out.Add(style.Focus("socket: ") + style.Success(fmt.Sprintf("%s  ✓", socketPath)))
 
-	keys, err := agent.ListKeysFromSocket(socketPath)
+	// The socket file can exist while the dial failed (a stale socket), so the
+	// os.Stat check above does not guarantee a session.
+	if sessionErr != nil {
+		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", sessionErr)))
+		out.Print()
+		return nil
+	}
+	keys, err := session.List()
 	if err != nil {
 		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
 		out.Print()
@@ -89,17 +102,7 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 	}
 	out.Add(style.Focus("list:   ") + style.Success(fmt.Sprintf("%d key(s) loaded  ✓", len(keys))))
 
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		out.Add(style.Focus("sign:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
-		out.Print()
-		return nil
-	}
-	defer conn.Close()
-
-	client := sshagent.NewClient(conn)
-	_, err = client.Sign(keys[0], []byte("sshush-test"))
-	if err != nil {
+	if _, err := session.Sign(keys[0], []byte("sshush-test")); err != nil {
 		out.Add(style.Focus("sign:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
 		out.Print()
 		return nil
