@@ -17,7 +17,7 @@ Many internal packages already have good doc comments:
 - `internal/runtime/runtime.go`: ResolveConfigPath, ResolveDaemonConfigPath, PidFilePath, ResolveSocketPath
 - `internal/cli/root.go`: LoadMergedConfig, LoadOverrides
 
-Gaps: package-level comments, some exported types, `internal/agent`, `internal/keys`, `internal/tui`.
+Gaps: package-level comments, some exported types, `internal/keys`, `internal/tui`.
 
 ## Implementation Steps
 

@@ -6,7 +6,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 
 - **cmd/sshush** – CLI entry point
 - **cmd/sshushd** – Daemon entry point (runs the agent)
-- **internal/agent** – SSH agent logic, socket ops, key list/add/remove
+- **internal/agent** – SSH agent protocol: serving it over a Unix socket, and `Session`, the single client entry point for reaching a running agent
 - **internal/cli** – Cobra commands (start, stop, list, add, remove, reload, create, edit, export, find, tui, completion)
 - **internal/config** – Config load, default creation, shell rc setup
 - **internal/platform** – Portable defaults for config dir, socket/pid paths, shell rc selection
@@ -21,6 +21,22 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/version** – Version string
 
 CLI loads config and starts the daemon; daemon runs the agent on a Unix socket. OpenSSH (`ssh`, `ssh-add`) connect via `SSH_AUTH_SOCK`.
+
+## Talking to a running agent
+
+Every client-side conversation with a running agent goes through `agent.Session` (`internal/agent/session.go`). `agent.Open(socketPath)` dials the socket and returns a Session that owns the connection; `Close` releases it. Three rules keep this seam intact:
+
+**One Session per unit of work.** A CLI command opens one Session and carries all of its work over it; a TUI `tea.Cmd` opens one and closes it before returning. Nothing else dials the agent socket. This matters because the interface used to be one function per call, each dialling its own connection: `sshush edit` cost around thirteen connections, and the TUI's two-second vault poll cost two every tick. `Session.Backend` is the reason most of that collapsed — it reports the backend mode *and* whether a vault is locked in one round-trip, where the old probe discarded the response body and forced callers to ask twice.
+
+**`internal/agent` owns the transport; `internal/vault` owns the extension vocabulary.** `Session.Extension` takes an extension name as given. The named wrappers — `vault.AddPrivateKeyFile`, `SetAutoload`, `SetComment`, `SessionLoad`, `SessionUnload`, `UnlockWithRecoveryPhrase` — live in `internal/vault/session_ops.go`, next to the payload builders they use.
+
+**`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why `extensionVaultLocked` is duplicated at `internal/agent/backend_kind.go` with a comment saying it must match `vault.ExtensionVaultLocked`, and why `Session.Backend` is the only extension `internal/agent` names for itself.
+
+Session's pass-through methods return the agent client's error unmodified. Callers match on the exact text `golang.org/x/crypto/ssh/agent` produces — `"agent: failure"`, `"agent: generic extension failure"` — to tell a locked vault from a real failure, so wrapping there would silently change user-facing messages. Note that server-side error text never crosses the wire: `ServeAgent` sends a bare failure code and the client synthesises the string.
+
+Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
+
+Two things deliberately do not use a Session. `internal/sshushd`'s liveness probes (`CheckAlreadyRunning`, `WaitForSocket`) dial and close without speaking the protocol, so a Session would spawn a client and a goroutine to learn nothing. And `RunServerOnly` holds one long-lived agent client for the life of the SSH server daemon, handing it to `server.AgentAuth`, which is typed against `sshagent.Agent`.
 
 ## Daemon startup
 
