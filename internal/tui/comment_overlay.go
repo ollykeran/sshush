@@ -120,22 +120,27 @@ func saveCommentOverlayCmd(socketPath, fingerprint, comment string) tea.Cmd {
 			return commentOverlaySavedMsg{fingerprint: fingerprint, err: err}
 		}
 
-		mode, live := agent.LiveBackendMode(socketPath)
-		if live && mode == "vault" {
-			payload := vault.BuildSetCommentPayload(fingerprint, comment)
-			if _, err := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); err != nil {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
+		}
+		defer session.Close()
+
+		backend, backendErr := session.Backend()
+		if backendErr == nil && backend.Mode == "vault" {
+			if err := vault.SetComment(session, fingerprint, comment); err != nil {
 				return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but vault comment not updated: %w", err)}
 			}
-			if err := vault.AddPrivateKeyFileToSocket(socketPath, path, true); err != nil {
+			if err := vault.AddPrivateKeyFile(session, path, true); err != nil {
 				return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
 			}
 			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment}
 		}
 
-		if _, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, fingerprint); err != nil {
+		if _, err := session.RemoveByFingerprint(fingerprint); err != nil {
 			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
 		}
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		if err := session.AddKeyFromPath(path); err != nil {
 			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
 		}
 		return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment}
