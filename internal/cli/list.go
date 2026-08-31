@@ -28,7 +28,12 @@ func runList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}
-	keys, err := agent.ListKeysFromSocket(socketPath)
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		return fmt.Errorf("cli: list keys from socket: %w", err)
+	}
+	defer session.Close()
+	keys, err := session.List()
 	if err != nil {
 		return fmt.Errorf("cli: list keys from socket: %w", err)
 	}

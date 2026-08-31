@@ -2,13 +2,10 @@ package cli
 
 import (
 	"errors"
-	"net"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newLockCommand() *cobra.Command {
@@ -30,24 +27,22 @@ func runLock(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
 	}
-	switch mode {
+	defer session.Close()
+	backend, err := session.Backend()
+	if err != nil {
+		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
+	}
+	switch backend.Mode {
 	case "vault":
-		resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-		if extErr == nil && len(resp) == 1 && resp[0] == 1 {
+		if backend.VaultLocked {
 			style.NewOutput().Info("Vault is already locked.").PrintErr()
 			return nil
 		}
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
-		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		if err := client.Lock(nil); err != nil {
+		if err := session.Lock(nil); err != nil {
 			return style.NewOutput().Error("lock failed: " + err.Error()).AsError()
 		}
 		style.NewOutput().Success("Vault locked.").PrintErr()
@@ -61,13 +56,7 @@ func runLock(cmd *cobra.Command, _ []string) error {
 			return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 		}
 		defer ClearBytes(passphrase)
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
-		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		if err := client.Lock(passphrase); err != nil {
+		if err := session.Lock(passphrase); err != nil {
 			return style.NewOutput().Error("lock failed: " + err.Error()).AsError()
 		}
 		style.NewOutput().Success("Agent locked.").PrintErr()
