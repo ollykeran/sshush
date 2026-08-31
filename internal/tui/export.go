@@ -502,7 +502,12 @@ func exportFetchAgentKeysCmd(socketPath string) tea.Cmd {
 		if socketPath == "" {
 			return exportAgentKeysMsg{err: fmt.Errorf("no socket path")}
 		}
-		keys, err := agent.ListKeysFromSocket(socketPath)
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return exportAgentKeysMsg{err: fmt.Errorf("agent not running")}
+		}
+		defer session.Close()
+		keys, err := session.List()
 		if err != nil {
 			return exportAgentKeysMsg{err: fmt.Errorf("agent not running")}
 		}

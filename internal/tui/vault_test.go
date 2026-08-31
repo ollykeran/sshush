@@ -16,6 +16,19 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+// lockTestAgent locks the agent at socketPath, failing the test if it cannot.
+func lockTestAgent(t *testing.T, socketPath string) {
+	t.Helper()
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	defer session.Close()
+	if err := session.Lock(nil); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+}
+
 // startVaultAgentWithPath is like startTestVaultAgentTUI but also returns the on-disk
 // vault path, needed by list/remove/autoload commands that take a vault path directly.
 func startVaultAgentWithPath(t *testing.T, passphrase []byte) (socketPath, vaultPath string, store *vault.VaultStore) {
@@ -282,9 +295,7 @@ func TestVaultAddListRemoveAutoloadRoundtrip(t *testing.T) {
 
 func TestVaultUnlockRecoveryFailsWithoutRecoveryEnabled(t *testing.T) {
 	socketPath, _ := startTestVaultAgentTUI(t, []byte("no-recovery-pass"))
-	if err := agent.LockSocket(socketPath, nil); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
+	lockTestAgent(t, socketPath)
 
 	msg := unlockVaultRecoveryCmd(socketPath, "abandon abandon abandon")().(vaultOpResultMsg)
 	if msg.err == nil {
@@ -363,9 +374,7 @@ func TestSwitchingToVaultTabRefreshesIdentities(t *testing.T) {
 func TestVaultUnlockPassphraseSucceedsAfterLock(t *testing.T) {
 	passphrase := []byte("lock-unlock-pass")
 	socketPath, _ := startTestVaultAgentTUI(t, passphrase)
-	if err := agent.LockSocket(socketPath, nil); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
+	lockTestAgent(t, socketPath)
 
 	msg := unlockVaultPassphraseCmd(socketPath, []byte("lock-unlock-pass"))().(vaultOpResultMsg)
 	if msg.err != nil {
