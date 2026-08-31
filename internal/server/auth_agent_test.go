@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	sshagent "golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestAgentAuth_Authorized(t *testing.T) {
