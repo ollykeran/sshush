@@ -4,7 +4,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +12,11 @@ import (
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
-	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newEditCommand() *cobra.Command {
@@ -79,8 +76,9 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 
 	// Try as fingerprint or comment from the agent
 	socketPath, err := getSocketPath()
-	if err == nil && sshushd.CheckAlreadyRunning(socketPath) {
-		agentKeys, listErr := agent.ListKeysFromSocket(socketPath)
+	if session := openSessionIfRunning(err, socketPath); session != nil {
+		defer session.Close()
+		agentKeys, listErr := session.List()
 		if listErr == nil {
 			// Try fingerprint match
 			for _, k := range agentKeys {
@@ -155,12 +153,13 @@ func resolveFromConfig(fingerprint string) string {
 	return ""
 }
 
-// isKeyLoadedInAgent checks if a key with the given fingerprint is loaded in the running agent.
-func isKeyLoadedInAgent(socketPath, fingerprint string) bool {
-	if !sshushd.CheckAlreadyRunning(socketPath) {
+// isKeyLoadedInAgent reports whether a key with the given fingerprint is loaded
+// in the running agent. A nil session means the agent is not reachable.
+func isKeyLoadedInAgent(session *agent.Session, fingerprint string) bool {
+	if session == nil {
 		return false
 	}
-	agentKeys, err := agent.ListKeysFromSocket(socketPath)
+	agentKeys, err := session.List()
 	if err != nil {
 		return false
 	}
@@ -176,55 +175,60 @@ func isKeyLoadedInAgent(socketPath, fingerprint string) bool {
 	return false
 }
 
-// reloadKeyInAgent removes the old key and re-adds it after an edit.
-// For vault mode, uses add-key-opts; for standard mode, removes and re-adds.
-func reloadKeyInAgent(socketPath, privateKeyPath, newComment string) error {
-	if !sshushd.CheckAlreadyRunning(socketPath) {
+// openSessionIfRunning opens a Session, returning nil when the socket path is
+// unusable or the agent is not reachable. Callers here treat an absent agent as
+// "nothing to do" rather than as a failure.
+func openSessionIfRunning(sockErr error, socketPath string) *agent.Session {
+	if sockErr != nil {
 		return nil
 	}
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		return nil
+	}
+	return session
+}
+
+// reloadKeyInAgent removes the old key and re-adds it after an edit.
+// For vault mode, uses add-key-opts; for standard mode, removes and re-adds.
+// A nil session means the agent is not reachable and there is nothing to reload.
+func reloadKeyInAgent(session *agent.Session, backend agent.Backend, privateKeyPath string) error {
+	if session == nil {
 		return nil
 	}
 
-	// Find and remove the old key
-	agentKeys, err := agent.ListKeysFromSocket(socketPath)
+	// Find and remove the old key. The key file's fingerprint does not change
+	// per agent key, so resolve it once rather than inside the loop.
+	agentKeys, err := session.List()
 	if err != nil {
 		return fmt.Errorf("list keys: %w", err)
 	}
-	conn, dialErr := net.Dial("unix", socketPath)
-	if dialErr != nil {
-		return fmt.Errorf("connect to agent: %w", dialErr)
+	existingFP := ""
+	if _, statErr := os.Stat(privateKeyPath); statErr == nil {
+		if pubKey, _, _, parseErr := agent.ParseKeyFromPath(privateKeyPath); parseErr == nil {
+			existingFP = ssh.FingerprintSHA256(pubKey)
+		}
 	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
-
-	for _, k := range agentKeys {
-		pub, parseErr := ssh.ParsePublicKey(k.Blob)
-		if parseErr != nil {
-			continue
-		}
-		fp := ssh.FingerprintSHA256(pub)
-		existingFP := ""
-		if _, statErr := os.Stat(privateKeyPath); statErr == nil {
-			pubKey, _, _, err := agent.ParseKeyFromPath(privateKeyPath)
-			if err == nil {
-				existingFP = ssh.FingerprintSHA256(pubKey)
+	if existingFP != "" {
+		for _, k := range agentKeys {
+			pub, parseErr := ssh.ParsePublicKey(k.Blob)
+			if parseErr != nil {
+				continue
 			}
-		}
-		if existingFP != "" && fp == existingFP {
-			_ = client.Remove(pub)
-			break
+			if ssh.FingerprintSHA256(pub) == existingFP {
+				_ = session.Remove(pub)
+				break
+			}
 		}
 	}
 
 	// Re-add the key with updated comment
-	if mode == "vault" {
-		if err := vault.AddPrivateKeyFileToSocket(socketPath, privateKeyPath, true); err != nil {
+	if backend.Mode == "vault" {
+		if err := vault.AddPrivateKeyFile(session, privateKeyPath, true); err != nil {
 			return fmt.Errorf("reload key in vault: %w", err)
 		}
 	} else {
-		if err := agent.AddKeyToSocketFromPath(socketPath, privateKeyPath); err != nil {
+		if err := session.AddKeyFromPath(privateKeyPath); err != nil {
 			return fmt.Errorf("reload key in agent: %w", err)
 		}
 	}
@@ -314,22 +318,23 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 		out.Info("source: " + utils.DisplayPath(privateKeyPath))
 	}
 
-	// Reload key in agent if it's loaded
+	// Reload the key in the agent if it is loaded, then persist the comment in
+	// the vault when the agent uses the vault backend, so the on-disk key file
+	// and the vault stay in sync. One session covers both.
 	socketPath, sockErr := getSocketPath()
-	if sockErr == nil && isKeyLoadedInAgent(socketPath, fingerprint) {
-		if reloadErr := reloadKeyInAgent(socketPath, privateKeyPath, comment); reloadErr != nil {
-			out.Warn("key updated on disk but agent reload failed: " + reloadErr.Error())
-		} else {
-			out.Success("reloaded key in agent")
+	if session := openSessionIfRunning(sockErr, socketPath); session != nil {
+		defer session.Close()
+		backend, backendErr := session.Backend()
+		if backendErr == nil && isKeyLoadedInAgent(session, fingerprint) {
+			if reloadErr := reloadKeyInAgent(session, backend, privateKeyPath); reloadErr != nil {
+				out.Warn("key updated on disk but agent reload failed: " + reloadErr.Error())
+			} else {
+				out.Success("reloaded key in agent")
+			}
 		}
-	}
-
-	// Persist the comment in the vault when the agent uses the vault backend, so the
-	// on-disk key file and the config stay in sync. Only existing identities are updated.
-	if sockErr == nil {
-		if mode, live := agent.LiveBackendMode(socketPath); live && mode == "vault" {
-			payload := vault.BuildSetCommentPayload(fingerprint, comment)
-			if _, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); extErr != nil {
+		// Only existing identities are updated.
+		if backendErr == nil && backend.Mode == "vault" {
+			if extErr := vault.SetComment(session, fingerprint, comment); extErr != nil {
 				out.Warn("key file updated on disk but vault comment not updated: " + extErr.Error())
 			} else {
 				out.Success("updated comment in vault")

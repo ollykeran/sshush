@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 // vaultIdentityRow is one row of the vault identity table, already formatted for display.
@@ -932,14 +930,17 @@ func listVaultIdentitiesCmd(vaultPath, socketPath string) tea.Cmd {
 		}
 		var loadedSet map[string]struct{}
 		haveAgent := false
-		if keys, err := agent.ListKeysFromSocket(socketPath); err == nil {
-			loadedSet = make(map[string]struct{}, len(keys))
-			for _, k := range keys {
-				if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
-					loadedSet[ssh.FingerprintSHA256(pub)] = struct{}{}
+		if session, err := agent.Open(socketPath); err == nil {
+			defer session.Close()
+			if keys, err := session.List(); err == nil {
+				loadedSet = make(map[string]struct{}, len(keys))
+				for _, k := range keys {
+					if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
+						loadedSet[ssh.FingerprintSHA256(pub)] = struct{}{}
+					}
 				}
+				haveAgent = true
 			}
-			haveAgent = true
 		}
 		rows := make([]vaultIdentityRow, len(identities))
 		for i, id := range identities {
@@ -1001,11 +1002,15 @@ func initVaultCmd(vaultPath string, passphrase []byte, withRecovery bool) tea.Cm
 
 func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 	return func() tea.Msg {
-		mode, live := agent.LiveBackendMode(socketPath)
-		if !live || mode != "vault" {
+		session, err := agent.Open(socketPath)
+		if err != nil {
 			return vaultOpResultMsg{err: fmt.Errorf("add requires a running vault agent; run 'sshush start'")}
 		}
-		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
+		defer session.Close()
+		if backend, err := session.Backend(); err != nil || backend.Mode != "vault" {
+			return vaultOpResultMsg{err: fmt.Errorf("add requires a running vault agent; run 'sshush start'")}
+		}
+		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
 			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 				return vaultOpResultMsg{err: err}
 			}
@@ -1020,8 +1025,12 @@ func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 
 func removeVaultIdentityCmd(socketPath, vaultPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		mode, live := agent.LiveBackendMode(socketPath)
-		if !live || mode != "vault" {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return vaultOpResultMsg{err: fmt.Errorf("remove requires a running vault agent")}
+		}
+		defer session.Close()
+		if backend, err := session.Backend(); err != nil || backend.Mode != "vault" {
 			return vaultOpResultMsg{err: fmt.Errorf("remove requires a running vault agent")}
 		}
 		store, _, err := openInitializedVaultStoreForPath(vaultPath)
@@ -1036,13 +1045,7 @@ func removeVaultIdentityCmd(socketPath, vaultPath, fingerprint string) tea.Cmd {
 		if err != nil {
 			return vaultOpResultMsg{err: fmt.Errorf("parse stored public key: %w", err)}
 		}
-		conn, err := net.Dial("unix", socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("cannot connect to agent: %w", err)}
-		}
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		if err := client.Remove(pubKey); err != nil {
+		if err := session.Remove(pubKey); err != nil {
 			return vaultOpResultMsg{err: fmt.Errorf("remove: %w", err)}
 		}
 		return vaultOpResultMsg{status: "identity removed"}
@@ -1051,8 +1054,12 @@ func removeVaultIdentityCmd(socketPath, vaultPath, fingerprint string) tea.Cmd {
 
 func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := agent.CallExtension(socketPath, vault.ExtensionVaultSessionLoad, []byte(fingerprint))
+		session, err := agent.Open(socketPath)
 		if err != nil {
+			return vaultOpResultMsg{err: err}
+		}
+		defer session.Close()
+		if err := vault.SessionLoad(session, fingerprint); err != nil {
 			if err.Error() == "agent: generic extension failure" {
 				return vaultOpResultMsg{err: fmt.Errorf("session load failed (vault locked or already autoloaded)")}
 			}
@@ -1064,9 +1071,12 @@ func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 
 func setVaultAutoloadCmd(socketPath, fingerprint string, on bool) tea.Cmd {
 	return func() tea.Msg {
-		payload := vault.BuildSetAutoloadPayload(fingerprint, on)
-		_, err := agent.CallExtension(socketPath, vault.ExtensionVaultSetAutoload, payload)
+		session, err := agent.Open(socketPath)
 		if err != nil {
+			return vaultOpResultMsg{err: err}
+		}
+		defer session.Close()
+		if err := vault.SetAutoload(session, fingerprint, on); err != nil {
 			if err.Error() == "agent: generic extension failure" {
 				return vaultOpResultMsg{err: fmt.Errorf("autoload update failed (vault locked or identity not found)")}
 			}
@@ -1087,7 +1097,12 @@ func unlockVaultPassphraseCmd(socketPath string, passphrase []byte) tea.Cmd {
 				passphrase[i] = 0
 			}
 		}()
-		if err := agent.UnlockSocket(socketPath, passphrase); err != nil {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return vaultOpResultMsg{err: fmt.Errorf("unlock failed: %w", err)}
+		}
+		defer session.Close()
+		if err := session.Unlock(passphrase); err != nil {
 			return vaultOpResultMsg{err: fmt.Errorf("unlock failed: %w", err)}
 		}
 		return vaultOpResultMsg{status: "vault unlocked"}
@@ -1096,8 +1111,12 @@ func unlockVaultPassphraseCmd(socketPath string, passphrase []byte) tea.Cmd {
 
 func unlockVaultRecoveryCmd(socketPath, mnemonic string) tea.Cmd {
 	return func() tea.Msg {
-		_, err := agent.CallExtension(socketPath, vault.ExtensionUnlockRecovery, []byte(mnemonic))
+		session, err := agent.Open(socketPath)
 		if err != nil {
+			return vaultOpResultMsg{err: fmt.Errorf("unlock with recovery failed: %w", err)}
+		}
+		defer session.Close()
+		if err := vault.UnlockWithRecoveryPhrase(session, mnemonic); err != nil {
 			if err.Error() == "agent: generic extension failure" {
 				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong phrase or vault has no recovery enabled")}
 			}
@@ -1111,7 +1130,12 @@ func unlockVaultRecoveryCmd(socketPath, mnemonic string) tea.Cmd {
 // just wipes the in-memory master key (mirrors lockVaultCmd in agent.go).
 func vaultLockCmd(socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		if err := agent.LockSocket(socketPath, nil); err != nil {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return vaultOpResultMsg{err: fmt.Errorf("lock failed: %w", err)}
+		}
+		defer session.Close()
+		if err := session.Lock(nil); err != nil {
 			return vaultOpResultMsg{err: fmt.Errorf("lock failed: %w", err)}
 		}
 		return vaultOpResultMsg{status: "vault locked"}

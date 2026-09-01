@@ -12,6 +12,8 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+// ErrAlreadyRunning reports that another process is already listening on the
+// socket. [ListenAndServe] returns it wrapped for display; use errors.Is.
 var ErrAlreadyRunning = errors.New("agent: already running on socket")
 
 // errStyled wraps an error with a styled message for display; Unwrap() preserves errors.Is.
@@ -36,6 +38,14 @@ func WithReady(fn func()) Option {
 	return func(o *options) { o.ready = fn }
 }
 
+// ListenAndServe serves the SSH agent protocol on a Unix socket at socketPath
+// until ctx is cancelled, handing every accepted connection to keyring. Because
+// all connections share the one keyring, agent state is per-process rather than
+// per-connection.
+//
+// It returns [ErrAlreadyRunning] when something is already listening on the path,
+// and removes a stale socket otherwise. Cancelling ctx closes the listener, so a
+// normal shutdown also returns a non-nil error.
 func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent, opts ...Option) error {
 	var o options
 	for _, opt := range opts {

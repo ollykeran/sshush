@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -295,8 +296,13 @@ func TestRunEdit_vaultBackend_persistsCommentToVault(t *testing.T) {
 	privPath := writeTestKey(t, dir, "id_ed25519", "before-vault")
 
 	socketPath, store, _ := startTestVaultAgent(t, []byte("vault-persist-test"))
-	if err := vault.AddPrivateKeyFileToSocket(socketPath, privPath, true); err != nil {
-		t.Fatalf("AddPrivateKeyFileToSocket: %v", err)
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	defer session.Close()
+	if err := vault.AddPrivateKeyFile(session, privPath, true); err != nil {
+		t.Fatalf("add private key file: %v", err)
 	}
 
 	keyData, err := os.ReadFile(privPath)
