@@ -12,8 +12,8 @@ import (
 
 // KDF locked-agent errors mirror golang.org/x/crypto/ssh/agent keyring strings.
 var (
-	errKDFAgentLocked             = errors.New("agent: locked")
-	errKDFAgentNotLocked          = errors.New("agent: not locked")
+	errKDFAgentLocked              = errors.New("agent: locked")
+	errKDFAgentNotLocked           = errors.New("agent: not locked")
 	errKDFAgentIncorrectPassphrase = errors.New("agent: incorrect passphrase")
 )
 
@@ -83,6 +83,8 @@ func (k *KDFLockedKeyring) Unlock(passphrase []byte) error {
 	return nil
 }
 
+// List implements sshagent.Agent. While locked it returns no keys rather than an
+// error, matching the x/crypto keyring's behaviour for a locked agent.
 func (k *KDFLockedKeyring) List() ([]*sshagent.Key, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -92,6 +94,7 @@ func (k *KDFLockedKeyring) List() ([]*sshagent.Key, error) {
 	return k.inner.List()
 }
 
+// Sign implements sshagent.Agent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -101,6 +104,7 @@ func (k *KDFLockedKeyring) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature,
 	return k.inner.Sign(key, data)
 }
 
+// Add implements sshagent.Agent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) Add(key sshagent.AddedKey) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -110,6 +114,7 @@ func (k *KDFLockedKeyring) Add(key sshagent.AddedKey) error {
 	return k.inner.Add(key)
 }
 
+// Remove implements sshagent.Agent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) Remove(key ssh.PublicKey) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -119,6 +124,7 @@ func (k *KDFLockedKeyring) Remove(key ssh.PublicKey) error {
 	return k.inner.Remove(key)
 }
 
+// RemoveAll implements sshagent.Agent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) RemoveAll() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -128,6 +134,7 @@ func (k *KDFLockedKeyring) RemoveAll() error {
 	return k.inner.RemoveAll()
 }
 
+// Signers implements sshagent.Agent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) Signers() ([]ssh.Signer, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -137,6 +144,7 @@ func (k *KDFLockedKeyring) Signers() ([]ssh.Signer, error) {
 	return k.inner.Signers()
 }
 
+// SignWithFlags implements sshagent.ExtendedAgent. It fails while the agent is locked.
 func (k *KDFLockedKeyring) SignWithFlags(key ssh.PublicKey, data []byte, flags sshagent.SignatureFlags) (*ssh.Signature, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -146,6 +154,9 @@ func (k *KDFLockedKeyring) SignWithFlags(key ssh.PublicKey, data []byte, flags s
 	return k.inner.SignWithFlags(key, data, flags)
 }
 
+// Extension implements sshagent.ExtendedAgent by delegating to the inner agent.
+// A plain keyring supports no extensions, so this reports them unsupported even
+// while unlocked.
 func (k *KDFLockedKeyring) Extension(extensionType string, contents []byte) ([]byte, error) {
 	return k.inner.Extension(extensionType, contents)
 }

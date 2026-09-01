@@ -256,8 +256,13 @@ func TestCommentOverlay_VaultBackend_PersistsToVault(t *testing.T) {
 	agent.RegisterFilepath(fp, privPath)
 
 	socketPath, store := startTestVaultAgentTUI(t, []byte("tui-overlay-test"))
-	if err := vault.AddPrivateKeyFileToSocket(socketPath, privPath, true); err != nil {
-		t.Fatalf("AddPrivateKeyFileToSocket: %v", err)
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	defer session.Close()
+	if err := vault.AddPrivateKeyFile(session, privPath, true); err != nil {
+		t.Fatalf("add private key file: %v", err)
 	}
 
 	cmd := saveCommentOverlayCmd(socketPath, fp, "after-vault")

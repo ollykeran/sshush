@@ -861,7 +861,12 @@ func fetchAgentKeysCmd(socketPath string, refresh bool) tea.Cmd {
 		if socketPath == "" {
 			return agentKeysMsg{err: fmt.Errorf("no socket path configured")}
 		}
-		keys, err := agent.ListKeysFromSocket(socketPath)
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentKeysMsg{err: fmt.Errorf("agent not running")}
+		}
+		defer session.Close()
+		keys, err := session.List()
 		if err != nil {
 			return agentKeysMsg{err: fmt.Errorf("agent not running")}
 		}
@@ -912,7 +917,12 @@ func reloadDaemonCmd(configPath, socketPath string) tea.Cmd {
 
 func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		removed, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, fingerprint)
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "agent not running", isErr: true}
+		}
+		defer session.Close()
+		removed, err := session.RemoveByFingerprint(fingerprint)
 		if err != nil {
 			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
@@ -930,7 +940,12 @@ func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 // for the Vault tab's own remove action, matching sshush vault remove).
 func sessionUnloadVaultKeyCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := agent.CallExtension(socketPath, vault.ExtensionVaultSessionUnload, []byte(fingerprint)); err != nil {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "unload failed: " + err.Error(), isErr: true}
+		}
+		defer session.Close()
+		if err := vault.SessionUnload(session, fingerprint); err != nil {
 			return agentStatusMsg{text: "unload failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key unloaded from session"}
@@ -939,8 +954,19 @@ func sessionUnloadVaultKeyCmd(socketPath, fingerprint string) tea.Cmd {
 
 func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 	return func() tea.Msg {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
+		}
+		defer session.Close()
 		// Default autoload on for vault (same as CLI without --no-autoload).
-		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, true); err != nil {
+		backend, backendErr := session.Backend()
+		if backendErr == nil && backend.Mode == "vault" {
+			err = vault.AddPrivateKeyFile(session, path, true)
+		} else {
+			err = session.AddKeyFromPath(path)
+		}
+		if err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}
@@ -949,7 +975,12 @@ func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 
 func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		return agentLockResultMsg{err: agent.LockSocket(socketPath, []byte(passphrase))}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentLockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentLockResultMsg{err: session.Lock([]byte(passphrase))}
 	}
 }
 
@@ -957,31 +988,39 @@ func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 // daemon wipes the in-memory master key.
 func lockVaultCmd(socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		return agentLockResultMsg{err: agent.LockSocket(socketPath, nil)}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentLockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentLockResultMsg{err: session.Lock(nil)}
 	}
 }
 
 func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		return agentUnlockResultMsg{err: agent.UnlockSocket(socketPath, []byte(passphrase))}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentUnlockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentUnlockResultMsg{err: session.Unlock([]byte(passphrase))}
 	}
 }
 
 // checkVaultState queries the running agent for its backend mode and, for vault agents,
 // whether the vault is locked.
 func checkVaultState(socketPath string) vaultStatusMsg {
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return vaultStatusMsg{}
 	}
-	if mode != "vault" {
-		return vaultStatusMsg{mode: mode, reachable: true}
+	defer session.Close()
+	backend, err := session.Backend()
+	if err != nil {
+		return vaultStatusMsg{}
 	}
-	resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-	if err != nil || len(resp) != 1 {
-		return vaultStatusMsg{mode: mode}
-	}
-	return vaultStatusMsg{mode: mode, reachable: true, locked: resp[0] == 1}
+	return vaultStatusMsg{mode: backend.Mode, reachable: true, locked: backend.VaultLocked}
 }
 
 func checkVaultStateCmd(socketPath string) tea.Cmd {

@@ -8,7 +8,6 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/openssh"
-	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
@@ -42,14 +41,16 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	if !sshushd.CheckAlreadyRunning(socketPath) {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
 	}
+	defer session.Close()
 	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
 	autoload := !noAutoload
 
-	mode, live := agent.LiveBackendMode(socketPath)
-	before, err := agent.ListKeysFromSocket(socketPath)
+	backend, backendErr := session.Backend()
+	before, err := session.List()
 	if err != nil {
 		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
@@ -63,8 +64,8 @@ func runAdd(cmd *cobra.Command, args []string) error {
 			}
 			path = utils.ExpandHomeDirectory(resolved)
 		}
-		if live && mode == "vault" {
-			if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
+		if backendErr == nil && backend.Mode == "vault" {
+			if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
 				msg := err.Error()
 				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.IsVault() && env.Config.VaultPath != "" {
 					msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
@@ -75,7 +76,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 			}
 			continue
 		}
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		if err := session.AddKeyFromPath(path); err != nil {
 			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 				return style.NewOutput().Error(err.Error()).AsError()
 			}
@@ -86,7 +87,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 	out.PrintErr()
-	after, _ := agent.ListKeysFromSocket(socketPath)
+	after, _ := session.List()
 	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }

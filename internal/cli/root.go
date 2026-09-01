@@ -85,7 +85,12 @@ func printAgentModeIndicator(cmd *cobra.Command) {
 	skipProbe := sockErr != nil || sock == "" ||
 		(commandMayStartDaemon(cmd) && !sshushd.CheckAlreadyRunning(sock))
 	if !skipProbe {
-		liveMode, liveOK = agent.LiveBackendMode(sock)
+		if session, err := agent.Open(sock); err == nil {
+			if backend, err := session.Backend(); err == nil {
+				liveMode, liveOK = backend.Mode, true
+			}
+			_ = session.Close()
+		}
 	}
 	line := style.AgentModeIndicatorLine(configMode, liveMode, liveOK, skipProbe && sockErr == nil && sock != "")
 	fmt.Fprintln(os.Stderr, line)

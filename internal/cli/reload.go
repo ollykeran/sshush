@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/ollykeran/sshush/internal/agent"
@@ -51,27 +50,26 @@ func runReload(cmd *cobra.Command, _ []string) error {
 	pidFilePath := runtime.PidFilePath()
 
 	// Try connecting to the socket from the new config.
-	conn, err := net.Dial("unix", newCfg.SocketPath)
+	session, err := agent.Open(newCfg.SocketPath)
 	needsRestart := err != nil
 
 	// If the new socket didn't work, try SSH_AUTH_SOCK (the old socket).
 	if needsRestart {
 		if authSock := os.Getenv("SSH_AUTH_SOCK"); authSock != "" && authSock != newCfg.SocketPath {
-			conn, err = net.Dial("unix", authSock)
+			session, err = agent.Open(authSock)
 		}
 	}
 
 	// We have a connection to the live agent: show the diff.
 	if err == nil {
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
-		needsRestart = needsRestart || newCfg.SocketPath != conn.RemoteAddr().String()
+		defer session.Close()
+		needsRestart = needsRestart || newCfg.SocketPath != session.SocketPath()
 
 		if needsRestart {
-			buildDiff(client, newCfg, true, configPath).Print()
+			buildDiff(session, newCfg, true, configPath).Print()
 		} else {
-			buildDiff(client, newCfg, false, configPath).Print()
-			applyDiff(client, newCfg)
+			buildDiff(session, newCfg, false, configPath).Print()
+			applyDiff(session, newCfg)
 			return nil
 		}
 	}
@@ -137,8 +135,8 @@ func desiredKeysFromConfig(newCfg config.Config) (after []diffEntry, configByFP 
 
 // buildDiff returns an Output containing the key diff, any parse warnings, and an
 // optional socket-changed notice. The returned Output is ready to Print().
-func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChanged bool, configPath string) *style.Output {
-	liveKeys, err := client.List()
+func buildDiff(session *agent.Session, newCfg config.Config, socketChanged bool, configPath string) *style.Output {
+	liveKeys, err := session.List()
 	if err != nil {
 		return style.NewOutput().Error(fmt.Sprintf("list agent keys: %v", err))
 	}
@@ -158,8 +156,8 @@ func buildDiff(client sshagent.ExtendedAgent, newCfg config.Config, socketChange
 	return out
 }
 
-func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
-	liveKeys, err := client.List()
+func applyDiff(session *agent.Session, newCfg config.Config) {
+	liveKeys, err := session.List()
 	if err != nil {
 		return
 	}
@@ -178,7 +176,7 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 			continue
 		}
 		if _, exists := liveByFP[fp]; !exists {
-			if err := client.Add(sshagent.AddedKey{PrivateKey: info.privKey, Comment: info.comment}); err != nil {
+			if err := session.Add(sshagent.AddedKey{PrivateKey: info.privKey, Comment: info.comment}); err != nil {
 				applyErrs.Error(fmt.Sprintf("add %s: %v", info.comment, err))
 			}
 		}
@@ -189,7 +187,7 @@ func applyDiff(client sshagent.ExtendedAgent, newCfg config.Config) {
 			if err != nil {
 				continue
 			}
-			if err := client.Remove(pubKey); err != nil {
+			if err := session.Remove(pubKey); err != nil {
 				applyErrs.Error(fmt.Sprintf("remove %s: %v", k.Comment, err))
 			}
 		}

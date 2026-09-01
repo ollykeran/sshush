@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	sshagent "golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func TestServer_ListenAndServe_ReadyCalledOnListenSuccess(t *testing.T) {
@@ -86,8 +86,8 @@ func TestServer_ListenAndServe_sessionMessage(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := &ssh.ClientConfig{
-		User: "test",
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		User:            "test",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
 	conn, err := ssh.Dial("tcp", addr, config)
