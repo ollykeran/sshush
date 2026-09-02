@@ -324,11 +324,9 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 			path = utils.ExpandHomeDirectory(resolved)
 		}
 		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-			msg := err.Error()
-			if msg == "agent: generic extension failure" && env.Config.IsVault() && env.Config.VaultPath != "" {
+			msg := "failed to add key: " + err.Error()
+			if errors.Is(err, agent.ErrVaultLocked) {
 				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
-			} else {
-				msg = "failed to add key: " + msg
 			}
 			return style.NewOutput().Error(msg).AsError()
 		}
@@ -468,6 +466,12 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 			switch {
 			case errors.Is(err, sshagent.ErrExtensionUnsupported):
 				msg = "this agent does not support vault session-load; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+			case errors.Is(err, agent.ErrVaultLocked):
+				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				msg = "no vault identity matches " + arg
+			// An older sshushd sends no reason byte, so this opaque string is all
+			// there is. Keep it as the last resort after the typed cases above.
 			case err.Error() == "agent: generic extension failure":
 				msg = "vault load failed (wrong fingerprint, vault locked, or key already autoloads)"
 			default:
@@ -554,6 +558,12 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 			switch {
 			case errors.Is(err, sshagent.ErrExtensionUnsupported):
 				msg = "this agent does not support vault set-autoload; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+			case errors.Is(err, agent.ErrVaultLocked):
+				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				msg = "no vault identity matches " + arg
+			// An older sshushd sends no reason byte, so this opaque string is all
+			// there is. Keep it as the last resort after the typed cases above.
 			case err.Error() == "agent: generic extension failure":
 				msg = "vault autoload failed (vault locked or identity not found)"
 			default:
@@ -605,6 +615,12 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 		switch {
 		case errors.Is(err, sshagent.ErrExtensionUnsupported):
 			msg = "this agent does not support recovery unlock; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
+		case errors.Is(err, agent.ErrNoRecovery):
+			msg = "this vault was created with --no-recovery, so no recovery phrase can unlock it."
+		case errors.Is(err, agent.ErrWrongPassphrase):
+			msg = "unlock failed: wrong recovery phrase. Use exactly 24 words, single spaces."
+		// An older sshushd sends no reason byte, so this opaque string is all
+		// there is. Keep it as the last resort after the typed cases above.
 		case err.Error() == "agent: generic extension failure":
 			msg = "unlock failed: wrong phrase or vault was created with --no-recovery. Use exactly 24 words, single spaces."
 		default:
