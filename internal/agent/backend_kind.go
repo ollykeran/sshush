@@ -3,12 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
-
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
-
-// extensionVaultLocked must match vault.ExtensionVaultLocked (package agent cannot import vault).
-const extensionVaultLocked = "vault-locked"
 
 // Backend describes the agent implementation behind a [Session].
 type Backend struct {
@@ -17,23 +12,31 @@ type Backend struct {
 	// VaultLocked reports whether the vault is locked. It is meaningful only
 	// when Mode is "vault".
 	VaultLocked bool
+	// SpeaksOps reports whether the agent implements [ExtensionOp]. It is false
+	// for an agent sshush does not own — a real ssh-agent, 1Password — and for
+	// an sshushd older than the extension. Mode is "keys" in both cases, so a
+	// caller that needs a vault uses this to tell "wrong backend" from "restart
+	// your daemon".
+	SpeaksOps bool
 }
 
 // Backend reports whether the agent is a vault backend or a plain keyring, and
 // for a vault whether it is currently locked, in one round-trip on this
 // Session's connection.
 //
-// An agent that answers the vault-locked extension is a vault; one that reports
-// the extension unsupported — a plain keyring, or OpenSSH's own agent — is keys.
-// Any other error is returned, and callers should treat it the same way they
-// treat an agent they could not reach at all.
+// A vault answers the vault-locked op. An sshush keyring agent reports that op
+// unknown, because it has no vault. Anything else does not implement
+// [ExtensionOp] at all and is treated as a keyring with SpeaksOps false.
 func (s *Session) Backend() (Backend, error) {
-	resp, err := s.client.Extension(extensionVaultLocked, nil)
-	if err == nil {
-		return Backend{Mode: "vault", VaultLocked: len(resp) == 1 && resp[0] == 1}, nil
-	}
-	if errors.Is(err, sshagent.ErrExtensionUnsupported) {
+	data, err := s.Op(OpVaultLocked, nil)
+	switch {
+	case err == nil:
+		return Backend{Mode: "vault", VaultLocked: len(data) == 1 && data[0] == 1, SpeaksOps: true}, nil
+	case errors.Is(err, ErrOpUnknown):
+		return Backend{Mode: "keys", SpeaksOps: true}, nil
+	case errors.Is(err, ErrOpUnsupported):
 		return Backend{Mode: "keys"}, nil
+	default:
+		return Backend{}, fmt.Errorf("agent: probe backend: %w", err)
 	}
-	return Backend{}, fmt.Errorf("agent: probe backend: %w", err)
 }

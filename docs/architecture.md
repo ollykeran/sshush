@@ -32,7 +32,27 @@ Every client-side conversation with a running agent goes through `agent.Session`
 
 **`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why `extensionVaultLocked` is duplicated at `internal/agent/backend_kind.go` with a comment saying it must match `vault.ExtensionVaultLocked`, and why `Session.Backend` is the only extension `internal/agent` names for itself.
 
-Session's pass-through methods return the agent client's error unmodified. Callers match on the exact text `golang.org/x/crypto/ssh/agent` produces — `"agent: failure"`, `"agent: generic extension failure"` — to tell a locked vault from a real failure, so wrapping there would silently change user-facing messages. Note that server-side error text never crosses the wire: `ServeAgent` sends a bare failure code and the client synthesises the string.
+### Why a failure knows its own reason
+
+Server-side error text never crosses the wire. `ServeAgent` answers a failed `Extension` call with a bare `SSH_AGENT_EXTENSION_FAILURE` byte and **discards the response body**, so the client can only synthesise `"agent: generic extension failure"`; a failed `Lock` or `Unlock` becomes `"agent: failure"`. Every distinct cause — locked vault, unknown identity, wrong passphrase, a vault created with `--no-recovery` — arrived as one string, and callers guessed at the reason by matching it.
+
+Because a returned error discards the body, the reason cannot ride on the failure path. The `sshush-op` extension (`internal/agent/op.go`) therefore answers a *failed* request with protocol-level **success**, carrying a status byte in the body. `Session.Op` decodes that into a sentinel — `agent.ErrVaultLocked`, `ErrIdentityNotFound`, `ErrNoRecovery`, `ErrWrongPassphrase`, `ErrNotLocked` — which callers match with `errors.Is`.
+
+**`sshush-op` is the only way in.** One extension carries every operation: requests are `[version][op][payload]`, responses `[version][status][data]`. `VaultAgent` and `KDFLockedKeyring` each serve the ops that make sense for them, and a keyring reports the vault ops unknown. The per-operation extensions that preceded it — `vault-locked`, `unlock-recovery`, `add-key-opts`, `vault-session-load`, `vault-session-unload`, `vault-set-autoload`, `vault-set-comment` — are gone, so `query` now returns just `query` and `sshush-op`.
+
+That makes the wire format a breaking change between sshush versions, which is why `Backend` carries `SpeaksOps`:
+
+| the agent | `Mode` | `SpeaksOps` |
+|---|---|---|
+| this sshushd, vault mode | `vault` | true |
+| this sshushd, keys mode | `keys` | true |
+| a foreign agent, or an sshushd older than `sshush-op` | `keys` | false |
+
+A command that needs a vault and finds `SpeaksOps` false says so, because the usual cause is upgrading `sshush` while the old daemon is still running — `sshush reload` fixes it. Nothing else can tell those two situations apart, since neither answers the extension.
+
+`ErrOpUnknown` is deliberately distinct from `ErrOpUnsupported`: the first means this agent speaks the protocol but not that operation, the second that it does not speak the protocol at all.
+
+`Session.Lock` and `Session.Unlock` still fall back to the plain agent protocol when `sshush-op` is unsupported. That is not a legacy path — a real `ssh-agent` or 1Password implements lock and unlock natively, and `[agent].type = "external"` points at exactly those.
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 

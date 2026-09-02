@@ -60,10 +60,10 @@ func (s *Session) Close() error {
 // SocketPath returns the socket path this Session was opened with, unmodified.
 func (s *Session) SocketPath() string { return s.socketPath }
 
-// The methods below return the agent client's error unmodified. Callers across
-// sshush match on the exact text golang.org/x/crypto/ssh/agent produces — for
-// example "agent: not locked" and "agent: generic extension failure" — so
-// wrapping here would silently change user-facing messages.
+// The methods below return the agent client's error unmodified, except Lock and
+// Unlock, which prefer [ExtensionOp] so the reason survives. Any caller that
+// still matches on the agent's own error text depends on this: wrapping here
+// would silently change user-facing messages.
 
 // List returns the keys the agent currently holds.
 func (s *Session) List() ([]*sshagent.Key, error) { return s.client.List() }
@@ -74,11 +74,26 @@ func (s *Session) Add(key sshagent.AddedKey) error { return s.client.Add(key) }
 // Remove removes the key matching key from the agent.
 func (s *Session) Remove(key ssh.PublicKey) error { return s.client.Remove(key) }
 
-// Lock locks the agent with passphrase.
-func (s *Session) Lock(passphrase []byte) error { return s.client.Lock(passphrase) }
+// Lock locks the agent with passphrase, reporting [ErrVaultLocked] when it was
+// already locked. Against an agent that does not implement [ExtensionOp] it
+// falls back to the plain protocol, where every failure collapses to
+// "agent: failure" — that path exists for agents sshush does not own.
+func (s *Session) Lock(passphrase []byte) error {
+	if _, err := s.Op(OpLock, passphrase); !errors.Is(err, ErrOpUnsupported) {
+		return err
+	}
+	return s.client.Lock(passphrase)
+}
 
-// Unlock unlocks the agent with passphrase.
-func (s *Session) Unlock(passphrase []byte) error { return s.client.Unlock(passphrase) }
+// Unlock unlocks the agent with passphrase, reporting [ErrNotLocked] when it
+// was not locked and [ErrWrongPassphrase] for a bad passphrase. See
+// [Session.Lock] for the behaviour against a foreign agent.
+func (s *Session) Unlock(passphrase []byte) error {
+	if _, err := s.Op(OpUnlock, passphrase); !errors.Is(err, ErrOpUnsupported) {
+		return err
+	}
+	return s.client.Unlock(passphrase)
+}
 
 // Sign signs data with the private key the agent holds for key.
 func (s *Session) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {

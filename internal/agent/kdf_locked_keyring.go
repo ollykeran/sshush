@@ -154,9 +154,51 @@ func (k *KDFLockedKeyring) SignWithFlags(key ssh.PublicKey, data []byte, flags s
 	return k.inner.SignWithFlags(key, data, flags)
 }
 
-// Extension implements sshagent.ExtendedAgent by delegating to the inner agent.
-// A plain keyring supports no extensions, so this reports them unsupported even
-// while unlocked.
+// Extension implements sshagent.ExtendedAgent. It answers [ExtensionOp] itself
+// and delegates everything else to the inner agent, which for a plain keyring
+// reports every extension unsupported.
 func (k *KDFLockedKeyring) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if extensionType == ExtensionOp {
+		// Never returns an error: a failed op answers with protocol-level success
+		// and carries its reason in the body.
+		return k.handleOp(contents), nil
+	}
 	return k.inner.Extension(extensionType, contents)
+}
+
+// handleOp serves the lock and unlock operations. A keys-mode agent has no
+// vault, so every other op reports itself unsupported.
+//
+// This is what lets a caller tell "already unlocked" from "wrong passphrase".
+// Both reach a plain Unlock as the single string "agent: failure", because
+// ServeAgent replaces the keyring's own error with a bare failure byte.
+func (k *KDFLockedKeyring) handleOp(contents []byte) []byte {
+	op, payload, err := DecodeOpRequest(contents)
+	if err != nil {
+		return EncodeOpResponse(StatusBadRequest, nil)
+	}
+	switch op {
+	case OpLock:
+		return kdfResultFor(k.Lock(payload))
+	case OpUnlock:
+		return kdfResultFor(k.Unlock(payload))
+	default:
+		return EncodeOpResponse(StatusUnsupportedOp, nil)
+	}
+}
+
+// kdfResultFor maps this type's sentinels onto wire statuses.
+func kdfResultFor(err error) []byte {
+	switch {
+	case err == nil:
+		return OKResponse()
+	case errors.Is(err, errKDFAgentLocked):
+		return EncodeOpResponse(StatusLocked, nil)
+	case errors.Is(err, errKDFAgentNotLocked):
+		return EncodeOpResponse(StatusNotLocked, nil)
+	case errors.Is(err, errKDFAgentIncorrectPassphrase):
+		return EncodeOpResponse(StatusWrongPassphrase, nil)
+	default:
+		return EncodeOpResponse(StatusInternal, nil)
+	}
 }
