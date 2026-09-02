@@ -2,15 +2,14 @@ package vault
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/kdf"
-	"github.com/ollykeran/sshush/internal/openssh"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -250,7 +249,9 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 	defer a.mu.Unlock()
 	meta := a.store.GetMetadata()
 	if meta == nil || len(meta.RecoverySalt) == 0 || len(meta.WrappedMasterKey) == 0 {
-		return errWrongPassphrase
+		// The vault was created with --no-recovery, so no phrase can ever work.
+		// Legacy callers still see a generic failure; sshush-op reports the reason.
+		return errNoRecovery
 	}
 	recoveryKey := kdf.DeriveKey([]byte(mnemonic), meta.RecoverySalt)
 	defer wipe(recoveryKey)
@@ -504,12 +505,18 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 			ExtensionVaultSessionUnload,
 			ExtensionVaultSetAutoload,
 			ExtensionVaultSetComment,
+			agent.ExtensionOp,
 		}
 		var buf bytes.Buffer
 		for _, name := range names {
 			buf.Write(ssh.Marshal(struct{ Name string }{Name: name}))
 		}
 		return buf.Bytes(), nil
+	}
+	if extensionType == agent.ExtensionOp {
+		// Never returns an error: a failed op answers with protocol-level success
+		// and carries its reason in the body. See op.go.
+		return a.handleOp(contents), nil
 	}
 	if extensionType == ExtensionVaultLocked {
 		a.mu.RLock()
@@ -528,55 +535,10 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionAddKeyOpts {
-		if len(contents) < 5 {
-			return nil, fmt.Errorf("vault: add-key-opts: payload too short (%d bytes)", len(contents))
-		}
-		// Version detection: old format starts with 4-byte PEM length (first byte 0x00 for typical keys);
-		// new format (v1) starts with version byte 0x01.
-		var pemData []byte
-		var autoload bool
-		var keyFilepath string
-		if contents[0] == 1 && len(contents) >= 10 {
-			// Version 1: [1-byte version][4-byte PEM len][PEM][1-byte autoload][4-byte filepath len][filepath]
-			pemLen := int(binary.BigEndian.Uint32(contents[1:5]))
-			if 5+pemLen > len(contents) {
-				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
-			}
-			pemData = contents[5 : 5+pemLen]
-			autoloadByte := contents[5+pemLen]
-			if autoloadByte != 0 && autoloadByte != 1 {
-				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
-			}
-			autoload = autoloadByte == 1
-			fpOffset := 5 + pemLen + 1
-			if fpOffset+4 <= len(contents) {
-				fpLen := int(binary.BigEndian.Uint32(contents[fpOffset : fpOffset+4]))
-				if fpOffset+4+fpLen <= len(contents) {
-					keyFilepath = string(contents[fpOffset+4 : fpOffset+4+fpLen])
-				}
-			}
-		} else {
-			// Legacy format: [4-byte PEM len][PEM][1-byte autoload]
-			pemLen := int(binary.BigEndian.Uint32(contents[:4]))
-			if pemLen > len(contents)-5 {
-				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
-			}
-			pemData = contents[4 : 4+pemLen]
-			autoloadByte := contents[4+pemLen]
-			if autoloadByte != 0 && autoloadByte != 1 {
-				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
-			}
-			autoload = autoloadByte == 1
-		}
-		key, err := ssh.ParseRawPrivateKey(pemData)
+		addedKey, autoload, keyFilepath, err := parseAddKeyOptsPayload(contents)
 		if err != nil {
-			return nil, fmt.Errorf("vault: add-key-opts: parse PEM: %w", err)
+			return nil, err
 		}
-		comment := ""
-		if parsed, err := openssh.ParsePrivateKeyBlob(pemData); err == nil && parsed.Comment != "" {
-			comment = parsed.Comment
-		}
-		addedKey := sshagent.AddedKey{PrivateKey: key, Comment: comment}
 		if err := a.addKeyWithAutoload(addedKey, autoload, keyFilepath); err != nil {
 			return nil, fmt.Errorf("vault: add-key-opts: %w", err)
 		}
@@ -603,39 +565,20 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionVaultSetAutoload {
-		if len(contents) < 5 {
-			return nil, fmt.Errorf("vault: set-autoload: payload too short (%d bytes)", len(contents))
+		fp, on, err := parseSetAutoloadPayload(contents)
+		if err != nil {
+			return nil, err
 		}
-		fpLen64 := binary.BigEndian.Uint32(contents[:4])
-		if int(fpLen64)+5 != len(contents) {
-			return nil, fmt.Errorf("vault: set-autoload: fingerprint length %d does not match payload size", fpLen64)
-		}
-		fpLen := int(fpLen64)
-		fp := string(contents[4 : 4+fpLen])
-		flag := contents[4+fpLen]
-		if flag != 0 && flag != 1 {
-			return nil, fmt.Errorf("vault: set-autoload: invalid flag byte %d", flag)
-		}
-		if err := a.setIdentityAutoload(fp, flag == 1); err != nil {
+		if err := a.setIdentityAutoload(fp, on); err != nil {
 			return nil, fmt.Errorf("vault: set-autoload: %w", err)
 		}
 		return []byte("ok"), nil
 	}
 	if extensionType == ExtensionVaultSetComment {
-		if len(contents) < 8 {
-			return nil, fmt.Errorf("vault: set-comment: payload too short (%d bytes)", len(contents))
+		fp, comment, err := parseSetCommentPayload(contents)
+		if err != nil {
+			return nil, err
 		}
-		fpLen := int(binary.BigEndian.Uint32(contents[:4]))
-		if 8+fpLen > len(contents) {
-			return nil, fmt.Errorf("vault: set-comment: fingerprint length %d exceeds payload", fpLen)
-		}
-		fp := string(contents[4 : 4+fpLen])
-		commentOffset := 4 + fpLen
-		commentLen := int(binary.BigEndian.Uint32(contents[commentOffset : commentOffset+4]))
-		if commentOffset+4+commentLen != len(contents) {
-			return nil, fmt.Errorf("vault: set-comment: comment length %d does not match payload size", commentLen)
-		}
-		comment := string(contents[commentOffset+4 : commentOffset+4+commentLen])
 		if err := a.setIdentityComment(fp, comment); err != nil {
 			return nil, fmt.Errorf("vault: set-comment: %w", err)
 		}
