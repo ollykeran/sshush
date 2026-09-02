@@ -32,7 +32,25 @@ Every client-side conversation with a running agent goes through `agent.Session`
 
 **`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why `extensionVaultLocked` is duplicated at `internal/agent/backend_kind.go` with a comment saying it must match `vault.ExtensionVaultLocked`, and why `Session.Backend` is the only extension `internal/agent` names for itself.
 
-Session's pass-through methods return the agent client's error unmodified. Callers match on the exact text `golang.org/x/crypto/ssh/agent` produces — `"agent: failure"`, `"agent: generic extension failure"` — to tell a locked vault from a real failure, so wrapping there would silently change user-facing messages. Note that server-side error text never crosses the wire: `ServeAgent` sends a bare failure code and the client synthesises the string.
+### Why a failure knows its own reason
+
+Server-side error text never crosses the wire. `ServeAgent` answers a failed `Extension` call with a bare `SSH_AGENT_EXTENSION_FAILURE` byte and **discards the response body**, so the client can only synthesise `"agent: generic extension failure"`; a failed `Lock` or `Unlock` becomes `"agent: failure"`. Every distinct cause — locked vault, unknown identity, wrong passphrase, a vault created with `--no-recovery` — arrived as one string, and callers guessed at the reason by matching it.
+
+Because a returned error discards the body, the reason cannot ride on the failure path. The `sshush-op` extension (`internal/agent/op.go`) therefore answers a *failed* request with protocol-level **success**, carrying a status byte in the body. `Session.Op` decodes that into a sentinel — `agent.ErrVaultLocked`, `ErrIdentityNotFound`, `ErrNoRecovery`, `ErrWrongPassphrase`, `ErrNotLocked` — which callers match with `errors.Is`.
+
+One extension wraps every operation rather than nine extensions each growing their own status format. Requests are `[version][op][payload]`, responses `[version][status][data]`.
+
+**The wrapper exists for compatibility.** Had the existing extensions started answering success on failure, an older `sshush` against a newer `sshushd` would read a failure as a success — silently, and for an operation like `vault load` that matters. Instead the legacy extensions are untouched, and:
+
+| | |
+|---|---|
+| new `sshush`, older `sshushd` | `sshush-op` is unsupported, `Session.Op` returns `ErrOpUnsupported`, the caller falls back to the legacy extension |
+| older `sshush`, new `sshushd` | the legacy extensions still answer exactly as before |
+| new against new | typed reasons |
+
+`ErrOpUnknown` is deliberately distinct from `ErrOpUnsupported`: an agent that speaks the extension but not one particular op must not send the caller down the legacy fallback path.
+
+A handful of `err.Error() == "agent: generic extension failure"` comparisons survive in `internal/cli` and `internal/tui`, each as the last case after the typed ones. They are not oversights: against an older daemon there is no reason byte, and the opaque string is all there is. Session's other pass-through methods still return the client's error unmodified, so those comparisons keep working.
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 
