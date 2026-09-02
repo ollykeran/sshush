@@ -38,19 +38,21 @@ Server-side error text never crosses the wire. `ServeAgent` answers a failed `Ex
 
 Because a returned error discards the body, the reason cannot ride on the failure path. The `sshush-op` extension (`internal/agent/op.go`) therefore answers a *failed* request with protocol-level **success**, carrying a status byte in the body. `Session.Op` decodes that into a sentinel — `agent.ErrVaultLocked`, `ErrIdentityNotFound`, `ErrNoRecovery`, `ErrWrongPassphrase`, `ErrNotLocked` — which callers match with `errors.Is`.
 
-One extension wraps every operation rather than nine extensions each growing their own status format. Requests are `[version][op][payload]`, responses `[version][status][data]`.
+**`sshush-op` is the only way in.** One extension carries every operation: requests are `[version][op][payload]`, responses `[version][status][data]`. `VaultAgent` and `KDFLockedKeyring` each serve the ops that make sense for them, and a keyring reports the vault ops unknown. The per-operation extensions that preceded it — `vault-locked`, `unlock-recovery`, `add-key-opts`, `vault-session-load`, `vault-session-unload`, `vault-set-autoload`, `vault-set-comment` — are gone, so `query` now returns just `query` and `sshush-op`.
 
-**The wrapper exists for compatibility.** Had the existing extensions started answering success on failure, an older `sshush` against a newer `sshushd` would read a failure as a success — silently, and for an operation like `vault load` that matters. Instead the legacy extensions are untouched, and:
+That makes the wire format a breaking change between sshush versions, which is why `Backend` carries `SpeaksOps`:
 
-| | |
-|---|---|
-| new `sshush`, older `sshushd` | `sshush-op` is unsupported, `Session.Op` returns `ErrOpUnsupported`, the caller falls back to the legacy extension |
-| older `sshush`, new `sshushd` | the legacy extensions still answer exactly as before |
-| new against new | typed reasons |
+| the agent | `Mode` | `SpeaksOps` |
+|---|---|---|
+| this sshushd, vault mode | `vault` | true |
+| this sshushd, keys mode | `keys` | true |
+| a foreign agent, or an sshushd older than `sshush-op` | `keys` | false |
 
-`ErrOpUnknown` is deliberately distinct from `ErrOpUnsupported`: an agent that speaks the extension but not one particular op must not send the caller down the legacy fallback path.
+A command that needs a vault and finds `SpeaksOps` false says so, because the usual cause is upgrading `sshush` while the old daemon is still running — `sshush reload` fixes it. Nothing else can tell those two situations apart, since neither answers the extension.
 
-A handful of `err.Error() == "agent: generic extension failure"` comparisons survive in `internal/cli` and `internal/tui`, each as the last case after the typed ones. They are not oversights: against an older daemon there is no reason byte, and the opaque string is all there is. Session's other pass-through methods still return the client's error unmodified, so those comparisons keep working.
+`ErrOpUnknown` is deliberately distinct from `ErrOpUnsupported`: the first means this agent speaks the protocol but not that operation, the second that it does not speak the protocol at all.
+
+`Session.Lock` and `Session.Unlock` still fall back to the plain agent protocol when `sshush-op` is unsupported. That is not a legacy path — a real `ssh-agent` or 1Password implements lock and unlock natively, and `[agent].type = "external"` points at exactly those.
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 

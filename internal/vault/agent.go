@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,33 +13,8 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-// ExtensionAddKeyOpts is the extension type for adding a key with autoload option.
-// Payload: 4-byte big-endian PEM length, PEM bytes, 1 byte autoload (0 or 1).
-const ExtensionAddKeyOpts = "add-key-opts"
-
 // ExtensionQuery is the OpenSSH-defined extension that lists supported extension names.
 const ExtensionQuery = "query"
-
-// ExtensionUnlockRecovery unlocks the vault with the BIP-39 recovery phrase.
-// Payload: UTF-8 space-separated mnemonic words.
-const ExtensionUnlockRecovery = "unlock-recovery"
-
-// ExtensionVaultSessionLoad loads a non-autoload identity into the current agent session
-// (see sessionAutoload0). Payload: UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
-const ExtensionVaultSessionLoad = "vault-session-load"
-
-// ExtensionVaultSessionUnload hides an identity from the current agent session without
-// deleting it or touching its persisted autoload flag (see sessionUnload). Payload:
-// UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
-const ExtensionVaultSessionUnload = "vault-session-unload"
-
-// ExtensionVaultSetAutoload sets Identity.Autoload on disk. Payload: 4-byte big-endian
-// fingerprint length, UTF-8 fingerprint bytes, 1 byte (0 = off, 1 = on).
-const ExtensionVaultSetAutoload = "vault-set-autoload"
-
-// ExtensionVaultSetComment sets Identity.Comment on disk. Payload: 4-byte big-endian
-// fingerprint length, UTF-8 fingerprint bytes, 4-byte big-endian comment length, UTF-8 comment.
-const ExtensionVaultSetComment = "vault-set-comment"
 
 // VaultAgent implements sshagent.ExtendedAgent, storing private keys encrypted
 // in a JSON vault. Master key is held in memory when unlocked and wiped on Lock().
@@ -374,10 +348,6 @@ func (a *VaultAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags sshagen
 	return algorithmSigner.SignWithAlgorithm(nil, data, algorithm)
 }
 
-// ExtensionVaultLocked is the extension type for querying whether the vault is locked.
-// Response: one byte, 1 if locked (masterKey == nil), 0 if unlocked.
-const ExtensionVaultLocked = "vault-locked"
-
 // sessionLoad marks a non-autoload identity as visible in this session (until daemon restart).
 func (a *VaultAgent) sessionLoad(fp string) error {
 	a.mu.Lock()
@@ -490,23 +460,13 @@ func (a *VaultAgent) setIdentityComment(fp, comment string) error {
 	return nil
 }
 
-// Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
-// "vault-session-load", "vault-session-unload", "vault-set-autoload", "vault-set-comment", and the
-// OpenSSH "query" extension.
+// Extension implements ExtendedAgent. Every sshush operation travels through
+// [agent.ExtensionOp]; see op.go. The OpenSSH "query" extension is also served,
+// so a client can discover that.
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
 	if extensionType == ExtensionQuery {
 		// OpenSSH's ssh-agent returns one SSH string per extension name.
-		names := []string{
-			ExtensionQuery,
-			ExtensionVaultLocked,
-			ExtensionUnlockRecovery,
-			ExtensionAddKeyOpts,
-			ExtensionVaultSessionLoad,
-			ExtensionVaultSessionUnload,
-			ExtensionVaultSetAutoload,
-			ExtensionVaultSetComment,
-			agent.ExtensionOp,
-		}
+		names := []string{ExtensionQuery, agent.ExtensionOp}
 		var buf bytes.Buffer
 		for _, name := range names {
 			buf.Write(ssh.Marshal(struct{ Name string }{Name: name}))
@@ -517,72 +477,6 @@ func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, e
 		// Never returns an error: a failed op answers with protocol-level success
 		// and carries its reason in the body. See op.go.
 		return a.handleOp(contents), nil
-	}
-	if extensionType == ExtensionVaultLocked {
-		a.mu.RLock()
-		locked := a.masterKey == nil
-		a.mu.RUnlock()
-		if locked {
-			return []byte{1}, nil
-		}
-		return []byte{0}, nil
-	}
-	if extensionType == ExtensionUnlockRecovery {
-		mnemonic := strings.Join(strings.Fields(strings.TrimSpace(string(contents))), " ")
-		if err := a.UnlockWithRecovery(mnemonic); err != nil {
-			return nil, fmt.Errorf("vault: unlock recovery: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionAddKeyOpts {
-		addedKey, autoload, keyFilepath, err := parseAddKeyOptsPayload(contents)
-		if err != nil {
-			return nil, err
-		}
-		if err := a.addKeyWithAutoload(addedKey, autoload, keyFilepath); err != nil {
-			return nil, fmt.Errorf("vault: add-key-opts: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSessionLoad {
-		fp := strings.TrimSpace(string(contents))
-		if fp == "" {
-			return nil, fmt.Errorf("vault: session-load: empty fingerprint")
-		}
-		if err := a.sessionLoad(fp); err != nil {
-			return nil, fmt.Errorf("vault: session-load: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSessionUnload {
-		fp := strings.TrimSpace(string(contents))
-		if fp == "" {
-			return nil, fmt.Errorf("vault: session-unload: empty fingerprint")
-		}
-		if err := a.sessionUnload(fp); err != nil {
-			return nil, fmt.Errorf("vault: session-unload: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSetAutoload {
-		fp, on, err := parseSetAutoloadPayload(contents)
-		if err != nil {
-			return nil, err
-		}
-		if err := a.setIdentityAutoload(fp, on); err != nil {
-			return nil, fmt.Errorf("vault: set-autoload: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSetComment {
-		fp, comment, err := parseSetCommentPayload(contents)
-		if err != nil {
-			return nil, err
-		}
-		if err := a.setIdentityComment(fp, comment); err != nil {
-			return nil, fmt.Errorf("vault: set-comment: %w", err)
-		}
-		return []byte("ok"), nil
 	}
 	return nil, sshagent.ErrExtensionUnsupported
 }
