@@ -187,6 +187,7 @@ func TestExtension_Query(t *testing.T) {
 		ExtensionVaultSessionUnload,
 		ExtensionVaultSetAutoload,
 		ExtensionVaultSetComment,
+		agent.ExtensionOp,
 	}
 	if len(names) != len(want) {
 		t.Fatalf("query names: want %v, got %v", want, names)
