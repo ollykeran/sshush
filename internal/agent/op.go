@@ -109,6 +109,22 @@ const (
 	StatusInternal        byte = 8
 )
 
+// DecodeOpResponse parses an op response body, returning its data or the
+// sentinel naming why the operation failed. It is the mirror of
+// [EncodeOpResponse], and is what [Session.Op] uses once the reply arrives.
+func DecodeOpResponse(resp []byte) ([]byte, error) {
+	if len(resp) < 2 {
+		return nil, fmt.Errorf("agent: op: short response (%d bytes)", len(resp))
+	}
+	if resp[0] != opVersion {
+		return nil, fmt.Errorf("agent: op: unsupported response version %d", resp[0])
+	}
+	if err := errorForStatus(resp[1]); err != nil {
+		return nil, err
+	}
+	return resp[2:], nil
+}
+
 // errorForStatus maps a response status to the sentinel callers match on.
 func errorForStatus(status byte) error {
 	switch status {
@@ -147,14 +163,5 @@ func (s *Session) Op(op byte, payload []byte) ([]byte, error) {
 		// extension but could not answer at all, so there is no reason byte.
 		return nil, fmt.Errorf("agent: op %d: %w", op, err)
 	}
-	if len(resp) < 2 {
-		return nil, fmt.Errorf("agent: op %d: short response (%d bytes)", op, len(resp))
-	}
-	if resp[0] != opVersion {
-		return nil, fmt.Errorf("agent: op %d: unsupported response version %d", op, resp[0])
-	}
-	if err := errorForStatus(resp[1]); err != nil {
-		return nil, err
-	}
-	return resp[2:], nil
+	return DecodeOpResponse(resp)
 }

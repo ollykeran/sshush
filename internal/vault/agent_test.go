@@ -21,6 +21,16 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
+// callOp performs op directly against va, without a socket, and returns the
+// reason it failed. Extension never errors for an op: the reason is in the body.
+func callOp(t *testing.T, va *VaultAgent, op byte, payload []byte) ([]byte, error) {
+	t.Helper()
+	resp, err := va.Extension(agent.ExtensionOp, agent.EncodeOpRequest(op, payload))
+	if err != nil {
+		t.Fatalf("op extension returned an error rather than a status: %v", err)
+	}
+	return agent.DecodeOpResponse(resp)
+}
 func unixSocketTempDir(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -558,12 +568,14 @@ func TestExtension_AddKeyOpts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := va.Extension(ExtensionAddKeyOpts, payload)
+	resp, err := callOp(t, va, agent.OpAddKey, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(resp) != "ok" {
-		t.Errorf("extension response: want %q, got %q", "ok", string(resp))
+	// The op carries success in its status byte, so a successful add has no body.
+	// The legacy extension used to answer the literal "ok".
+	if len(resp) != 0 {
+		t.Errorf("add-key response body: want empty, got %q", string(resp))
 	}
 
 	keysList, err := va.List()
@@ -623,7 +635,7 @@ func TestExtension_VaultSessionLoad(t *testing.T) {
 
 	signer, _ := ssh.NewSignerFromKey(priv)
 	fp := fingerprint(signer.PublicKey())
-	_, err = va2.Extension(ExtensionVaultSessionLoad, []byte(fp))
+	_, err = callOp(t, va2, agent.OpSessionLoad, []byte(fp))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +654,7 @@ func TestExtension_VaultSessionLoad(t *testing.T) {
 	}
 	signerB, _ := ssh.NewSignerFromKey(privB)
 	fpB := fingerprint(signerB.PublicKey())
-	if _, err := va2.Extension(ExtensionVaultSessionLoad, []byte(fpB)); err != nil {
+	if _, err := callOp(t, va2, agent.OpSessionLoad, []byte(fpB)); err != nil {
 		t.Fatalf("session-load autoload key should no-op: %v", err)
 	}
 }
@@ -671,7 +683,7 @@ func TestExtension_VaultSetAutoload(t *testing.T) {
 	fp := fingerprint(signer.PublicKey())
 
 	payload := BuildSetAutoloadPayload(fp, true)
-	if _, err := va.Extension(ExtensionVaultSetAutoload, payload); err != nil {
+	if _, err := callOp(t, va, agent.OpSetAutoload, payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -685,7 +697,7 @@ func TestExtension_VaultSetAutoload(t *testing.T) {
 	}
 
 	payloadOff := BuildSetAutoloadPayload(fp, false)
-	if _, err := va2.Extension(ExtensionVaultSetAutoload, payloadOff); err != nil {
+	if _, err := callOp(t, va2, agent.OpSetAutoload, payloadOff); err != nil {
 		t.Fatal(err)
 	}
 	va3 := NewVaultAgent(store)
@@ -722,7 +734,7 @@ func TestExtension_VaultSetComment(t *testing.T) {
 	fp := fingerprint(signer.PublicKey())
 
 	payload := BuildSetCommentPayload(fp, "after")
-	if _, err := va.Extension(ExtensionVaultSetComment, payload); err != nil {
+	if _, err := callOp(t, va, agent.OpSetComment, payload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -789,14 +801,14 @@ func TestExtension_VaultSetComment_malformedPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := va.Extension(ExtensionVaultSetComment, []byte("short")); err == nil {
+	if _, err := callOp(t, va, agent.OpSetComment, []byte("short")); err == nil {
 		t.Fatal("expected error for too-short payload")
 	}
 
 	// Well-formed header but truncated comment bytes.
 	payload := BuildSetCommentPayload("fp", "comment")
 	truncated := payload[:len(payload)-2]
-	if _, err := va.Extension(ExtensionVaultSetComment, truncated); err == nil {
+	if _, err := callOp(t, va, agent.OpSetComment, truncated); err == nil {
 		t.Fatal("expected error for truncated comment payload")
 	}
 }

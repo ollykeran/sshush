@@ -1065,10 +1065,6 @@ func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
 			case errors.Is(err, agent.ErrIdentityNotFound):
 				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
-			// An older sshushd sends no reason byte, so this opaque string is all
-			// there is. Keep it as the last resort after the typed cases above.
-			case err.Error() == "agent: generic extension failure":
-				return vaultOpResultMsg{err: fmt.Errorf("session load failed (vault locked or already autoloaded)")}
 			}
 			return vaultOpResultMsg{err: err}
 		}
@@ -1089,10 +1085,6 @@ func setVaultAutoloadCmd(socketPath, fingerprint string, on bool) tea.Cmd {
 				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
 			case errors.Is(err, agent.ErrIdentityNotFound):
 				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
-			// An older sshushd sends no reason byte, so this opaque string is all
-			// there is. Keep it as the last resort after the typed cases above.
-			case err.Error() == "agent: generic extension failure":
-				return vaultOpResultMsg{err: fmt.Errorf("autoload update failed (vault locked or identity not found)")}
 			}
 			return vaultOpResultMsg{err: err}
 		}
@@ -1136,10 +1128,6 @@ func unlockVaultRecoveryCmd(socketPath, mnemonic string) tea.Cmd {
 				return vaultOpResultMsg{err: fmt.Errorf("this vault was created without a recovery phrase")}
 			case errors.Is(err, agent.ErrWrongPassphrase):
 				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong recovery phrase")}
-			// An older sshushd sends no reason byte, so this opaque string is all
-			// there is. Keep it as the last resort after the typed cases above.
-			case err.Error() == "agent: generic extension failure":
-				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong phrase or vault has no recovery enabled")}
 			}
 			return vaultOpResultMsg{err: fmt.Errorf("unlock with recovery failed: %w", err)}
 		}

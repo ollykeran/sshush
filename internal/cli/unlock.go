@@ -64,11 +64,6 @@ func runUnlockVault(session *agent.Session, backend agent.Backend) error {
 		case errors.Is(err, agent.ErrNotLocked):
 			style.NewOutput().Info("Vault is already unlocked.").PrintErr()
 			return nil
-		// An older sshushd sends no reason byte, so this opaque string is all
-		// there is. Keep it as the last resort after the typed cases above.
-		case err.Error() == "agent: failure":
-			// An older sshushd cannot tell us which of these it was.
-			msg = "unlock failed: wrong passphrase, or the running agent is not a vault (run 'sshush start' after setting [vault].vault_path in config)"
 		default:
 			msg = "unlock failed: " + err.Error()
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/keys"
+	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func unixSocketTempDirSessionOps(t *testing.T) string {
@@ -187,16 +188,12 @@ func TestOp_lockedVaultReportsReason(t *testing.T) {
 	socketPath := startLockedVaultAgentSocket(t, dir, []byte("locked-reason"))
 	s := openTestSession(t, socketPath)
 
-	// Legacy path: reason destroyed.
-	_, legacyErr := s.Extension(ExtensionVaultSessionLoad, []byte("SHA256:whatever"))
-	if legacyErr == nil {
-		t.Fatal("legacy session-load against a locked vault: want error, got nil")
-	}
-	if legacyErr.Error() != "agent: generic extension failure" {
-		t.Errorf("legacy error: want the opaque protocol string, got %q", legacyErr.Error())
+	// The per-operation extensions are gone: sshush-op is the only way in.
+	if _, err := s.Extension("vault-session-load", []byte("SHA256:whatever")); !errors.Is(err, sshagent.ErrExtensionUnsupported) {
+		t.Errorf("retired vault-session-load extension: want ErrExtensionUnsupported, got %v", err)
 	}
 
-	// Op path: reason survives.
+	// The op reports why it failed.
 	_, err := s.Op(agent.OpSessionLoad, []byte("SHA256:whatever"))
 	if !errors.Is(err, agent.ErrVaultLocked) {
 		t.Errorf("op error: want ErrVaultLocked, got %v", err)
