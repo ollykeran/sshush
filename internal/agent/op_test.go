@@ -169,9 +169,14 @@ func TestKDFKeyringOp_unlockReasonsSurvive(t *testing.T) {
 	if _, err := s.Op(OpUnlock, passphrase); !errors.Is(err, ErrNotLocked) {
 		t.Errorf("unlock while unlocked: want ErrNotLocked, got %v", err)
 	}
-	// The same call through the plain protocol loses the reason entirely.
-	if err := s.Unlock(passphrase); err == nil || err.Error() != "agent: failure" {
-		t.Errorf("plain unlock: want the opaque %q, got %v", "agent: failure", err)
+	// Session.Unlock prefers the op, so it reports the reason too.
+	if err := s.Unlock(passphrase); !errors.Is(err, ErrNotLocked) {
+		t.Errorf("Session.Unlock while unlocked: want ErrNotLocked, got %v", err)
+	}
+	// Going straight to the plain protocol shows what the op is worth: the same
+	// condition arrives as one opaque string.
+	if err := s.client.Unlock(passphrase); err == nil || err.Error() != "agent: failure" {
+		t.Errorf("plain protocol unlock: want the opaque %q, got %v", "agent: failure", err)
 	}
 
 	if _, err := s.Op(OpLock, passphrase); err != nil {

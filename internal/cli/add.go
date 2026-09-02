@@ -66,11 +66,9 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 		if backendErr == nil && backend.Mode == "vault" {
 			if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-				msg := err.Error()
-				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.IsVault() && env.Config.VaultPath != "" {
-					msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
-				} else {
-					msg = "failed to add key: " + msg
+				msg := "failed to add key: " + err.Error()
+				if errors.Is(err, agent.ErrVaultLocked) {
+					msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
 				}
 				return style.NewOutput().Error(msg).AsError()
 			}

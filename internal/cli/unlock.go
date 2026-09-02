@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"strings"
+	"errors"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
@@ -57,11 +57,20 @@ func runUnlockVault(session *agent.Session, backend agent.Backend) error {
 	}
 	defer ClearBytes(passphrase)
 	if err := session.Unlock(passphrase); err != nil {
-		msg := err.Error()
-		if msg == "agent: failure" {
+		var msg string
+		switch {
+		case errors.Is(err, agent.ErrWrongPassphrase):
+			msg = "unlock failed: wrong passphrase"
+		case errors.Is(err, agent.ErrNotLocked):
+			style.NewOutput().Info("Vault is already unlocked.").PrintErr()
+			return nil
+		// An older sshushd sends no reason byte, so this opaque string is all
+		// there is. Keep it as the last resort after the typed cases above.
+		case err.Error() == "agent: failure":
+			// An older sshushd cannot tell us which of these it was.
 			msg = "unlock failed: wrong passphrase, or the running agent is not a vault (run 'sshush start' after setting [vault].vault_path in config)"
-		} else {
-			msg = "unlock failed: " + msg
+		default:
+			msg = "unlock failed: " + err.Error()
 		}
 		return style.NewOutput().Error(msg).AsError()
 	}
@@ -76,18 +85,14 @@ func runUnlockKeys(session *agent.Session) error {
 	}
 	defer ClearBytes(passphrase)
 	if err := session.Unlock(passphrase); err != nil {
-		msg := err.Error()
-		// The keyring's own "agent: not locked" and "agent: incorrect passphrase"
-		// never reach here: ServeAgent sends a bare failure byte and the client
-		// synthesises "agent: failure", so both cases land in the fallback below.
-		if msg == "agent: not locked" {
+		switch {
+		case errors.Is(err, agent.ErrNotLocked):
 			style.NewOutput().Info("Agent is already unlocked.").PrintErr()
 			return nil
-		}
-		if strings.Contains(msg, "incorrect passphrase") {
+		case errors.Is(err, agent.ErrWrongPassphrase):
 			return style.NewOutput().Error("unlock failed: wrong passphrase").AsError()
 		}
-		return style.NewOutput().Error("unlock failed: " + msg).AsError()
+		return style.NewOutput().Error("unlock failed: " + err.Error()).AsError()
 	}
 	style.NewOutput().Success("Agent unlocked.").PrintErr()
 	return nil
