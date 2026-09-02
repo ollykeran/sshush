@@ -155,3 +155,71 @@ func TestSessionOp_payloadReachesTheAgent(t *testing.T) {
 		t.Errorf("ops seen: want [%d], got %v", OpSetAutoload, ext.seen)
 	}
 }
+
+// TestKDFKeyringOp_unlockReasonsSurvive covers the defect this extension exists
+// to fix. Over a plain Unlock, "already unlocked" and "wrong passphrase" both
+// reach the caller as the single string "agent: failure", because ServeAgent
+// replaces the keyring's own error with a bare failure byte.
+func TestKDFKeyringOp_unlockReasonsSurvive(t *testing.T) {
+	passphrase := []byte("kdf-op-test")
+	ext := NewKDFLockedKeyring(keyringWithKey(t, "kdf-op"))
+	s := openSession(t, startServerAgent(t, ext))
+
+	// Unlocking an agent that was never locked.
+	if _, err := s.Op(OpUnlock, passphrase); !errors.Is(err, ErrNotLocked) {
+		t.Errorf("unlock while unlocked: want ErrNotLocked, got %v", err)
+	}
+	// The same call through the plain protocol loses the reason entirely.
+	if err := s.Unlock(passphrase); err == nil || err.Error() != "agent: failure" {
+		t.Errorf("plain unlock: want the opaque %q, got %v", "agent: failure", err)
+	}
+
+	if _, err := s.Op(OpLock, passphrase); err != nil {
+		t.Fatalf("lock op: %v", err)
+	}
+	if _, err := s.Op(OpUnlock, []byte("wrong")); !errors.Is(err, ErrWrongPassphrase) {
+		t.Errorf("wrong passphrase: want ErrWrongPassphrase, got %v", err)
+	}
+	if _, err := s.Op(OpUnlock, passphrase); err != nil {
+		t.Errorf("unlock with the right passphrase: %v", err)
+	}
+}
+
+func TestKDFKeyringOp_lockTwiceReportsLocked(t *testing.T) {
+	ext := NewKDFLockedKeyring(keyringWithKey(t, "kdf-op"))
+	s := openSession(t, startServerAgent(t, ext))
+
+	if _, err := s.Op(OpLock, []byte("pw")); err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+	if _, err := s.Op(OpLock, []byte("pw")); !errors.Is(err, ErrVaultLocked) {
+		t.Errorf("second lock: want ErrVaultLocked, got %v", err)
+	}
+}
+
+func TestKDFKeyringOp_vaultOpsAreUnsupported(t *testing.T) {
+	// A keys-mode agent has no vault, so vault ops must report themselves
+	// unsupported rather than answering misleadingly.
+	ext := NewKDFLockedKeyring(keyringWithKey(t, "kdf-op"))
+	s := openSession(t, startServerAgent(t, ext))
+
+	if _, err := s.Op(OpSessionLoad, []byte("SHA256:x")); !errors.Is(err, ErrOpUnknown) {
+		t.Errorf("session-load on a keyring: want ErrOpUnknown, got %v", err)
+	}
+}
+
+// TestKDFKeyringOp_backendStillReportsKeys guards the Session.Backend contract:
+// serving sshush-op must not make a keyring look like a vault, because Backend
+// probes the legacy vault-locked extension.
+func TestKDFKeyringOp_backendStillReportsKeys(t *testing.T) {
+	ext := NewKDFLockedKeyring(keyringWithKey(t, "kdf-op"))
+	s := openSession(t, startServerAgent(t, ext))
+
+	backend, err := s.Backend()
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	if backend.Mode != "keys" {
+		t.Errorf("mode: want %q, got %q", "keys", backend.Mode)
+	}
+}
