@@ -67,7 +67,8 @@ The vault agent speaks the standard SSH agent protocol over `SSH_AUTH_SOCK`, ser
 - **Remove of an unknown key**: `ssh-add -d` for a key the vault does not hold fails, like OpenSSH's SSH_AGENT_FAILURE.
 - **rsa-sha2 signing**: RSA identities sign with `rsa-sha2-256` / `rsa-sha2-512` when the client requests them (what `ssh` needs for modern RSA host/client auth). Non-RSA keys and unknown flag values are rejected.
 - **Add constraints**: `ssh-add -t` (lifetime) is honored — the identity expires and is dropped lazily on the next List/Sign. `ssh-add -c` (confirm), constraint extensions, and certificates are **rejected** rather than silently ignored, because the daemon has no confirm UI and cannot store cert identities.
-- **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `vault-locked`, `unlock-recovery`, `add-key-opts`, `vault-session-load`, `vault-session-unload`, `vault-set-autoload`, `vault-set-comment`.
+- **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `sshush-op`.
+- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
 
 ### Lock: wipe vs OpenSSH soft-lock
 
@@ -148,7 +149,7 @@ sshush vault remove <fingerprint|comment|key_path...> [--vault-path ...]
 
 Requires a running, **unlocked** vault agent. Can remove keys that are not currently listed (e.g. after restart with autoload off).
 
-This is a **permanent** deletion from the encrypted store — distinct from the `vault-session-unload` extension (see below), which only hides an identity from the current agent session.
+This is a **permanent** deletion from the encrypted store — distinct from the session-unload operation (see below), which only hides an identity from the current agent session.
 
 ### `vault load`
 
@@ -189,7 +190,7 @@ No subcommand-specific flags beyond global `-c` / `-s`.
 
 `sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it mirrors every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
 
-One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the `vault-session-unload` extension, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. `vault-session-unload` is the reverse of `vault-session-load`: payload is a UTF-8 SHA256 fingerprint, dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
+One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the session-unload operation, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. Session-unload is the reverse of session-load: the payload is a UTF-8 SHA256 fingerprint, carried by `sshush-op` and dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
 
 ## Related commands (outside `sshush vault`)
 

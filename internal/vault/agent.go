@@ -2,46 +2,19 @@ package vault
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/kdf"
-	"github.com/ollykeran/sshush/internal/openssh"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-// ExtensionAddKeyOpts is the extension type for adding a key with autoload option.
-// Payload: 4-byte big-endian PEM length, PEM bytes, 1 byte autoload (0 or 1).
-const ExtensionAddKeyOpts = "add-key-opts"
-
 // ExtensionQuery is the OpenSSH-defined extension that lists supported extension names.
 const ExtensionQuery = "query"
-
-// ExtensionUnlockRecovery unlocks the vault with the BIP-39 recovery phrase.
-// Payload: UTF-8 space-separated mnemonic words.
-const ExtensionUnlockRecovery = "unlock-recovery"
-
-// ExtensionVaultSessionLoad loads a non-autoload identity into the current agent session
-// (see sessionAutoload0). Payload: UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
-const ExtensionVaultSessionLoad = "vault-session-load"
-
-// ExtensionVaultSessionUnload hides an identity from the current agent session without
-// deleting it or touching its persisted autoload flag (see sessionUnload). Payload:
-// UTF-8 SHA256 fingerprint string (same form as ssh.FingerprintSHA256).
-const ExtensionVaultSessionUnload = "vault-session-unload"
-
-// ExtensionVaultSetAutoload sets Identity.Autoload on disk. Payload: 4-byte big-endian
-// fingerprint length, UTF-8 fingerprint bytes, 1 byte (0 = off, 1 = on).
-const ExtensionVaultSetAutoload = "vault-set-autoload"
-
-// ExtensionVaultSetComment sets Identity.Comment on disk. Payload: 4-byte big-endian
-// fingerprint length, UTF-8 fingerprint bytes, 4-byte big-endian comment length, UTF-8 comment.
-const ExtensionVaultSetComment = "vault-set-comment"
 
 // VaultAgent implements sshagent.ExtendedAgent, storing private keys encrypted
 // in a JSON vault. Master key is held in memory when unlocked and wiped on Lock().
@@ -250,7 +223,9 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 	defer a.mu.Unlock()
 	meta := a.store.GetMetadata()
 	if meta == nil || len(meta.RecoverySalt) == 0 || len(meta.WrappedMasterKey) == 0 {
-		return errWrongPassphrase
+		// The vault was created with --no-recovery, so no phrase can ever work.
+		// Legacy callers still see a generic failure; sshush-op reports the reason.
+		return errNoRecovery
 	}
 	recoveryKey := kdf.DeriveKey([]byte(mnemonic), meta.RecoverySalt)
 	defer wipe(recoveryKey)
@@ -373,10 +348,6 @@ func (a *VaultAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags sshagen
 	return algorithmSigner.SignWithAlgorithm(nil, data, algorithm)
 }
 
-// ExtensionVaultLocked is the extension type for querying whether the vault is locked.
-// Response: one byte, 1 if locked (masterKey == nil), 0 if unlocked.
-const ExtensionVaultLocked = "vault-locked"
-
 // sessionLoad marks a non-autoload identity as visible in this session (until daemon restart).
 func (a *VaultAgent) sessionLoad(fp string) error {
 	a.mu.Lock()
@@ -489,157 +460,23 @@ func (a *VaultAgent) setIdentityComment(fp, comment string) error {
 	return nil
 }
 
-// Extension implements ExtendedAgent. Supports "vault-locked", "unlock-recovery", "add-key-opts",
-// "vault-session-load", "vault-session-unload", "vault-set-autoload", "vault-set-comment", and the
-// OpenSSH "query" extension.
+// Extension implements ExtendedAgent. Every sshush operation travels through
+// [agent.ExtensionOp]; see op.go. The OpenSSH "query" extension is also served,
+// so a client can discover that.
 func (a *VaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
 	if extensionType == ExtensionQuery {
 		// OpenSSH's ssh-agent returns one SSH string per extension name.
-		names := []string{
-			ExtensionQuery,
-			ExtensionVaultLocked,
-			ExtensionUnlockRecovery,
-			ExtensionAddKeyOpts,
-			ExtensionVaultSessionLoad,
-			ExtensionVaultSessionUnload,
-			ExtensionVaultSetAutoload,
-			ExtensionVaultSetComment,
-		}
+		names := []string{ExtensionQuery, agent.ExtensionOp}
 		var buf bytes.Buffer
 		for _, name := range names {
 			buf.Write(ssh.Marshal(struct{ Name string }{Name: name}))
 		}
 		return buf.Bytes(), nil
 	}
-	if extensionType == ExtensionVaultLocked {
-		a.mu.RLock()
-		locked := a.masterKey == nil
-		a.mu.RUnlock()
-		if locked {
-			return []byte{1}, nil
-		}
-		return []byte{0}, nil
-	}
-	if extensionType == ExtensionUnlockRecovery {
-		mnemonic := strings.Join(strings.Fields(strings.TrimSpace(string(contents))), " ")
-		if err := a.UnlockWithRecovery(mnemonic); err != nil {
-			return nil, fmt.Errorf("vault: unlock recovery: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionAddKeyOpts {
-		if len(contents) < 5 {
-			return nil, fmt.Errorf("vault: add-key-opts: payload too short (%d bytes)", len(contents))
-		}
-		// Version detection: old format starts with 4-byte PEM length (first byte 0x00 for typical keys);
-		// new format (v1) starts with version byte 0x01.
-		var pemData []byte
-		var autoload bool
-		var keyFilepath string
-		if contents[0] == 1 && len(contents) >= 10 {
-			// Version 1: [1-byte version][4-byte PEM len][PEM][1-byte autoload][4-byte filepath len][filepath]
-			pemLen := int(binary.BigEndian.Uint32(contents[1:5]))
-			if 5+pemLen > len(contents) {
-				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
-			}
-			pemData = contents[5 : 5+pemLen]
-			autoloadByte := contents[5+pemLen]
-			if autoloadByte != 0 && autoloadByte != 1 {
-				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
-			}
-			autoload = autoloadByte == 1
-			fpOffset := 5 + pemLen + 1
-			if fpOffset+4 <= len(contents) {
-				fpLen := int(binary.BigEndian.Uint32(contents[fpOffset : fpOffset+4]))
-				if fpOffset+4+fpLen <= len(contents) {
-					keyFilepath = string(contents[fpOffset+4 : fpOffset+4+fpLen])
-				}
-			}
-		} else {
-			// Legacy format: [4-byte PEM len][PEM][1-byte autoload]
-			pemLen := int(binary.BigEndian.Uint32(contents[:4]))
-			if pemLen > len(contents)-5 {
-				return nil, fmt.Errorf("vault: add-key-opts: PEM length %d exceeds payload", pemLen)
-			}
-			pemData = contents[4 : 4+pemLen]
-			autoloadByte := contents[4+pemLen]
-			if autoloadByte != 0 && autoloadByte != 1 {
-				return nil, fmt.Errorf("vault: add-key-opts: invalid autoload byte %d", autoloadByte)
-			}
-			autoload = autoloadByte == 1
-		}
-		key, err := ssh.ParseRawPrivateKey(pemData)
-		if err != nil {
-			return nil, fmt.Errorf("vault: add-key-opts: parse PEM: %w", err)
-		}
-		comment := ""
-		if parsed, err := openssh.ParsePrivateKeyBlob(pemData); err == nil && parsed.Comment != "" {
-			comment = parsed.Comment
-		}
-		addedKey := sshagent.AddedKey{PrivateKey: key, Comment: comment}
-		if err := a.addKeyWithAutoload(addedKey, autoload, keyFilepath); err != nil {
-			return nil, fmt.Errorf("vault: add-key-opts: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSessionLoad {
-		fp := strings.TrimSpace(string(contents))
-		if fp == "" {
-			return nil, fmt.Errorf("vault: session-load: empty fingerprint")
-		}
-		if err := a.sessionLoad(fp); err != nil {
-			return nil, fmt.Errorf("vault: session-load: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSessionUnload {
-		fp := strings.TrimSpace(string(contents))
-		if fp == "" {
-			return nil, fmt.Errorf("vault: session-unload: empty fingerprint")
-		}
-		if err := a.sessionUnload(fp); err != nil {
-			return nil, fmt.Errorf("vault: session-unload: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSetAutoload {
-		if len(contents) < 5 {
-			return nil, fmt.Errorf("vault: set-autoload: payload too short (%d bytes)", len(contents))
-		}
-		fpLen64 := binary.BigEndian.Uint32(contents[:4])
-		if int(fpLen64)+5 != len(contents) {
-			return nil, fmt.Errorf("vault: set-autoload: fingerprint length %d does not match payload size", fpLen64)
-		}
-		fpLen := int(fpLen64)
-		fp := string(contents[4 : 4+fpLen])
-		flag := contents[4+fpLen]
-		if flag != 0 && flag != 1 {
-			return nil, fmt.Errorf("vault: set-autoload: invalid flag byte %d", flag)
-		}
-		if err := a.setIdentityAutoload(fp, flag == 1); err != nil {
-			return nil, fmt.Errorf("vault: set-autoload: %w", err)
-		}
-		return []byte("ok"), nil
-	}
-	if extensionType == ExtensionVaultSetComment {
-		if len(contents) < 8 {
-			return nil, fmt.Errorf("vault: set-comment: payload too short (%d bytes)", len(contents))
-		}
-		fpLen := int(binary.BigEndian.Uint32(contents[:4]))
-		if 8+fpLen > len(contents) {
-			return nil, fmt.Errorf("vault: set-comment: fingerprint length %d exceeds payload", fpLen)
-		}
-		fp := string(contents[4 : 4+fpLen])
-		commentOffset := 4 + fpLen
-		commentLen := int(binary.BigEndian.Uint32(contents[commentOffset : commentOffset+4]))
-		if commentOffset+4+commentLen != len(contents) {
-			return nil, fmt.Errorf("vault: set-comment: comment length %d does not match payload size", commentLen)
-		}
-		comment := string(contents[commentOffset+4 : commentOffset+4+commentLen])
-		if err := a.setIdentityComment(fp, comment); err != nil {
-			return nil, fmt.Errorf("vault: set-comment: %w", err)
-		}
-		return []byte("ok"), nil
+	if extensionType == agent.ExtensionOp {
+		// Never returns an error: a failed op answers with protocol-level success
+		// and carries its reason in the body. See op.go.
+		return a.handleOp(contents), nil
 	}
 	return nil, sshagent.ErrExtensionUnsupported
 }

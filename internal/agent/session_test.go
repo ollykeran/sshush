@@ -11,18 +11,24 @@ import (
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-// fakeVaultAgent answers the vault-locked extension the way a vault backend
-// does, so Session.Backend can be tested without importing internal/vault
-// (which imports this package). Every other operation falls through to the
-// embedded keyring.
+// fakeVaultAgent answers the vault-locked op the way a vault backend does, so
+// Session.Backend can be tested without importing internal/vault (which imports
+// this package). Every other extension falls through as unsupported.
 type fakeVaultAgent struct {
 	sshagent.ExtendedAgent
 	resp []byte
 }
 
-func (f *fakeVaultAgent) Extension(extensionType string, _ []byte) ([]byte, error) {
-	if extensionType == extensionVaultLocked {
-		return f.resp, nil
+func (f *fakeVaultAgent) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if extensionType == ExtensionOp {
+		op, _, err := DecodeOpRequest(contents)
+		if err != nil {
+			return EncodeOpResponse(StatusBadRequest, nil), nil
+		}
+		if op == OpVaultLocked {
+			return EncodeOpResponse(StatusOK, f.resp), nil
+		}
+		return EncodeOpResponse(StatusUnsupportedOp, nil), nil
 	}
 	// Must be the bare sentinel: ServeAgent compares it with == , not errors.Is.
 	return nil, sshagent.ErrExtensionUnsupported

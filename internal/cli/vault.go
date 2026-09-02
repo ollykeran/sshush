@@ -59,6 +59,19 @@ func openInitializedVaultStore(cmd *cobra.Command) (*vault.VaultStore, string, e
 	return store, vaultPath, nil
 }
 
+// vaultAgentGateError explains why a command that needs a vault agent cannot
+// run. An agent that does not speak sshush's own protocol is almost always an
+// sshushd left running from an older install, which is worth saying plainly.
+func vaultAgentGateError(backend agent.Backend, what string) error {
+	out := style.NewOutput().Error(what + " requires a running vault agent")
+	if !backend.SpeaksOps {
+		// Either a foreign agent, or an sshushd left running from an older
+		// install. The second is worth naming, since a restart fixes it.
+		out.Info("this agent does not speak sshush's protocol; if you upgraded sshush while the daemon was running, restart it with 'sshush reload'.")
+	}
+	return out.AsError()
+}
+
 // unlockVaultAgentIfLocked prompts for passphrase and unlocks the agent when it uses the same vault file.
 // The session belongs to the caller and is left open.
 func unlockVaultAgentIfLocked(session *agent.Session, resolvedVaultPath string) {
@@ -304,7 +317,7 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil || backend.Mode != "vault" {
-		return style.NewOutput().Error("vault add requires a running vault agent; set [agent].vault = true and run 'sshush start'").AsError()
+		return vaultAgentGateError(backend, "vault add")
 	}
 	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
 	autoload := !noAutoload
@@ -324,11 +337,9 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 			path = utils.ExpandHomeDirectory(resolved)
 		}
 		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-			msg := err.Error()
-			if msg == "agent: generic extension failure" && env.Config.IsVault() && env.Config.VaultPath != "" {
+			msg := "failed to add key: " + err.Error()
+			if errors.Is(err, agent.ErrVaultLocked) {
 				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
-			} else {
-				msg = "failed to add key: " + msg
 			}
 			return style.NewOutput().Error(msg).AsError()
 		}
@@ -375,7 +386,7 @@ func runVaultRemove(cmd *cobra.Command, args []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil || backend.Mode != "vault" {
-		return style.NewOutput().Error("vault remove requires a running vault agent").AsError()
+		return vaultAgentGateError(backend, "vault remove")
 	}
 	unlockVaultAgentIfLocked(session, vaultPath)
 
@@ -444,7 +455,7 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil || backend.Mode != "vault" {
-		return style.NewOutput().Error("vault load requires a running vault agent").AsError()
+		return vaultAgentGateError(backend, "vault load")
 	}
 	unlockVaultAgentIfLocked(session, vaultPath)
 
@@ -468,8 +479,10 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 			switch {
 			case errors.Is(err, sshagent.ErrExtensionUnsupported):
 				msg = "this agent does not support vault session-load; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
-			case err.Error() == "agent: generic extension failure":
-				msg = "vault load failed (wrong fingerprint, vault locked, or key already autoloads)"
+			case errors.Is(err, agent.ErrVaultLocked):
+				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				msg = "no vault identity matches " + arg
 			default:
 				msg = err.Error()
 			}
@@ -530,7 +543,7 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil || backend.Mode != "vault" {
-		return style.NewOutput().Error("vault autoload requires a running vault agent").AsError()
+		return vaultAgentGateError(backend, "vault autoload")
 	}
 	unlockVaultAgentIfLocked(session, vaultPath)
 
@@ -554,8 +567,10 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 			switch {
 			case errors.Is(err, sshagent.ErrExtensionUnsupported):
 				msg = "this agent does not support vault set-autoload; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
-			case err.Error() == "agent: generic extension failure":
-				msg = "vault autoload failed (vault locked or identity not found)"
+			case errors.Is(err, agent.ErrVaultLocked):
+				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				msg = "no vault identity matches " + arg
 			default:
 				msg = err.Error()
 			}
@@ -591,7 +606,7 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil || backend.Mode != "vault" {
-		return style.NewOutput().Error("vault unlock-recovery requires a running vault agent; set [agent].vault = true and run 'sshush start'").AsError()
+		return vaultAgentGateError(backend, "vault unlock-recovery")
 	}
 	fmt.Fprint(os.Stderr, "Recovery phrase (24 words): ")
 	reader := bufio.NewReader(os.Stdin)
@@ -605,8 +620,10 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 		switch {
 		case errors.Is(err, sshagent.ErrExtensionUnsupported):
 			msg = "this agent does not support recovery unlock; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
-		case err.Error() == "agent: generic extension failure":
-			msg = "unlock failed: wrong phrase or vault was created with --no-recovery. Use exactly 24 words, single spaces."
+		case errors.Is(err, agent.ErrNoRecovery):
+			msg = "this vault was created with --no-recovery, so no recovery phrase can unlock it."
+		case errors.Is(err, agent.ErrWrongPassphrase):
+			msg = "unlock failed: wrong recovery phrase. Use exactly 24 words, single spaces."
 		default:
 			msg = "unlock with recovery failed: " + err.Error()
 		}

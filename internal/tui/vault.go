@@ -1014,7 +1014,7 @@ func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 				return vaultOpResultMsg{err: err}
 			}
-			if err.Error() == "agent: generic extension failure" {
+			if errors.Is(err, agent.ErrVaultLocked) {
 				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
 			}
 			return vaultOpResultMsg{err: fmt.Errorf("add failed: %w", err)}
@@ -1060,8 +1060,11 @@ func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 		}
 		defer session.Close()
 		if err := vault.SessionLoad(session, fingerprint); err != nil {
-			if err.Error() == "agent: generic extension failure" {
-				return vaultOpResultMsg{err: fmt.Errorf("session load failed (vault locked or already autoloaded)")}
+			switch {
+			case errors.Is(err, agent.ErrVaultLocked):
+				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
 			}
 			return vaultOpResultMsg{err: err}
 		}
@@ -1077,8 +1080,11 @@ func setVaultAutoloadCmd(socketPath, fingerprint string, on bool) tea.Cmd {
 		}
 		defer session.Close()
 		if err := vault.SetAutoload(session, fingerprint, on); err != nil {
-			if err.Error() == "agent: generic extension failure" {
-				return vaultOpResultMsg{err: fmt.Errorf("autoload update failed (vault locked or identity not found)")}
+			switch {
+			case errors.Is(err, agent.ErrVaultLocked):
+				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
+			case errors.Is(err, agent.ErrIdentityNotFound):
+				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
 			}
 			return vaultOpResultMsg{err: err}
 		}
@@ -1117,8 +1123,11 @@ func unlockVaultRecoveryCmd(socketPath, mnemonic string) tea.Cmd {
 		}
 		defer session.Close()
 		if err := vault.UnlockWithRecoveryPhrase(session, mnemonic); err != nil {
-			if err.Error() == "agent: generic extension failure" {
-				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong phrase or vault has no recovery enabled")}
+			switch {
+			case errors.Is(err, agent.ErrNoRecovery):
+				return vaultOpResultMsg{err: fmt.Errorf("this vault was created without a recovery phrase")}
+			case errors.Is(err, agent.ErrWrongPassphrase):
+				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong recovery phrase")}
 			}
 			return vaultOpResultMsg{err: fmt.Errorf("unlock with recovery failed: %w", err)}
 		}
