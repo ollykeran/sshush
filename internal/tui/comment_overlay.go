@@ -8,9 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
-	"github.com/ollykeran/sshush/internal/vault"
 )
 
 // commentOverlaySavedMsg reports the result of saving a comment edited via commentOverlay.
@@ -59,7 +59,7 @@ func (c *commentOverlay) Hide() {
 
 // Update handles key input while the overlay is active. Returns the command to run
 // (e.g. the save command) and whether the caller should keep the overlay open.
-func (c *commentOverlay) Update(msg tea.KeyPressMsg, socketPath string) tea.Cmd {
+func (c *commentOverlay) Update(msg tea.KeyPressMsg, socketPath, configPath string) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		c.Hide()
@@ -81,7 +81,7 @@ func (c *commentOverlay) Update(msg tea.KeyPressMsg, socketPath string) tea.Cmd 
 			c.statusErr = true
 			return nil
 		}
-		return saveCommentOverlayCmd(socketPath, c.fingerprint, comment)
+		return saveCommentOverlayCmd(socketPath, configPath, c.fingerprint, comment)
 	}
 	var cmd tea.Cmd
 	c.commentIn, cmd = c.commentIn.Update(msg)
@@ -103,11 +103,20 @@ func (c *commentOverlay) View(st Styles, width int) string {
 }
 
 // saveCommentOverlayCmd resolves the source file for fingerprint, writes the new
-// comment to disk (and .pub if present), persists it to the vault when the running
-// agent is vault-backed, and reloads the key in the agent.
-func saveCommentOverlayCmd(socketPath, fingerprint, comment string) tea.Cmd {
+// comment to disk (and .pub if present), reloads the key in the agent if it is
+// loaded, and persists the comment to the vault when the running agent is
+// vault-backed.
+func saveCommentOverlayCmd(socketPath, configPath, fingerprint, comment string) tea.Cmd {
 	return func() tea.Msg {
-		path := agent.GetFilepath(fingerprint)
+		// GetFilepath alone only knows about keys this process itself loaded; the
+		// key was more commonly loaded by a separately running sshushd daemon, so
+		// fall back to scanning the config's KeyPaths by fingerprint, same as the
+		// CLI's edit command does.
+		var cfgPaths []string
+		if cfg, err := config.LoadConfig(configPath); err == nil {
+			cfgPaths = cfg.KeyPaths
+		}
+		path := agent.ResolveFilepath(fingerprint, cfgPaths)
 		if path == "" {
 			return commentOverlaySavedMsg{fingerprint: fingerprint, err: fmt.Errorf("source file path unknown for this key; edit via CLI with --filepath")}
 		}
@@ -126,22 +135,12 @@ func saveCommentOverlayCmd(socketPath, fingerprint, comment string) tea.Cmd {
 		}
 		defer session.Close()
 
-		backend, backendErr := session.Backend()
-		if backendErr == nil && backend.Mode == "vault" {
-			if err := vault.SetComment(session, fingerprint, comment); err != nil {
-				return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but vault comment not updated: %w", err)}
-			}
-			if err := vault.AddPrivateKeyFile(session, path, true); err != nil {
-				return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
-			}
-			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment}
+		result := editcomment.SyncAgent(session, fingerprint, path, comment)
+		if result.ReloadErr != nil {
+			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", result.ReloadErr)}
 		}
-
-		if _, err := session.RemoveByFingerprint(fingerprint); err != nil {
-			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
-		}
-		if err := session.AddKeyFromPath(path); err != nil {
-			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but agent reload failed: %w", err)}
+		if result.VaultErr != nil {
+			return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment, err: fmt.Errorf("key file updated on disk but vault comment not updated: %w", result.VaultErr)}
 		}
 		return commentOverlaySavedMsg{fingerprint: fingerprint, comment: comment}
 	}
