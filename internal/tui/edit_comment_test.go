@@ -15,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
@@ -237,9 +238,82 @@ func TestAgentScreen_EditComment_SavesToFileAndReloadsAgent(t *testing.T) {
 	}
 }
 
+// TestAgentScreen_EditComment_ResolvesFilepathViaConfigKeyPaths is a regression
+// test for a key loaded into the agent by a separate process (the common case:
+// a running sshushd daemon, not this TUI process). GetFilepath's in-process
+// registry knows nothing about such a key, so saveCommentOverlayCmd must fall
+// back to scanning the config's KeyPaths by fingerprint, same as the CLI does.
+func TestAgentScreen_EditComment_ResolvesFilepathViaConfigKeyPaths(t *testing.T) {
+	// Cannot use t.Parallel() with a package-level fingerprint registry shared across tests.
+	dir := t.TempDir()
+	privPath, fp := writeTUITestKey(t, dir, "id_ed25519", "before")
+	// Deliberately do not call agent.RegisterFilepath: simulate a key that was
+	// loaded by a different process, so it is unknown to this process's registry.
+
+	cfgPath := filepath.Join(dir, "sshush.toml")
+	cfgBytes, err := config.MarshalConfig(config.Config{
+		AgentType:  config.AgentTypeKeys,
+		SocketPath: filepath.Join(dir, "unused.sock"),
+		KeyPaths:   []string{privPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	socketPath, client := startTestKeyringAgent(t)
+	keyData, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawKey, err := ssh.ParseRawPrivateKey(keyData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Add(sshagent.AddedKey{PrivateKey: rawKey, Comment: "before"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, agentScreen := newAgentTestSkeleton()
+	agentScreen.socketPath = socketPath
+	agentScreen.configPath = cfgPath
+	agentScreen.width = 80
+	agentScreen.keyTable.SetRows([]table.Row{{"ssh-ed25519", fp, "before"}})
+	agentScreen.keyTable.Table.SetCursor(0)
+
+	agentScreen.editSelectedKeyComment()
+	agentScreen.commentOverlay.commentIn.SetValue("after")
+	_, cmd := agentScreen.Update(tea.KeyPressMsg{Text: "enter", Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a save command")
+	}
+	msg := cmd()
+	saved, ok := msg.(commentOverlaySavedMsg)
+	if !ok {
+		t.Fatalf("expected commentOverlaySavedMsg, got %T", msg)
+	}
+	if saved.err != nil {
+		t.Fatalf("expected filepath to resolve via config KeyPaths, got error: %v", saved.err)
+	}
+
+	data, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := openssh.ParsePrivateKeyBlob(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Comment != "after" {
+		t.Errorf("on-disk comment: got %q, want %q", parsed.Comment, "after")
+	}
+}
+
 func TestCommentOverlay_UnknownFingerprintErrors(t *testing.T) {
 	socketPath, _ := startTestKeyringAgent(t)
-	cmd := saveCommentOverlayCmd(socketPath, "SHA256:unregistered-fingerprint", "new-comment")
+	cmd := saveCommentOverlayCmd(socketPath, "", "SHA256:unregistered-fingerprint", "new-comment")
 	msg := cmd()
 	saved, ok := msg.(commentOverlaySavedMsg)
 	if !ok {
@@ -265,7 +339,7 @@ func TestCommentOverlay_VaultBackend_PersistsToVault(t *testing.T) {
 		t.Fatalf("add private key file: %v", err)
 	}
 
-	cmd := saveCommentOverlayCmd(socketPath, fp, "after-vault")
+	cmd := saveCommentOverlayCmd(socketPath, "", fp, "after-vault")
 	msg := cmd()
 	saved, ok := msg.(commentOverlaySavedMsg)
 	if !ok {
