@@ -36,8 +36,10 @@ build arch="": deps
         build_local darwin amd64 "{{ build_dir }}/darwin-amd64"
         ;;
       "")
-        echo "Building linux/amd64 (default)..."
-        build_local linux amd64 "{{ build_dir }}/linux-amd64"
+        host_os="$(go env GOOS)"
+        host_arch="$(go env GOARCH)"
+        echo "Building ${host_os}/${host_arch} (host, default)..."
+        build_local "$host_os" "$host_arch" "{{ build_dir }}/${host_os}-${host_arch}"
         ;;
       *)
         echo "Unknown arch: {{ arch }}" >&2

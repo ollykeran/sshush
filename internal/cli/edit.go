@@ -14,7 +14,6 @@ import (
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
-	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
 )
@@ -153,28 +152,6 @@ func resolveFromConfig(fingerprint string) string {
 	return ""
 }
 
-// isKeyLoadedInAgent reports whether a key with the given fingerprint is loaded
-// in the running agent. A nil session means the agent is not reachable.
-func isKeyLoadedInAgent(session *agent.Session, fingerprint string) bool {
-	if session == nil {
-		return false
-	}
-	agentKeys, err := session.List()
-	if err != nil {
-		return false
-	}
-	for _, k := range agentKeys {
-		pub, err := ssh.ParsePublicKey(k.Blob)
-		if err != nil {
-			continue
-		}
-		if ssh.FingerprintSHA256(pub) == fingerprint {
-			return true
-		}
-	}
-	return false
-}
-
 // openSessionIfRunning opens a Session, returning nil when the socket path is
 // unusable or the agent is not reachable. Callers here treat an absent agent as
 // "nothing to do" rather than as a failure.
@@ -187,52 +164,6 @@ func openSessionIfRunning(sockErr error, socketPath string) *agent.Session {
 		return nil
 	}
 	return session
-}
-
-// reloadKeyInAgent removes the old key and re-adds it after an edit.
-// For vault mode, uses add-key-opts; for standard mode, removes and re-adds.
-// A nil session means the agent is not reachable and there is nothing to reload.
-func reloadKeyInAgent(session *agent.Session, backend agent.Backend, privateKeyPath string) error {
-	if session == nil {
-		return nil
-	}
-
-	// Find and remove the old key. The key file's fingerprint does not change
-	// per agent key, so resolve it once rather than inside the loop.
-	agentKeys, err := session.List()
-	if err != nil {
-		return fmt.Errorf("list keys: %w", err)
-	}
-	existingFP := ""
-	if _, statErr := os.Stat(privateKeyPath); statErr == nil {
-		if pubKey, _, _, parseErr := agent.ParseKeyFromPath(privateKeyPath); parseErr == nil {
-			existingFP = ssh.FingerprintSHA256(pubKey)
-		}
-	}
-	if existingFP != "" {
-		for _, k := range agentKeys {
-			pub, parseErr := ssh.ParsePublicKey(k.Blob)
-			if parseErr != nil {
-				continue
-			}
-			if ssh.FingerprintSHA256(pub) == existingFP {
-				_ = session.Remove(pub)
-				break
-			}
-		}
-	}
-
-	// Re-add the key with updated comment
-	if backend.Mode == "vault" {
-		if err := vault.AddPrivateKeyFile(session, privateKeyPath, true); err != nil {
-			return fmt.Errorf("reload key in vault: %w", err)
-		}
-	} else {
-		if err := session.AddKeyFromPath(privateKeyPath); err != nil {
-			return fmt.Errorf("reload key in agent: %w", err)
-		}
-	}
-	return nil
 }
 
 func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
@@ -324,21 +255,16 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 	socketPath, sockErr := getSocketPath()
 	if session := openSessionIfRunning(sockErr, socketPath); session != nil {
 		defer session.Close()
-		backend, backendErr := session.Backend()
-		if backendErr == nil && isKeyLoadedInAgent(session, fingerprint) {
-			if reloadErr := reloadKeyInAgent(session, backend, privateKeyPath); reloadErr != nil {
-				out.Warn("key updated on disk but agent reload failed: " + reloadErr.Error())
-			} else {
-				out.Success("reloaded key in agent")
-			}
+		result := editcomment.SyncAgent(session, fingerprint, privateKeyPath, comment)
+		if result.ReloadErr != nil {
+			out.Warn("key updated on disk but agent reload failed: " + result.ReloadErr.Error())
+		} else if result.Reloaded {
+			out.Success("reloaded key in agent")
 		}
-		// Only existing identities are updated.
-		if backendErr == nil && backend.Mode == "vault" {
-			if extErr := vault.SetComment(session, fingerprint, comment); extErr != nil {
-				out.Warn("key file updated on disk but vault comment not updated: " + extErr.Error())
-			} else {
-				out.Success("updated comment in vault")
-			}
+		if result.VaultErr != nil {
+			out.Warn("key file updated on disk but vault comment not updated: " + result.VaultErr.Error())
+		} else if result.VaultSynced {
+			out.Success("updated comment in vault")
 		}
 	}
 
