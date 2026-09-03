@@ -29,9 +29,10 @@ func newEditCommand() *cobra.Command {
 		Use:   "edit <private-key-filepath | fingerprint | comment>",
 		Short: "Edit comment on a private key",
 		Long: "Edit an SSH private key comment, overwrite the key file or copy to a new file. " +
-			"The argument can be a filepath, a SHA256 fingerprint, or a comment to look up from the running agent.",
-		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'
-sshush edit ~/.ssh/id_rsa
+			"The argument can be a filepath, a SHA256 fingerprint, or a comment to look up from the running agent. " +
+			"Pass --comment for a quick one-line edit; omit it to open $EDITOR instead.",
+		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'  # fast: no editor
+sshush edit ~/.ssh/id_rsa                              # opens $EDITOR
 sshush edit SHA256:abc... --comment 'renamed'
 sshush edit my-key-comment --comment 'updated'`,
 		Args: func(cmd *cobra.Command, args []string) error {
