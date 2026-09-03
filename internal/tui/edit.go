@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
+	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
@@ -24,7 +26,8 @@ type editKeyLoadedMsg struct {
 }
 
 type editSaveMsg struct {
-	err error
+	warning string
+	err     error
 }
 
 const (
@@ -37,6 +40,7 @@ const (
 type EditScreen struct {
 	sk           *Skeleton
 	fileSelector *FileSelector
+	socketPath   string
 
 	commentIn  textinput.Model
 	saveBtn    ButtonRow
@@ -73,6 +77,7 @@ func NewEditScreen(sk *Skeleton, socketPath string) *EditScreen {
 	return &EditScreen{
 		sk:           sk,
 		fileSelector: NewFileSelector(ModeLoadFile, "Select private key file", sk.Styles()),
+		socketPath:   socketPath,
 		commentIn:    comment,
 		saveBtn:      saveBtn,
 		zonePrefix:   prefix,
@@ -152,6 +157,9 @@ func (s *EditScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.statusErr = true
 		} else {
 			s.status = "saved: " + utils.DisplayPath(s.loadedPath)
+			if msg.warning != "" {
+				s.status += " (" + msg.warning + ")"
+			}
 			s.statusErr = false
 			s.saveDiffRendered = ""
 			s.originalComment = s.commentIn.Value()
@@ -232,7 +240,7 @@ func (s *EditScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 				return s, nil
 			}
 			s.saveBtn.Press()
-			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
+			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath, s.fingerprint, s.socketPath), ButtonFlashCmd())
 		}
 	}
 	return s, nil
@@ -296,7 +304,7 @@ func (s *EditScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return s, nil
 			}
 			s.saveBtn.Press()
-			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath), ButtonFlashCmd())
+			return s, tea.Batch(editSaveKeyCmd(s.rawKey, comment, s.loadedPath, s.fingerprint, s.socketPath), ButtonFlashCmd())
 		}
 	}
 	return s, nil
@@ -480,12 +488,27 @@ func editLoadKeyCmd(path string) tea.Cmd {
 	}
 }
 
-func editSaveKeyCmd(rawKey interface{}, comment, filePath string) tea.Cmd {
+func editSaveKeyCmd(rawKey interface{}, comment, filePath, fingerprint, socketPath string) tea.Cmd {
 	return func() tea.Msg {
 		if err := keys.SaveWithComment(rawKey, comment, filePath); err != nil {
 			return editSaveMsg{err: err}
 		}
 
-		return editSaveMsg{}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			// No running agent to sync with; the file write above already succeeded.
+			return editSaveMsg{}
+		}
+		defer session.Close()
+
+		result := editcomment.SyncAgent(session, fingerprint, filePath, comment)
+		switch {
+		case result.ReloadErr != nil:
+			return editSaveMsg{warning: "agent reload failed: " + result.ReloadErr.Error()}
+		case result.VaultErr != nil:
+			return editSaveMsg{warning: "vault comment not updated: " + result.VaultErr.Error()}
+		default:
+			return editSaveMsg{}
+		}
 	}
 }

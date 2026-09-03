@@ -362,7 +362,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		if s.commentOverlay.active {
-			return s, s.commentOverlay.Update(msg, s.socketPath)
+			return s, s.commentOverlay.Update(msg, s.socketPath, s.configPath)
 		}
 		if s.showPass {
 			return s.handlePassInput(msg)
