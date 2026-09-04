@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -132,7 +133,7 @@ func TestVaultScreenHasModal(t *testing.T) {
 	if vs.HasModal() {
 		t.Fatal("expected no modal open initially")
 	}
-	vs.startInit()
+	vs.startInit(true)
 	if !vs.HasModal() {
 		t.Fatal("expected HasModal true while passphrase prompt open")
 	}
@@ -693,5 +694,61 @@ func TestVaultStartAddCarriesAutoloadChoice(t *testing.T) {
 	vs.handleKeys(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if !vs.addAutoload {
 		t.Error("a: want autoload on")
+	}
+}
+
+// TestVaultInitWithoutRecoveryLeavesNoPhrase: 'I' is the tab's --no-recovery.
+// The vault is created, but the passphrase is the only way in.
+func TestVaultInitWithoutRecoveryLeavesNoPhrase(t *testing.T) {
+	dir := unixSocketTempDirTUI(t)
+	vaultPath := filepath.Join(dir, "vault.json")
+
+	msg := initVaultCmd(vaultPath, []byte("no-recovery-pass"), false)().(vaultInitResultMsg)
+	if msg.err != nil {
+		t.Fatalf("init: %v", msg.err)
+	}
+	if msg.mnemonic != "" || msg.recoveryFile != "" {
+		t.Fatalf("want no recovery phrase, got mnemonic %q file %q", msg.mnemonic, msg.recoveryFile)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "recovery.txt")); !os.IsNotExist(err) {
+		t.Fatalf("recovery.txt: want absent, got %v", err)
+	}
+
+	listMsg := listVaultIdentitiesCmd(vaultPath, "")().(vaultIdentitiesMsg)
+	if !listMsg.initialized {
+		t.Fatal("want the vault to be initialized")
+	}
+}
+
+// TestVaultStartInitCarriesRecoveryChoice: the passphrase prompt is two steps,
+// so the choice made when it opened has to survive the confirm.
+func TestVaultStartInitCarriesRecoveryChoice(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'I', Text: "I"})
+	if vs.initRecovery {
+		t.Error("I: want recovery off")
+	}
+	if !vs.showPass || vs.passAction != "init-pass" {
+		t.Errorf("I: want the passphrase prompt open, got showPass=%v action=%q", vs.showPass, vs.passAction)
+	}
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if !vs.initRecovery {
+		t.Error("i: want recovery on")
+	}
+}
+
+// TestVaultInitResultSaysWhenThereIsNoPhrase: a vault with no recovery phrase
+// shows no phrase modal, so the status line is the only place that can say so.
+func TestVaultInitResultSaysWhenThereIsNoPhrase(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.Update(vaultInitResultMsg{})
+	if vs.recoveryDisplay.visible {
+		t.Error("want no recovery-phrase modal")
+	}
+	if !strings.Contains(vs.status, "without a recovery phrase") {
+		t.Errorf("status: want it to say there is no phrase, got %q", vs.status)
 	}
 }
