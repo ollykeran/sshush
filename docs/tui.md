@@ -235,6 +235,7 @@ VaultScreen has two focus states, `vaultFocusTable` and `vaultFocusButtons`, unl
 | `enter` | — | Press active button |
 | `i` | Init vault (only relevant — and only shown as a button — before the vault at `vaultPath` is initialized; two-step passphrase + confirm; recovery phrase generated and shown once on success) |
 | `a` | Add key (opens file picker; adds with autoload on) |
+| `A` | Add key with autoload off, the tab's `--no-autoload` (session only: the agent forgets it on restart). No button — the row is already nine wide, and this is the rarer choice |
 | `d` / `backspace` / `delete` | Remove selected identity (permanent — reaches VaultScreen via `HandleDKey`, since Skeleton's global `d` key is otherwise reserved for entering daemon focus on every tab but Agent's) |
 | `o` | Session-load selected identity (for autoload-off identities) |
 | `+` / `-` | Turn autoload on / off for the selected identity |
