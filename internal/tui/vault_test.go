@@ -655,3 +655,43 @@ func TestVaultTableKeyFileKeepsItsFileName(t *testing.T) {
 		t.Fatalf("expected the leading directories to be elided, got:\n%s", view)
 	}
 }
+
+// TestVaultAddNoAutoloadRoundtrip: 'A' is the tab's --no-autoload. The key is
+// stored, but with autoload off, so a daemon restart forgets it.
+func TestVaultAddNoAutoloadRoundtrip(t *testing.T) {
+	socketPath, vaultPath, _ := startVaultAgentWithPath(t, []byte("no-autoload-pass"))
+	dir := t.TempDir()
+	privPath, fp := writeTUITestKey(t, dir, "id_ed25519", "session-only-key")
+
+	addMsg := addVaultKeyCmd(socketPath, privPath, false)().(vaultOpResultMsg)
+	if addMsg.err != nil {
+		t.Fatalf("add: %v", addMsg.err)
+	}
+	listMsg := listVaultIdentitiesCmd(vaultPath, socketPath)().(vaultIdentitiesMsg)
+	if len(listMsg.rows) != 1 || listMsg.rows[0].fingerprint != fp {
+		t.Fatalf("expected the key in the vault, got %+v", listMsg.rows)
+	}
+	if listMsg.rows[0].autoload {
+		t.Error("autoload: want false after an 'A' add, got true")
+	}
+}
+
+// TestVaultStartAddCarriesAutoloadChoice: the file picker round-trips through
+// its own messages, so the choice made when it opened has to survive until a
+// file comes back.
+func TestVaultStartAddCarriesAutoloadChoice(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'A', Text: "A"})
+	if vs.addAutoload {
+		t.Error("A: want autoload off")
+	}
+	if !vs.fileSelector.Visible() {
+		t.Error("A: want the file picker open")
+	}
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if !vs.addAutoload {
+		t.Error("a: want autoload on")
+	}
+}

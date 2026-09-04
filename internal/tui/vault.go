@@ -79,6 +79,11 @@ type VaultScreen struct {
 	buttons    ButtonRow
 	zonePrefix string
 
+	// addAutoload is the autoload setting the pending add will use. The file
+	// selector round-trips through its own messages, so the choice made when
+	// the picker opened has to be remembered until a file comes back.
+	addAutoload bool
+
 	rows             []vaultIdentityRow
 	vaultInitialized bool
 
@@ -202,7 +207,7 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileSelectedMsg:
 		s.fileSelector.Hide()
 		s.focus = vaultFocusTable
-		return s, addVaultKeyCmd(s.socketPath, msg.Path, true)
+		return s, addVaultKeyCmd(s.socketPath, msg.Path, s.addAutoload)
 
 	case FilePickerCancelledMsg:
 		s.fileSelector.Hide()
@@ -369,8 +374,10 @@ func (s *VaultScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return s, s.startInit()
 
 	case "a":
-		s.focus = vaultFocusTable
-		return s, s.fileSelector.Show()
+		return s, s.startAdd(true)
+
+	case "A":
+		return s, s.startAdd(false)
 
 	case "backspace", "delete":
 		return s.removeSelected()
@@ -558,7 +565,7 @@ func (s *VaultScreen) pressButton(row, id int) (tea.Model, tea.Cmd) {
 	case vBtnInit:
 		action = s.startInit()
 	case vBtnAdd:
-		action = s.fileSelector.Show()
+		action = s.startAdd(true)
 	case vBtnRemove:
 		_, action = s.removeSelected()
 	case vBtnLoad:
@@ -575,6 +582,15 @@ func (s *VaultScreen) pressButton(row, id int) (tea.Model, tea.Cmd) {
 		action = s.startLock()
 	}
 	return s, tea.Batch(action, ButtonFlashCmd())
+}
+
+// startAdd opens the file picker for an add. autoload matches the CLI's
+// --no-autoload: off stores the key for this agent's lifetime only, so it is
+// gone again after the daemon restarts.
+func (s *VaultScreen) startAdd(autoload bool) tea.Cmd {
+	s.addAutoload = autoload
+	s.focus = vaultFocusTable
+	return s.fileSelector.Show()
 }
 
 func (s *VaultScreen) startInit() tea.Cmd {
@@ -862,6 +878,7 @@ func (s *VaultScreen) HelpEntries() []string {
 		st.HelpRow("Vault controls", ""),
 		st.HelpRow("i", "Init vault (until initialized)"),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow("A", "Add key without autoload (session only)"),
 		st.HelpRow("d / bksp", "Remove identity"),
 		st.HelpRow("o", "Session-load identity"),
 		st.HelpRow("+ / -", "Autoload on / off"),
