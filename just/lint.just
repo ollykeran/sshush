@@ -26,4 +26,4 @@ doc:
 
 # Verify public API doc comments compile
 doc-check:
-    go build ./... && go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config
+    go build ./... && go doc -all ./internal/cli && go doc -all ./internal/tui && go doc -all ./internal/config && go doc -all ./internal/vaultops
