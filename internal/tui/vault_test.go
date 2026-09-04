@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/theme"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -86,12 +87,21 @@ func newVaultTestSkeleton(vaultPath, socketPath string) (*Skeleton, *VaultScreen
 	return sk, vs
 }
 
+// seedVaultRows fills the screen the way a vaultIdentitiesMsg would, so the
+// table's cells always match the columns its width affords.
 func seedVaultRows(vs *VaultScreen, n int) {
-	rows := make([]table.Row, n)
+	rows := make([]vaultIdentityRow, n)
 	for i := 0; i < n; i++ {
-		rows[i] = table.Row{"SHA256:fp" + string(rune('0'+i)), "no", "off", "key", "ssh-ed25519"}
+		rows[i] = vaultIdentityRow{
+			fingerprint: "SHA256:fp" + string(rune('0'+i)),
+			loaded:      "no",
+			comment:     "key",
+			keyType:     "ssh-ed25519",
+			keyFile:     "~/.ssh/id_ed25519",
+		}
 	}
-	vs.table.SetRows(rows)
+	vs.rows = rows
+	vs.resizeTable()
 }
 
 func TestNewTUIVaultTabRegisteredOnlyInVaultMode(t *testing.T) {
@@ -270,6 +280,9 @@ func TestVaultAddListRemoveAutoloadRoundtrip(t *testing.T) {
 	}
 	if row.comment != "roundtrip-key" {
 		t.Errorf("comment: got %q, want roundtrip-key", row.comment)
+	}
+	if row.keyFile != utils.DisplayPath(privPath) {
+		t.Errorf("key file: got %q, want %q", row.keyFile, utils.DisplayPath(privPath))
 	}
 
 	// Turn autoload off.
@@ -568,5 +581,77 @@ func TestAgentRemoveVaultKeySessionUnloadsInsteadOfDeleting(t *testing.T) {
 	}
 	if !listMsg.rows[0].autoload {
 		t.Fatal("expected autoload to remain true (Agent-tab remove must not change persisted autoload)")
+	}
+}
+
+// TestVaultTableShowsKeyFileWhenWide: Identity.Filepath is recorded when a key
+// is added and shown by the CLI's FILEPATH column, but was invisible in the TUI.
+func TestVaultTableShowsKeyFileWhenWide(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 160
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/.ssh/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	view := vs.renderTable(st, false)
+	if !strings.Contains(view, "id_ed25519") {
+		t.Fatalf("expected the key file in the rendered table, got:\n%s", view)
+	}
+}
+
+// TestVaultTableDropsKeyFileWhenNarrow: the column is the one worth losing when
+// there is no room, and a row must not carry a cell its columns cannot index.
+func TestVaultTableDropsKeyFileWhenNarrow(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 60
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/.ssh/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	for _, col := range vs.table.Columns() {
+		if col.Title == vaultKeyFileColumn {
+			t.Fatal("expected the key file column to be dropped at this width")
+		}
+	}
+	if got := len(vs.table.Rows()[0]); got != len(vs.table.Columns()) {
+		t.Fatalf("row cells: want %d to match the columns, got %d", len(vs.table.Columns()), got)
+	}
+	// Rendering must not panic on the trimmed row.
+	_ = vs.renderTable(st, false)
+}
+
+// TestVaultTableKeyFileKeepsItsFileName: a path too long for the column loses
+// its leading directories, not the name that identifies it.
+func TestVaultTableKeyFileKeepsItsFileName(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 160
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/very/deeply/nested/directory/structure/that/will/not/fit/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	view := vs.renderTable(st, false)
+	if !strings.Contains(view, "id_ed25519") {
+		t.Fatalf("expected the file name to survive truncation, got:\n%s", view)
+	}
+	if strings.Contains(view, "~/very/deeply/nested/directory/structure/that/will") {
+		t.Fatalf("expected the leading directories to be elided, got:\n%s", view)
 	}
 }

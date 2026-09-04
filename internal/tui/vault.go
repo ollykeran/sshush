@@ -21,6 +21,7 @@ type vaultIdentityRow struct {
 	autoload    bool
 	comment     string
 	keyType     string
+	keyFile     string // display path the key was added from, or "-"
 }
 
 // vaultIdentitiesMsg reports the result of listing vault identities. When err is nil
@@ -231,24 +232,16 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 		s.rows = msg.rows
-		rows := make([]table.Row, len(msg.rows))
-		for i, r := range msg.rows {
-			autoload := "off"
-			if r.autoload {
-				autoload = "on"
-			}
-			rows[i] = table.Row{r.fingerprint, r.loaded, autoload, r.comment, r.keyType}
-		}
-		s.table.SetRows(rows)
-		if len(rows) > 0 && s.table.Cursor() < 0 {
+		s.syncTableRows()
+		if len(s.rows) > 0 && s.table.Cursor() < 0 {
 			s.table.SetCursor(0)
 		}
 		s.resizeTable()
 		s.statusErr = false
-		if len(rows) == 0 {
+		if len(s.rows) == 0 {
 			s.status = "no identities in vault"
 		} else {
-			s.status = fmt.Sprintf("%d identity(ies) in vault", len(rows))
+			s.status = fmt.Sprintf("%d identity(ies) in vault", len(s.rows))
 		}
 		return s, nil
 
@@ -673,9 +666,33 @@ func (s *VaultScreen) resizeTable() {
 	innerW := keyBoxInnerWidth(w)
 	rowW := innerW + keyCellPadOverhead
 	s.table.SetColumns(vaultTableColumns(innerW))
+	// The columns a width affords decide how many cells a row carries, so the
+	// rows are rebuilt whenever they change.
+	s.syncTableRows()
 	s.table.SetWidth(rowW)
 	s.table.SetHeight(s.tableHeight())
 	s.syncTableSelection()
+}
+
+// syncTableRows renders the identity rows to the table's current columns.
+// bubbles' table indexes its columns by cell position while rendering a row, so
+// a row must never carry more cells than there are columns — which is what lets
+// the key file column disappear on a narrow terminal.
+func (s *VaultScreen) syncTableRows() {
+	cols := len(s.table.Columns())
+	rows := make([]table.Row, len(s.rows))
+	for i, r := range s.rows {
+		autoload := "off"
+		if r.autoload {
+			autoload = "on"
+		}
+		cells := table.Row{r.fingerprint, r.loaded, autoload, r.comment, r.keyType, r.keyFile}
+		if cols > 0 && len(cells) > cols {
+			cells = cells[:cols]
+		}
+		rows[i] = cells
+	}
+	s.table.SetRows(rows)
 }
 
 // syncTableSelection keeps row data visible and toggles the cursor-row highlight only
@@ -741,7 +758,16 @@ func renderVaultTableRow(row table.Row, cols []table.Column, styles table.Styles
 		}
 		w := cols[i].Width
 		box := lipgloss.NewStyle().Width(w).MaxWidth(w).Inline(true)
-		text := box.Render(ansi.Truncate(value, w, "…"))
+		cut := ansi.Truncate(value, w, "…")
+		if cols[i].Title == vaultKeyFileColumn {
+			// A path that does not fit loses its leading directories, not its
+			// file name: "…/work/id_ed25519" says more than "~/Documents/pro…".
+			cut = value
+			if over := ansi.StringWidth(value) - w; over > 0 {
+				cut = ansi.TruncateLeft(value, over+1, "…")
+			}
+		}
+		text := box.Render(cut)
 		if selected {
 			parts = append(parts, styles.Selected.Render(text))
 		} else {
@@ -847,7 +873,21 @@ func (s *VaultScreen) HelpEntries() []string {
 	}
 }
 
-// vaultTableColumns lays out the 5 vault identity columns within width w.
+// vaultKeyFileColumn titles the column holding the path a key was added from.
+// renderVaultTableRow keys off it to elide from the left, since the file name
+// is the useful half of a path.
+const vaultKeyFileColumn = "Key file"
+
+const (
+	vaultTableCommentMinW = 12
+	// 14 columns is the narrowest that still says something: an elided path
+	// renders as "…/id_ed25519", which is the half worth keeping.
+	vaultTableKeyFileMinW = 14
+	vaultTableKeyFileMaxW = 40
+)
+
+// vaultTableColumns lays out the vault identity columns within width w. The key
+// file column is present only when there is room for it.
 func vaultTableColumns(w int) []table.Column {
 	if w < keyTableMinTotalWidth {
 		w = keyTableMinTotalWidth
@@ -856,17 +896,38 @@ func vaultTableColumns(w int) []table.Column {
 	loadedW := 8
 	autoloadW := 10
 	typeW := 12
-	commentW := w - fpW - loadedW - autoloadW - typeW
-	if commentW < 12 {
-		commentW = 12
+	rest := w - fpW - loadedW - autoloadW - typeW
+
+	// The comment and the key file share whatever the fixed columns leave. The
+	// key file is the column worth dropping when the terminal is narrow: the
+	// comment is what people scan by, and the path is recoverable from the CLI.
+	commentW := rest
+	keyFileW := 0
+	if rest >= vaultTableCommentMinW+vaultTableKeyFileMinW {
+		keyFileW = rest / 2
+		if keyFileW < vaultTableKeyFileMinW {
+			keyFileW = vaultTableKeyFileMinW
+		}
+		if keyFileW > vaultTableKeyFileMaxW {
+			keyFileW = vaultTableKeyFileMaxW
+		}
+		commentW = rest - keyFileW
 	}
-	return []table.Column{
+	if commentW < vaultTableCommentMinW {
+		commentW = vaultTableCommentMinW
+	}
+
+	cols := []table.Column{
 		{Title: "Fingerprint", Width: fpW},
 		{Title: "Loaded", Width: loadedW},
 		{Title: "Autoload", Width: autoloadW},
 		{Title: "Comment", Width: commentW},
 		{Title: "Type", Width: typeW},
 	}
+	if keyFileW > 0 {
+		cols = append(cols, table.Column{Title: vaultKeyFileColumn, Width: keyFileW})
+	}
+	return cols
 }
 
 // vaultTableStyles reuses keyTableStyles so the vault table matches the agent key
@@ -917,12 +978,17 @@ func listVaultIdentitiesCmd(vaultPath, socketPath string) tea.Cmd {
 		}
 		rows := make([]vaultIdentityRow, len(res.Identities))
 		for i, id := range res.Identities {
+			keyFile := "-"
+			if id.Filepath != "" {
+				keyFile = utils.DisplayPath(id.Filepath)
+			}
 			rows[i] = vaultIdentityRow{
 				fingerprint: id.Fingerprint,
 				loaded:      id.Loaded.String(),
 				autoload:    id.Autoload,
 				comment:     id.Comment,
 				keyType:     id.KeyType,
+				keyFile:     keyFile,
 			}
 		}
 		return vaultIdentitiesMsg{rows: rows, initialized: true}
