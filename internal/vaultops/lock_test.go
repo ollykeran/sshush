@@ -106,3 +106,25 @@ func backendOf(t *testing.T, f *fixture) agent.Backend {
 	}
 	return backend
 }
+
+// TestRequireVaultAgent_reportsTheGateWithoutRunningAnything lets a front end
+// refuse before it asks the user for a 24-word recovery phrase.
+func TestRequireVaultAgent_reportsTheGateWithoutRunningAnything(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	socketPath := startKeyringAgent(t, dir)
+
+	err := RequireVaultAgent(Env{SocketPath: socketPath}, "unlock-recovery")
+	if got := CodeOf(err); got != CodeNotVaultAgent {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeNotVaultAgent, got, err)
+	}
+	if !strings.Contains(err.Error(), "vault unlock-recovery requires a running vault agent") {
+		t.Fatalf("message: want it to name the verb, got %q", err.Error())
+	}
+}
+
+func TestRequireVaultAgent_acceptsAVaultAgent(t *testing.T) {
+	f := startVaultAgent(t, false)
+	if err := RequireVaultAgent(f.silentEnv(), "unlock-recovery"); err != nil {
+		t.Fatalf("want a vault agent to pass the gate, got %v", err)
+	}
+}

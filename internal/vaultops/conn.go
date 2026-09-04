@@ -113,6 +113,20 @@ func (c *conn) attachAgent(n need) error {
 	return nil
 }
 
+// RequireVaultAgent reports whether verb could run right now: an agent is
+// reachable and vault-backed. Front ends call it to fail before asking the user
+// for something long and secret, the way [InitTarget] does for init. It opens
+// and closes its own session rather than holding one across an interactive
+// prompt, so the verb that follows dials again.
+func RequireVaultAgent(env Env, verb string) error {
+	c, err := open(env, verb, needAgent)
+	if err != nil {
+		return err
+	}
+	c.close()
+	return nil
+}
+
 // close releases the agent session, if any.
 func (c *conn) close() {
 	if c != nil && c.session != nil {

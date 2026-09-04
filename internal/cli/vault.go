@@ -5,16 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/ollykeran/sshush/internal/agent"
-	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
-	"github.com/ollykeran/sshush/internal/vault"
+	"github.com/ollykeran/sshush/internal/vaultops"
 	"github.com/spf13/cobra"
-	ssh "golang.org/x/crypto/ssh"
 )
 
 func newVaultCommand() *cobra.Command {
@@ -32,82 +28,40 @@ func newVaultCommand() *cobra.Command {
 	return vaultCmd
 }
 
-// openInitializedVaultStore opens the vault from --vault-path or config and checks it is initialized.
-func openInitializedVaultStore(cmd *cobra.Command) (*vault.VaultStore, string, error) {
+// vaultEnv builds the vaultops.Env for a vault subcommand from --vault-path,
+// config and the resolved socket. AskPassphrase is set, so a locked agent
+// serving this very vault is unlocked in passing rather than refused.
+func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
 	var vaultPath string
 	if cmd.Flags().Changed("vault-path") {
 		vaultPath, _ = cmd.Flags().GetString("vault-path")
-	} else if env.Config != nil && env.Config.VaultPath != "" {
+	} else if env.Config != nil {
 		vaultPath = env.Config.VaultPath
 	}
-	if vaultPath == "" {
-		return nil, "", style.NewOutput().Error("vault path required: set [vault].vault_path in config or use --vault-path").AsError()
-	}
-	vaultPath = utils.ExpandHomeDirectory(vaultPath)
-	vaultPath = vault.ResolveToFile(vaultPath)
-	store, err := vault.Open(vaultPath)
+	socketPath, err := getSocketPath()
 	if err != nil {
-		return nil, vaultPath, style.NewOutput().Error("open vault: " + err.Error()).AsError()
+		return vaultops.Env{}, style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	if store.GetMetadata() == nil {
-		return nil, vaultPath, style.NewOutput().
-			Error("vault not found or not initialized at " + utils.DisplayPath(vaultPath)).
-			Info("Run 'sshush vault init' to create it.").
-			AsError()
+	agentVaultPath := ""
+	if env.Config != nil && env.Config.IsVault() {
+		agentVaultPath = env.Config.VaultPath
 	}
-	return store, vaultPath, nil
+	return vaultops.Env{
+		VaultPath:      vaultPath,
+		SocketPath:     socketPath,
+		AgentVaultPath: agentVaultPath,
+		AskPassphrase:  readPassphrase,
+	}, nil
 }
 
-// vaultAgentGateError explains why a command that needs a vault agent cannot
-// run. An agent that does not speak sshush's own protocol is almost always an
-// sshushd left running from an older install, which is worth saying plainly.
-func vaultAgentGateError(backend agent.Backend, what string) error {
-	out := style.NewOutput().Error(what + " requires a running vault agent")
-	if !backend.SpeaksOps {
-		// Either a foreign agent, or an sshushd left running from an older
-		// install. The second is worth naming, since a restart fixes it.
-		out.Info("this agent does not speak sshush's protocol; if you upgraded sshush while the daemon was running, restart it with 'sshush reload'.")
+// vaultError renders a vaultops failure as sshush's standard styled error: the
+// sentence, then the remedy on its own line.
+func vaultError(err error) error {
+	out := style.NewOutput().Error(err.Error())
+	if hint := vaultops.HintOf(err); hint != "" {
+		out.Info(hint)
 	}
 	return out.AsError()
-}
-
-// unlockVaultAgentIfLocked prompts for passphrase and unlocks the agent when it uses the same vault file.
-// The session belongs to the caller and is left open.
-func unlockVaultAgentIfLocked(session *agent.Session, resolvedVaultPath string) {
-	if env.Config == nil {
-		return
-	}
-	agentVaultFile := ""
-	if env.Config.IsVault() && env.Config.VaultPath != "" {
-		agentVaultFile = vault.ResolveToFile(utils.ExpandHomeDirectory(env.Config.VaultPath))
-	}
-	if agentVaultFile == "" || resolvedVaultPath != agentVaultFile {
-		return
-	}
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" || !backend.VaultLocked {
-		return
-	}
-	passphrase, err := readPassphrase("Passphrase: ")
-	if err != nil {
-		return
-	}
-	_ = session.Unlock(passphrase)
-	ClearBytes(passphrase)
-}
-
-func resolveVaultSelectorArg(store *vault.VaultStore, arg string) (vault.Identity, error) {
-	path := utils.ExpandHomeDirectory(arg)
-	if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
-		pubKey, _, _, err := agent.ParseKeyFromPath(path)
-		if err == nil {
-			return vault.ResolveIdentityByFingerprint(store, ssh.FingerprintSHA256(pubKey))
-		}
-		if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-			return vault.Identity{}, err
-		}
-	}
-	return vault.ResolveIdentity(store, arg)
 }
 
 func newVaultInitCommand() *cobra.Command {
@@ -125,19 +79,14 @@ func newVaultInitCommand() *cobra.Command {
 }
 
 func runVaultInit(cmd *cobra.Command, _ []string) error {
-	var vaultPath string
-	if cmd.Flags().Changed("vault-path") {
-		vaultPath, _ = cmd.Flags().GetString("vault-path")
-	} else if env.Config != nil && env.Config.VaultPath != "" {
-		vaultPath = env.Config.VaultPath
+	e, err := vaultEnv(cmd)
+	if err != nil {
+		return err
 	}
-	if vaultPath == "" {
-		return style.NewOutput().Error("vault path required: set [vault].vault_path in config or use --vault-path").AsError()
-	}
-	vaultPath = utils.ExpandHomeDirectory(vaultPath)
-	vaultPath = vault.ResolveToFile(vaultPath)
-	if fi, err := os.Stat(vaultPath); err == nil && !fi.IsDir() {
-		return style.NewOutput().Error("vault already exists at " + utils.DisplayPath(vaultPath)).AsError()
+	// Fail on an existing vault before asking for a passphrase, so a mistyped
+	// --vault-path costs one message rather than two prompts.
+	if _, err := vaultops.InitTarget(e); err != nil {
+		return vaultError(err)
 	}
 	passphrase, err := ReadPassphraseWithConfirm("Passphrase: ", "Confirm passphrase: ")
 	if err != nil {
@@ -147,53 +96,37 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 	}
 	defer ClearBytes(passphrase)
-	store, err := vault.Open(vaultPath)
-	if err != nil {
-		return style.NewOutput().Error("create vault: " + err.Error()).AsError()
-	}
-	if err := vault.Init(store, passphrase); err != nil {
-		return style.NewOutput().Error("init vault: " + err.Error()).AsError()
-	}
-	noRecovery, _ := cmd.Flags().GetBool("no-recovery")
-	if !noRecovery {
-		mnemonic, err := vault.GenerateRecoveryMnemonic()
-		if err != nil {
-			return style.NewOutput().Error("generate recovery phrase: " + err.Error()).AsError()
-		}
-		if err := vault.EnableRecoveryWithPassphrase(store, passphrase, mnemonic); err != nil {
-			return style.NewOutput().Error("enable recovery: " + err.Error()).AsError()
-		}
-		// Write recovery.txt in same dir as vault for easy copy
-		recoveryTxt := filepath.Join(filepath.Dir(vaultPath), "recovery.txt")
-		if err := os.WriteFile(recoveryTxt, []byte(mnemonic+"\n"), 0600); err != nil {
-			return style.NewOutput().Error("write recovery.txt: " + err.Error()).AsError()
-		}
-		if recoveryFile, _ := cmd.Flags().GetString("recovery-file"); recoveryFile != "" {
-			recoveryFile = utils.ExpandHomeDirectory(recoveryFile)
-			if err := os.WriteFile(recoveryFile, []byte(mnemonic+"\n"), 0600); err != nil {
-				return style.NewOutput().Error("write recovery file: " + err.Error()).AsError()
-			}
-		}
 
-		// Print to terminal with spacers so user doesn't copy the wrong thing
-		fmt.Fprintln(os.Stderr)
-		out := style.NewOutput().
-			Success("Vault initialized with recovery phrase. Store these 24 words safely:").
-			Spacer()
-		for _, line := range wordWrap(mnemonic, 60) {
-			out.Info(line)
-		}
-		out.Spacer().
-			Info("Store this phrase offline; it is not saved anywhere else.")
-		out.Success("Also written to " + utils.DisplayPath(recoveryTxt) + " (mode 0600)")
-		if err := CopyToClipboard(mnemonic); err == nil {
-			out.Success("Copied to clipboard.")
-		}
-		fmt.Fprintln(os.Stderr, style.BoxWithMaxWidth(out.String(), 72))
-		os.Stderr.Sync()
-	} else {
-		style.NewOutput().Success("Vault initialized at " + utils.DisplayPath(vaultPath)).PrintErr()
+	noRecovery, _ := cmd.Flags().GetBool("no-recovery")
+	recoveryFile, _ := cmd.Flags().GetString("recovery-file")
+	res, err := vaultops.Init(e, passphrase, vaultops.InitOptions{
+		Recovery:     !noRecovery,
+		RecoveryFile: recoveryFile,
+	})
+	if err != nil {
+		return vaultError(err)
 	}
+	if res.Mnemonic == "" {
+		style.NewOutput().Success("Vault initialized at " + utils.DisplayPath(res.VaultPath)).PrintErr()
+		return nil
+	}
+
+	// Print to terminal with spacers so user doesn't copy the wrong thing
+	fmt.Fprintln(os.Stderr)
+	out := style.NewOutput().
+		Success("Vault initialized with recovery phrase. Store these 24 words safely:").
+		Spacer()
+	for _, line := range wordWrap(res.Mnemonic, 60) {
+		out.Info(line)
+	}
+	out.Spacer().
+		Info("Store this phrase offline; it is not saved anywhere else.")
+	out.Success("Also written to " + utils.DisplayPath(res.RecoveryFile) + " (mode 0600)")
+	if err := CopyToClipboard(res.Mnemonic); err == nil {
+		out.Success("Copied to clipboard.")
+	}
+	fmt.Fprintln(os.Stderr, style.BoxWithMaxWidth(out.String(), 72))
+	os.Stderr.Sync()
 	return nil
 }
 
@@ -210,62 +143,34 @@ func newVaultListCommand() *cobra.Command {
 }
 
 func runVaultList(cmd *cobra.Command, _ []string) error {
-	store, vaultPath, err := openInitializedVaultStore(cmd)
+	e, err := vaultEnv(cmd)
 	if err != nil {
 		return err
 	}
-	identities, err := vault.ListIdentities(store)
+	res, err := vaultops.List(e)
 	if err != nil {
-		return style.NewOutput().Error("list identities: " + err.Error()).AsError()
+		return vaultError(err)
 	}
-	if len(identities) == 0 {
+	if !res.Initialized {
+		return style.NewOutput().
+			Error("vault not found or not initialized at " + utils.DisplayPath(res.VaultPath)).
+			Info("Run 'sshush vault init' to create it.").
+			AsError()
+	}
+	if len(res.Identities) == 0 {
 		style.NewOutput().Warn("no keys in vault").PrintTo(os.Stdout)
 		return nil
-	}
-
-	var loadedSet map[string]struct{}
-	haveAgent := false
-	socketPath, sockErr := getSocketPath()
-	if sockErr == nil {
-		agentVaultFile := ""
-		if env.Config != nil && env.Config.IsVault() && env.Config.VaultPath != "" {
-			agentVaultFile = vault.ResolveToFile(utils.ExpandHomeDirectory(env.Config.VaultPath))
-		}
-		if session, err := agent.Open(socketPath); err == nil {
-			defer session.Close()
-			if agentVaultFile != "" && vaultPath == agentVaultFile {
-				unlockVaultAgentIfLocked(session, vaultPath)
-			}
-			keys, err := session.List()
-			if err == nil {
-				loadedSet = make(map[string]struct{})
-				for _, k := range keys {
-					if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
-						loadedSet[ssh.FingerprintSHA256(pub)] = struct{}{}
-					}
-				}
-				haveAgent = true
-			}
-		}
 	}
 
 	out := style.NewOutput()
 	out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-10s  %s", "FINGERPRINT", "LOADED", "AUTOLOAD", "COMMENT", "TYPE", "FILEPATH")))
 	maxTypeLen := 0
-	for _, id := range identities {
+	for _, id := range res.Identities {
 		if len(id.KeyType) > maxTypeLen {
 			maxTypeLen = len(id.KeyType)
 		}
 	}
-	for _, id := range identities {
-		loaded := "n/a"
-		if haveAgent {
-			if _, ok := loadedSet[id.Fingerprint]; ok {
-				loaded = "yes"
-			} else {
-				loaded = "no"
-			}
-		}
+	for _, id := range res.Identities {
 		autoload := "no"
 		if id.Autoload {
 			autoload = "yes"
@@ -274,11 +179,11 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 		if len(comment) > 20 {
 			comment = comment[:17] + "..."
 		}
-		filepath := id.Filepath
-		if filepath == "" {
-			filepath = "-"
+		keyFile := id.Filepath
+		if keyFile == "" {
+			keyFile = "-"
 		}
-		out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-*s  %s", id.Fingerprint, loaded, autoload, comment, maxTypeLen, id.KeyType, filepath)))
+		out.Add(style.Highlight(fmt.Sprintf("%-70s  %-6s  %-8s  %-20s  %-*s  %s", id.Fingerprint, id.Loaded, autoload, comment, maxTypeLen, id.KeyType, keyFile)))
 	}
 	out.PrintTo(os.Stdout)
 	return nil
@@ -305,47 +210,31 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 		_ = cmd.Usage()
 		return style.NewOutput().Error("at least one key path is required").AsError()
 	}
-	socketPath, err := getSocketPath()
+	e, err := vaultEnv(cmd)
 	if err != nil {
-		return style.NewOutput().Error("failed to get socket path").AsError()
+		return err
 	}
-	session, err := agent.Open(socketPath)
-	if err != nil {
-		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
-	}
-	defer session.Close()
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" {
-		return vaultAgentGateError(backend, "vault add")
-	}
-	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
-	autoload := !noAutoload
-
-	before, err := session.List()
-	if err != nil {
-		return style.NewOutput().Error("failed to list keys from socket").AsError()
-	}
-	out := style.NewOutput()
+	// Resolve every argument to a real file before touching the agent, so an
+	// unrecognised one costs nothing rather than half a command.
+	paths := make([]string, 0, len(args))
 	for _, arg := range args {
 		path := utils.ExpandHomeDirectory(arg)
-		if _, err := os.Stat(path); err != nil {
+		if _, statErr := os.Stat(path); statErr != nil {
 			resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
 			if resolveErr != nil {
 				return resolveErr
 			}
 			path = utils.ExpandHomeDirectory(resolved)
 		}
-		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-			msg := "failed to add key: " + err.Error()
-			if errors.Is(err, agent.ErrVaultLocked) {
-				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
-			}
-			return style.NewOutput().Error(msg).AsError()
-		}
+		paths = append(paths, path)
 	}
-	out.PrintErr()
-	after, _ := session.List()
-	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
+	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
+
+	res, err := vaultops.Add(e, paths, !noAutoload)
+	if err != nil {
+		return vaultError(err)
+	}
+	printKeysDiff(agentKeysToEntries(res.Before), agentKeysToEntries(res.After)).Print()
 	return nil
 }
 
@@ -370,55 +259,15 @@ func runVaultRemove(cmd *cobra.Command, args []string) error {
 		_ = cmd.Usage()
 		return style.NewOutput().Error("at least one selector is required").AsError()
 	}
-	store, vaultPath, err := openInitializedVaultStore(cmd)
+	e, err := vaultEnv(cmd)
 	if err != nil {
 		return err
 	}
-	socketPath, err := getSocketPath()
+	res, err := vaultops.Remove(e, args)
 	if err != nil {
-		return fmt.Errorf("cli: get socket path: %w", err)
+		return vaultError(err)
 	}
-	session, err := agent.Open(socketPath)
-	if err != nil {
-		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
-	}
-	defer session.Close()
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" {
-		return vaultAgentGateError(backend, "vault remove")
-	}
-	unlockVaultAgentIfLocked(session, vaultPath)
-
-	before, err := session.List()
-	if err != nil {
-		before = nil
-	}
-
-	for _, arg := range args {
-		id, err := resolveVaultSelectorArg(store, arg)
-		if err != nil {
-			if errors.Is(err, vault.ErrAmbiguousComment) {
-				return style.NewOutput().Error("ambiguous comment: multiple vault identities share that comment; use fingerprint").AsError()
-			}
-			if errors.Is(err, vault.ErrIdentityNotFound) {
-				return style.NewOutput().Error("no vault identity matches " + arg).AsError()
-			}
-			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-				return style.NewOutput().Error(err.Error()).AsError()
-			}
-			return style.NewOutput().Error(err.Error()).AsError()
-		}
-		pubKey, err := ssh.ParsePublicKey(id.PublicKey)
-		if err != nil {
-			return style.NewOutput().Error("parse stored public key: " + err.Error()).AsError()
-		}
-		if err := session.Remove(pubKey); err != nil {
-			return style.NewOutput().Error(fmt.Sprintf("remove %s: %v", arg, err)).AsError()
-		}
-	}
-
-	after, _ := session.List()
-	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
+	printKeysDiff(agentKeysToEntries(res.Before), agentKeysToEntries(res.After)).Print()
 	return nil
 }
 
@@ -439,52 +288,12 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	store, vaultPath, err := openInitializedVaultStore(cmd)
+	e, err := vaultEnv(cmd)
 	if err != nil {
 		return err
 	}
-	socketPath, err := getSocketPath()
-	if err != nil {
-		return fmt.Errorf("cli: get socket path: %w", err)
-	}
-	session, err := agent.Open(socketPath)
-	if err != nil {
-		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
-	}
-	defer session.Close()
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" {
-		return vaultAgentGateError(backend, "vault load")
-	}
-	unlockVaultAgentIfLocked(session, vaultPath)
-
-	for _, arg := range args {
-		id, err := resolveVaultSelectorArg(store, arg)
-		if err != nil {
-			if errors.Is(err, vault.ErrAmbiguousComment) {
-				return style.NewOutput().Error("ambiguous comment: multiple vault identities share that comment; use fingerprint").AsError()
-			}
-			if errors.Is(err, vault.ErrIdentityNotFound) {
-				return style.NewOutput().Error("no vault identity matches " + arg).AsError()
-			}
-			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-				return style.NewOutput().Error(err.Error()).AsError()
-			}
-			return style.NewOutput().Error(err.Error()).AsError()
-		}
-		err = vault.SessionLoad(session, id.Fingerprint)
-		if err != nil {
-			var msg string
-			switch {
-			case errors.Is(err, agent.ErrVaultLocked):
-				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
-			case errors.Is(err, agent.ErrIdentityNotFound):
-				msg = "no vault identity matches " + arg
-			default:
-				msg = err.Error()
-			}
-			return style.NewOutput().Error(msg).AsError()
-		}
+	if _, err := vaultops.SessionLoad(e, args); err != nil {
+		return vaultError(err)
 	}
 	style.NewOutput().Success("Loaded into agent session.").PrintErr()
 	return nil
@@ -523,54 +332,12 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	selectors := args[1:]
-
-	store, vaultPath, err := openInitializedVaultStore(cmd)
+	e, err := vaultEnv(cmd)
 	if err != nil {
 		return err
 	}
-	socketPath, err := getSocketPath()
-	if err != nil {
-		return fmt.Errorf("cli: get socket path: %w", err)
-	}
-	session, err := agent.Open(socketPath)
-	if err != nil {
-		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
-	}
-	defer session.Close()
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" {
-		return vaultAgentGateError(backend, "vault autoload")
-	}
-	unlockVaultAgentIfLocked(session, vaultPath)
-
-	for _, arg := range selectors {
-		id, err := resolveVaultSelectorArg(store, arg)
-		if err != nil {
-			if errors.Is(err, vault.ErrAmbiguousComment) {
-				return style.NewOutput().Error("ambiguous comment: multiple vault identities share that comment; use fingerprint").AsError()
-			}
-			if errors.Is(err, vault.ErrIdentityNotFound) {
-				return style.NewOutput().Error("no vault identity matches " + arg).AsError()
-			}
-			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-				return style.NewOutput().Error(err.Error()).AsError()
-			}
-			return style.NewOutput().Error(err.Error()).AsError()
-		}
-		err = vault.SetAutoload(session, id.Fingerprint, on)
-		if err != nil {
-			var msg string
-			switch {
-			case errors.Is(err, agent.ErrVaultLocked):
-				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
-			case errors.Is(err, agent.ErrIdentityNotFound):
-				msg = "no vault identity matches " + arg
-			default:
-				msg = err.Error()
-			}
-			return style.NewOutput().Error(msg).AsError()
-		}
+	if _, err := vaultops.SetAutoload(e, args[1:], on); err != nil {
+		return vaultError(err)
 	}
 	style.NewOutput().Success("Autoload updated.").PrintErr()
 	return nil
@@ -590,18 +357,13 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	if env.Config == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	socketPath, err := getSocketPath()
+	e, err := vaultEnv(cmd)
 	if err != nil {
-		return style.NewOutput().Error("failed to get socket path").AsError()
+		return err
 	}
-	session, err := agent.Open(socketPath)
-	if err != nil {
-		return style.NewOutput().Error("vault unlock-recovery requires a running vault agent; set [agent].vault = true and run 'sshush start'").AsError()
-	}
-	defer session.Close()
-	backend, err := session.Backend()
-	if err != nil || backend.Mode != "vault" {
-		return vaultAgentGateError(backend, "vault unlock-recovery")
+	// Check the agent before asking for 24 words, not after.
+	if err := vaultops.RequireVaultAgent(e, "unlock-recovery"); err != nil {
+		return vaultError(err)
 	}
 	fmt.Fprint(os.Stderr, "Recovery phrase (24 words): ")
 	reader := bufio.NewReader(os.Stdin)
@@ -609,18 +371,8 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return style.NewOutput().Error("read recovery phrase: " + err.Error()).AsError()
 	}
-	mnemonic := strings.TrimSpace(line)
-	if err := vault.UnlockWithRecoveryPhrase(session, mnemonic); err != nil {
-		var msg string
-		switch {
-		case errors.Is(err, agent.ErrNoRecovery):
-			msg = "this vault was created with --no-recovery, so no recovery phrase can unlock it."
-		case errors.Is(err, agent.ErrWrongPassphrase):
-			msg = "unlock failed: wrong recovery phrase. Use exactly 24 words, single spaces."
-		default:
-			msg = "unlock with recovery failed: " + err.Error()
-		}
-		return style.NewOutput().Error(msg).AsError()
+	if err := vaultops.UnlockRecovery(e, strings.TrimSpace(line)); err != nil {
+		return vaultError(err)
 	}
 	style.NewOutput().Success("Vault unlocked with recovery phrase.").PrintErr()
 	return nil
