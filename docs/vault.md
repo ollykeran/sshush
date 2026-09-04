@@ -194,7 +194,8 @@ Three surface differences are deliberate, and each is a property of the front en
 
 - The CLI resolves a selector by fingerprint, exact comment **or** key file path; the tab resolves by fingerprint, because it selects a table row and already holds one.
 - The CLI unlocks a locked agent in passing, prompting for the passphrase; the tab cannot, because a `tea.Cmd` cannot block for input. It reports the lock and offers its own unlock modal.
-- `--recovery-file` and `--no-recovery` are CLI flags; the tab always initialises with a recovery phrase. `--no-autoload` has a tab equivalent: `A` adds without autoload where `a` adds with it.
+- `--no-recovery` and `--no-autoload` have tab equivalents on the shifted key: `I` initialises with no recovery phrase where `i` generates one, and `A` adds with autoload off where `a` adds with it. `--recovery-file` has none — the tab writes `recovery.txt` beside the vault and shows the phrase once.
+- The CLI copies a freshly generated recovery phrase to the clipboard; the tab does not, and shows it instead.
 
 One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the session-unload operation, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. Session-unload is the reverse of session-load: the payload is a UTF-8 SHA256 fingerprint, carried by `sshush-op` and dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
 

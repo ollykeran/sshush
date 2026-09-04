@@ -93,6 +93,10 @@ type VaultScreen struct {
 	showPass       bool
 	passAction     string // "init-pass", "init-confirm", "unlock"
 	initPassphrase []byte
+	// initRecovery is the recovery setting the pending init will use. Like
+	// addAutoload it is remembered across a multi-step prompt, here the
+	// passphrase-and-confirm pair.
+	initRecovery bool
 
 	recoveryInput textinput.Model
 	showRecovery  bool
@@ -274,6 +278,9 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.recoveryDisplay.file = msg.recoveryFile
 		}
 		s.status = "vault initialized"
+		if msg.mnemonic == "" {
+			s.status = "vault initialized without a recovery phrase"
+		}
 		return s, listVaultIdentitiesCmd(s.vaultPath, s.socketPath)
 
 	case tea.MouseClickMsg:
@@ -371,7 +378,10 @@ func (s *VaultScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case "i":
-		return s, s.startInit()
+		return s, s.startInit(true)
+
+	case "I":
+		return s, s.startInit(false)
 
 	case "a":
 		return s, s.startAdd(true)
@@ -446,7 +456,7 @@ func (s *VaultScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			s.initPassphrase = nil
 			s.status = "initializing..."
 			s.statusErr = false
-			return s, initVaultCmd(s.vaultPath, passphrase, true)
+			return s, initVaultCmd(s.vaultPath, passphrase, s.initRecovery)
 		case "unlock":
 			s.showPass = false
 			s.passInput.Blur()
@@ -563,7 +573,7 @@ func (s *VaultScreen) pressButton(row, id int) (tea.Model, tea.Cmd) {
 	var action tea.Cmd
 	switch id {
 	case vBtnInit:
-		action = s.startInit()
+		action = s.startInit(true)
 	case vBtnAdd:
 		action = s.startAdd(true)
 	case vBtnRemove:
@@ -593,12 +603,19 @@ func (s *VaultScreen) startAdd(autoload bool) tea.Cmd {
 	return s.fileSelector.Show()
 }
 
-func (s *VaultScreen) startInit() tea.Cmd {
+// startInit opens the passphrase prompt for a new vault. withRecovery matches
+// the CLI's --no-recovery inverted: off means no phrase is generated, and the
+// passphrase becomes the only way in — losing it loses the vault.
+func (s *VaultScreen) startInit(withRecovery bool) tea.Cmd {
 	s.showPass = true
 	s.passAction = "init-pass"
 	s.initPassphrase = nil
+	s.initRecovery = withRecovery
 	s.passInput.SetValue("")
 	s.passInput.Placeholder = "new vault passphrase"
+	if !withRecovery {
+		s.passInput.Placeholder = "new vault passphrase (no recovery phrase)"
+	}
 	return s.passInput.Focus()
 }
 
@@ -877,6 +894,7 @@ func (s *VaultScreen) HelpEntries() []string {
 	return []string{
 		st.HelpRow("Vault controls", ""),
 		st.HelpRow("i", "Init vault (until initialized)"),
+		st.HelpRow("I", "Init vault without a recovery phrase"),
 		st.HelpRow("a", "Add key"),
 		st.HelpRow("A", "Add key without autoload (session only)"),
 		st.HelpRow("d / bksp", "Remove identity"),
