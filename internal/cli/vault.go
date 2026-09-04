@@ -15,7 +15,6 @@ import (
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newVaultCommand() *cobra.Command {
@@ -290,7 +289,7 @@ func newVaultAddCommand() *cobra.Command {
 		Use:     "add <key_paths...>",
 		Example: "sshush vault add ~/.ssh/id_ed25519",
 		Short:   "Add private key file(s) to the vault via the running agent",
-		Long: "Add unencrypted OpenSSH private key(s) to the vault-backed agent. Requires [agent].vault = true and sshush start. " +
+		Long: "Add unencrypted OpenSSH private key(s) to the vault-backed agent. Requires [agent].type = \"vault\" and sshush start. " +
 			"Keys are stored encrypted with autoload on by default; use --no-autoload for session-only until daemon restart.",
 		RunE: runVaultAdd,
 	}
@@ -477,8 +476,6 @@ func runVaultLoad(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			var msg string
 			switch {
-			case errors.Is(err, sshagent.ErrExtensionUnsupported):
-				msg = "this agent does not support vault session-load; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
 			case errors.Is(err, agent.ErrVaultLocked):
 				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
 			case errors.Is(err, agent.ErrIdentityNotFound):
@@ -565,8 +562,6 @@ func runVaultAutoload(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			var msg string
 			switch {
-			case errors.Is(err, sshagent.ErrExtensionUnsupported):
-				msg = "this agent does not support vault set-autoload; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
 			case errors.Is(err, agent.ErrVaultLocked):
 				msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
 			case errors.Is(err, agent.ErrIdentityNotFound):
@@ -618,8 +613,6 @@ func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
 	if err := vault.UnlockWithRecoveryPhrase(session, mnemonic); err != nil {
 		var msg string
 		switch {
-		case errors.Is(err, sshagent.ErrExtensionUnsupported):
-			msg = "this agent does not support recovery unlock; use [agent].vault = true with [vault].vault_path and run 'sshush start'."
 		case errors.Is(err, agent.ErrNoRecovery):
 			msg = "this vault was created with --no-recovery, so no recovery phrase can unlock it."
 		case errors.Is(err, agent.ErrWrongPassphrase):

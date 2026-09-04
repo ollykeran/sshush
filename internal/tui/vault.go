@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
-	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
@@ -1011,9 +1010,6 @@ func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 			return vaultOpResultMsg{err: fmt.Errorf("add requires a running vault agent; run 'sshush start'")}
 		}
 		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-				return vaultOpResultMsg{err: err}
-			}
 			if errors.Is(err, agent.ErrVaultLocked) {
 				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
 			}
