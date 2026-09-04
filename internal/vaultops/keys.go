@@ -22,7 +22,7 @@ type AddResult struct {
 //
 // Add stops at the first failure; keys added before it stay added.
 func Add(env Env, paths []string, autoload bool) (AddResult, error) {
-	c, err := open(env, "add", needAgent)
+	c, err := open(env, "add", needAgent|mayUnlock)
 	if err != nil {
 		return AddResult{}, err
 	}

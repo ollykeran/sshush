@@ -228,3 +228,40 @@ func TestRemove_promptsAtMostOnceForManySelectors(t *testing.T) {
 		t.Fatalf("passphrase prompts: want 1, got %d", f.ask.calls)
 	}
 }
+
+// TestAdd_unlocksLockedAgentServingThisVault: add prompts and unlocks like the
+// other verbs. It used to be the one that refused instead.
+func TestAdd_unlocksLockedAgentServingThisVault(t *testing.T) {
+	f := startVaultAgent(t, false)
+	path, fingerprint := writeTestKey(t, f.dir, "id_new", "new-key")
+	f.lock(t)
+
+	if _, err := Add(f.env(), []string{path}, true); err != nil {
+		t.Fatalf("add against a locked agent: %v", err)
+	}
+	if f.ask.calls != 1 {
+		t.Fatalf("passphrase prompts: want 1, got %d", f.ask.calls)
+	}
+	ids := f.store.AllIdentities()
+	if len(ids) != 1 || ids[0].Fingerprint != fingerprint {
+		t.Fatalf("stored identities: want fingerprint %s, got %v", fingerprint, ids)
+	}
+}
+
+// TestAdd_doesNotPromptForAnAgentServingAnotherVault keeps the guard that goes
+// with the transparent unlock.
+func TestAdd_doesNotPromptForAnAgentServingAnotherVault(t *testing.T) {
+	f := startVaultAgent(t, false)
+	path, _ := writeTestKey(t, f.dir, "id_new", "new-key")
+	f.lock(t)
+
+	env := f.env()
+	env.AgentVaultPath = filepath.Join(f.dir, "some-other-vault.json")
+	_, err := Add(env, []string{path}, true)
+	if got := CodeOf(err); got != CodeVaultLocked {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeVaultLocked, got, err)
+	}
+	if f.ask.calls != 0 {
+		t.Fatalf("passphrase prompts: want 0, got %d", f.ask.calls)
+	}
+}
