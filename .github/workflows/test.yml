@@ -17,7 +17,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: mkdir -p benchmarks && go test ./... -race -coverprofile=benchmarks/coverage.out -covermode=atomic
+      - uses: extractions/setup-just@v3
+      - run: just test-cover
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
@@ -31,7 +32,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go test ./... -race
+      - uses: extractions/setup-just@v3
+      - run: just test
 
   coverage:
     runs-on: ubuntu-latest
