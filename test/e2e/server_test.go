@@ -573,3 +573,86 @@ func TestE2E_ServerRejectsNonPtySession(t *testing.T) {
 		t.Fatal("a non-PTY request should be rejected, not left hanging")
 	}
 }
+
+// TestE2E_ServerKeepsItsHostKeyAcrossRestarts is the check behind persistent host
+// keys: a client that pinned the host key on one run must not be told the host key
+// changed on the next, which is what an ephemeral key caused.
+func TestE2E_ServerKeepsItsHostKeyAcrossRestarts(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "hostkey-persist")
+	serverPort := 22409
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := buildBins(t)
+	// No host_key in the config: the point is that an unconfigured server still
+	// keeps one identity.
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	runtimeDir := dir
+	// The default host key lives in the config dir, so keep it inside the test's
+	// own directory rather than the developer's real one.
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	t.Cleanup(func() { runSSHush(t, binDir, configPath, runtimeDir, nil, "stop") })
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// hostKeyOffered starts the server, connects, and reports the host key the
+	// client was given, then stops the server again.
+	hostKeyOffered := func() string {
+		t.Helper()
+		if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+			t.Fatalf("server: exit %d", code)
+		}
+		defer runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+
+		var offered string
+		sshConn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User: "e2e",
+			Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+				offered = ssh.FingerprintSHA256(key)
+				return nil
+			},
+			Timeout: 5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("SSH dial: %v", err)
+		}
+		sshConn.Close()
+		return offered
+	}
+
+	first := hostKeyOffered()
+	// The port takes a moment to free up between the two runs.
+	for i := 0; i < 40; i++ {
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), 100*time.Millisecond); err != nil {
+			break
+		} else {
+			c.Close()
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	second := hostKeyOffered()
+
+	if first != second {
+		t.Errorf("host key changed across restarts: %s then %s", first, second)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sshush", "server_host_ed25519")); err != nil {
+		t.Errorf("expected a host key in the config dir: %v", err)
+	}
+}
