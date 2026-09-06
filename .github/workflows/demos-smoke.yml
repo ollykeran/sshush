@@ -1,0 +1,59 @@
+name: demos-smoke
+
+# Runs every demo tape end-to-end and fails if any of them error out (e.g. a
+# CLI/TUI change breaks a scripted keystroke sequence). Does not check the
+# rendered GIF content — see demos-render.yml for regenerating those.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "demos/**"
+      - "cmd/**"
+      - "internal/cli/**"
+      - "internal/tui/**"
+      - "internal/server/**"
+      - "internal/agent/**"
+      - "justfile"
+      - "just/**"
+      - ".github/workflows/demos-smoke.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "demos/**"
+      - "cmd/**"
+      - "internal/cli/**"
+      - "internal/tui/**"
+      - "internal/server/**"
+      - "internal/agent/**"
+      - "justfile"
+      - "just/**"
+      - ".github/workflows/demos-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v3
+      - name: Install vhs
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+          sudo apt-get update
+          sudo apt-get install -y vhs
+      - run: just demo all
+      - name: Upload rendered GIFs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-gifs
+          path: demos/*.gif
+          if-no-files-found: ignore
