@@ -1,0 +1,51 @@
+name: demos-render
+
+# Manually regenerates demo GIFs and opens a PR with whatever changed. Not
+# run automatically on push/PR: VHS's GIF output isn't byte-for-byte
+# deterministic across runs (frame timing/dithering), so diffing it on every
+# commit would be flaky. Run this on demand when you actually want fresh
+# GIFs (e.g. before publishing them in the README).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tape:
+        description: "Which tape to render"
+        type: choice
+        default: all
+        options:
+          - all
+          - cli-basics
+          - tui-basics
+          - server-connect
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v3
+      - name: Install vhs
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+          sudo apt-get update
+          sudo apt-get install -y vhs
+      - run: just demo "${{ inputs.tape }}"
+      - name: Open PR with updated GIFs
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: demos/*.gif
+          commit-message: "chore(demos): regenerate GIFs"
+          title: "chore(demos): regenerate GIFs"
+          body: Regenerated via the `demos-render` workflow (`${{ inputs.tape }}`).
+          branch: demos/regenerate-gifs
+          delete-branch: true
