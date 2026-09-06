@@ -196,7 +196,18 @@ The TCP SSH server runs in a **separate daemon process** (not inside the agent).
 listen_port = 2222
 ```
 
-Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon. When using agent-backed auth (no `authorized_keys`), the agent must be running first: run `sshush start` before `sshush server`.
+Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon.
+
+### Authorizing keys
+
+With `authorized_keys` set, the file is read once at startup, and changing it needs a `sshush server stop` and `sshush server`.
+
+With it unset, the server asks the agent on every connection. That has two consequences worth knowing:
+
+- **The server can start before the agent.** It says so, and authorizes nobody until the agent is up — then picks it up on the next connection, with no restart.
+- **`sshush reload`, `stop`/`start`, or an agent crash are survivable.** The server has no connection to lose, so a replaced agent is simply the one it asks next time.
+
+`sshush server status` shows which of the two is in use and whether the agent is reachable.
 
 ### Host key
 

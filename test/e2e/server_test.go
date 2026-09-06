@@ -656,3 +656,78 @@ func TestE2E_ServerKeepsItsHostKeyAcrossRestarts(t *testing.T) {
 		t.Errorf("expected a host key in the config dir: %v", err)
 	}
 }
+
+// TestE2E_ServerStartsBeforeTheAgent covers the server being brought up with no
+// agent to authenticate against: connections are refused until the agent appears,
+// and it is picked up without restarting the server — including after the agent is
+// stopped and started again.
+func TestE2E_ServerStartsBeforeTheAgent(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "later-agent")
+	serverPort := 22410
+
+	binDir := buildBins(t)
+	// No authorized_keys: auth goes through the agent, which is not running yet.
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, "", "")
+	runtimeDir := dir
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	stdout, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server")
+	if code != 0 {
+		t.Fatalf("server should start without an agent: exit %d\nstderr: %s", code, stderr)
+	}
+	if combined := stdout + stderr; !strings.Contains(combined, "No agent is running") {
+		t.Errorf("starting without an agent should say so; got stdout: %q stderr: %q", stdout, stderr)
+	}
+	t.Cleanup(func() {
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	})
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// connects reports whether the key is accepted right now.
+	connects := func() bool {
+		t.Helper()
+		conn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User:            "e2e",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+
+	if connects() {
+		t.Error("no key should be authorized while the agent is down")
+	}
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	if !connects() {
+		t.Error("the key should be accepted once the agent is up, without restarting the server")
+	}
+
+	// A replaced agent is the case a connection held for the server's lifetime
+	// would never recover from.
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "stop"); code != 0 {
+		t.Fatalf("stop: exit %d", code)
+	}
+	if connects() {
+		t.Error("no key should be authorized after the agent stops")
+	}
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("restart agent: exit %d", code)
+	}
+	if !connects() {
+		t.Error("the key should be accepted again after the agent is restarted")
+	}
+}

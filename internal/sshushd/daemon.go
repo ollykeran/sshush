@@ -134,12 +134,9 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		}
 		authSource = fa
 	} else {
-		conn, err := net.Dial("unix", cfg.SocketPath)
-		if err != nil {
-			return fmt.Errorf("agent not running at %s: %w", utils.DisplayPath(cfg.SocketPath), err)
-		}
-		defer conn.Close()
-		authSource = &server.AgentAuth{Agent: sshagent.NewClient(conn)}
+		// Not dialled here: the agent is asked per connection, so the server
+		// tolerates it starting later or being replaced by a reload.
+		authSource = &server.SocketAuth{SocketPath: cfg.SocketPath}
 	}
 	// Resolve and create the host key before detaching, so a bad path is reported
 	// to the caller rather than disappearing into a background process.
