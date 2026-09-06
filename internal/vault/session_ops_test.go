@@ -180,6 +180,25 @@ func startLockedVaultAgentSocket(t *testing.T, dir string, pass []byte) string {
 	return socketPath
 }
 
+// startLockedRecoveryVaultAgentSocket starts a locked vault agent whose vault
+// has a recovery phrase enabled, and returns the socket alongside that phrase.
+func startLockedRecoveryVaultAgentSocket(t *testing.T, dir string, pass []byte) (socketPath, mnemonic string) {
+	t.Helper()
+	socketPath, store := startVaultAgentSocket(t, dir, pass)
+	mnemonic, err := GenerateRecoveryMnemonic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableRecoveryWithPassphrase(store, pass, mnemonic); err != nil {
+		t.Fatalf("enable recovery: %v", err)
+	}
+	s := openTestSession(t, socketPath)
+	if err := s.Lock(nil); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	return socketPath, mnemonic
+}
+
 // TestOp_lockedVaultReportsReason is the point of the sshush-op extension: the
 // legacy extension collapses every failure into one opaque string, while the op
 // carries the reason across the wire.
@@ -221,6 +240,18 @@ func TestOp_recoveryDistinguishesNoRecoveryFromWrongPhrase(t *testing.T) {
 	_, err := s.Op(agent.OpUnlockRecovery, []byte("abandon abandon abandon"))
 	if !errors.Is(err, agent.ErrNoRecovery) {
 		t.Errorf("op error: want ErrNoRecovery, got %v", err)
+	}
+
+	// The other half of the distinction the name promises: with recovery
+	// enabled, a phrase that does not unwrap the master key reports itself as a
+	// wrong phrase rather than as an unexplained failure.
+	recoverySocket, mnemonic := startLockedRecoveryVaultAgentSocket(t, unixSocketTempDirSessionOps(t), []byte("recovery-reason"))
+	rs := openTestSession(t, recoverySocket)
+	if _, err := rs.Op(agent.OpUnlockRecovery, []byte("abandon abandon abandon")); !errors.Is(err, agent.ErrWrongPassphrase) {
+		t.Errorf("wrong phrase: want ErrWrongPassphrase, got %v", err)
+	}
+	if _, err := rs.Op(agent.OpUnlockRecovery, []byte(mnemonic)); err != nil {
+		t.Fatalf("unlock with the right phrase: %v", err)
 	}
 }
 

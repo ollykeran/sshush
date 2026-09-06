@@ -18,6 +18,8 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/style** – Styled terminal output
 - **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens)
 - **internal/utils** – Path expansion, helpers
+- **internal/vault** – The encrypted vault: on-disk store, `VaultAgent`, and the `sshush-op` vocabulary
+- **internal/vaultops** – The vault operations the CLI and TUI both offer, implemented once
 - **internal/version** – Version string
 
 CLI loads config and starts the daemon; daemon runs the agent on a Unix socket. OpenSSH (`ssh`, `ssh-add`) connect via `SSH_AUTH_SOCK`.
@@ -31,6 +33,13 @@ Every client-side conversation with a running agent goes through `agent.Session`
 **`internal/agent` owns the transport; `internal/vault` owns the extension vocabulary.** `Session.Extension` takes an extension name as given. The named wrappers — `vault.AddPrivateKeyFile`, `SetAutoload`, `SetComment`, `SessionLoad`, `SessionUnload`, `UnlockWithRecoveryPhrase` — live in `internal/vault/session_ops.go`, next to the payload builders they use.
 
 **`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why `extensionVaultLocked` is duplicated at `internal/agent/backend_kind.go` with a comment saying it must match `vault.ExtensionVaultLocked`, and why `Session.Backend` is the only extension `internal/agent` names for itself.
+
+**`internal/vaultops` owns the vault operations; the CLI and TUI only render them.** Init, list, add, remove, session-load, autoload, lock and unlock each existed twice — as a cobra `RunE` and as a `tea.Cmd` — and each copy re-derived the same preamble and invented its own wording for the same failure. They now live once in `internal/vaultops`, which takes an `Env` (vault path, socket, and whether the front end can prompt) and returns a typed result. Two properties are worth keeping:
+
+- A verb opens **one** Session however many selectors it is given, which is why the verbs take a slice rather than making callers loop. `RequireVaultAgent` is the one deliberate exception: `sshush vault unlock-recovery` uses it to check the gate, closes that Session, and dials again after the user has typed 24 words, because holding a socket open across an interactive prompt is worse than dialling twice.
+- `Env.AskPassphrase` is nil for a front end that cannot block for input. The CLI passes `readPassphrase` and gets the transparent unlock it always had; the TUI passes nothing, because a `tea.Cmd` cannot prompt, and drives its own passphrase modal instead. `Env.AgentVaultPath` keeps the guard that goes with it — a passphrase is only ever asked for on an agent serving the very vault being operated on.
+
+Failures come back as `*vaultops.OpError`: a `Code` to branch on, one sentence in `Msg`, an optional remedy in `Hint`, and the original cause still reachable with `errors.Is`. The CLI renders `Msg` as its error line and `Hint` as the line beneath; the TUI joins them into its status line.
 
 ### Why a failure knows its own reason
 

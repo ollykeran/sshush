@@ -1,10 +1,7 @@
 package tui
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/table"
@@ -13,11 +10,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
-	"github.com/ollykeran/sshush/internal/agent"
-	"github.com/ollykeran/sshush/internal/openssh"
 	"github.com/ollykeran/sshush/internal/utils"
-	"github.com/ollykeran/sshush/internal/vault"
-	ssh "golang.org/x/crypto/ssh"
+	"github.com/ollykeran/sshush/internal/vaultops"
 )
 
 // vaultIdentityRow is one row of the vault identity table, already formatted for display.
@@ -27,6 +21,7 @@ type vaultIdentityRow struct {
 	autoload    bool
 	comment     string
 	keyType     string
+	keyFile     string // display path the key was added from, or "-"
 }
 
 // vaultIdentitiesMsg reports the result of listing vault identities. When err is nil
@@ -84,6 +79,11 @@ type VaultScreen struct {
 	buttons    ButtonRow
 	zonePrefix string
 
+	// addAutoload is the autoload setting the pending add will use. The file
+	// selector round-trips through its own messages, so the choice made when
+	// the picker opened has to be remembered until a file comes back.
+	addAutoload bool
+
 	rows             []vaultIdentityRow
 	vaultInitialized bool
 
@@ -93,6 +93,10 @@ type VaultScreen struct {
 	showPass       bool
 	passAction     string // "init-pass", "init-confirm", "unlock"
 	initPassphrase []byte
+	// initRecovery is the recovery setting the pending init will use. Like
+	// addAutoload it is remembered across a multi-step prompt, here the
+	// passphrase-and-confirm pair.
+	initRecovery bool
 
 	recoveryInput textinput.Model
 	showRecovery  bool
@@ -207,7 +211,7 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileSelectedMsg:
 		s.fileSelector.Hide()
 		s.focus = vaultFocusTable
-		return s, addVaultKeyCmd(s.socketPath, msg.Path, true)
+		return s, addVaultKeyCmd(s.socketPath, msg.Path, s.addAutoload)
 
 	case FilePickerCancelledMsg:
 		s.fileSelector.Hide()
@@ -237,24 +241,16 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 		s.rows = msg.rows
-		rows := make([]table.Row, len(msg.rows))
-		for i, r := range msg.rows {
-			autoload := "off"
-			if r.autoload {
-				autoload = "on"
-			}
-			rows[i] = table.Row{r.fingerprint, r.loaded, autoload, r.comment, r.keyType}
-		}
-		s.table.SetRows(rows)
-		if len(rows) > 0 && s.table.Cursor() < 0 {
+		s.syncTableRows()
+		if len(s.rows) > 0 && s.table.Cursor() < 0 {
 			s.table.SetCursor(0)
 		}
 		s.resizeTable()
 		s.statusErr = false
-		if len(rows) == 0 {
+		if len(s.rows) == 0 {
 			s.status = "no identities in vault"
 		} else {
-			s.status = fmt.Sprintf("%d identity(ies) in vault", len(rows))
+			s.status = fmt.Sprintf("%d identity(ies) in vault", len(s.rows))
 		}
 		return s, nil
 
@@ -282,6 +278,9 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.recoveryDisplay.file = msg.recoveryFile
 		}
 		s.status = "vault initialized"
+		if msg.mnemonic == "" {
+			s.status = "vault initialized without a recovery phrase"
+		}
 		return s, listVaultIdentitiesCmd(s.vaultPath, s.socketPath)
 
 	case tea.MouseClickMsg:
@@ -379,11 +378,16 @@ func (s *VaultScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case "i":
-		return s, s.startInit()
+		return s, s.startInit(true)
+
+	case "I":
+		return s, s.startInit(false)
 
 	case "a":
-		s.focus = vaultFocusTable
-		return s, s.fileSelector.Show()
+		return s, s.startAdd(true)
+
+	case "A":
+		return s, s.startAdd(false)
 
 	case "backspace", "delete":
 		return s.removeSelected()
@@ -452,7 +456,7 @@ func (s *VaultScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 			s.initPassphrase = nil
 			s.status = "initializing..."
 			s.statusErr = false
-			return s, initVaultCmd(s.vaultPath, passphrase, true)
+			return s, initVaultCmd(s.vaultPath, passphrase, s.initRecovery)
 		case "unlock":
 			s.showPass = false
 			s.passInput.Blur()
@@ -569,9 +573,9 @@ func (s *VaultScreen) pressButton(row, id int) (tea.Model, tea.Cmd) {
 	var action tea.Cmd
 	switch id {
 	case vBtnInit:
-		action = s.startInit()
+		action = s.startInit(true)
 	case vBtnAdd:
-		action = s.fileSelector.Show()
+		action = s.startAdd(true)
 	case vBtnRemove:
 		_, action = s.removeSelected()
 	case vBtnLoad:
@@ -590,12 +594,28 @@ func (s *VaultScreen) pressButton(row, id int) (tea.Model, tea.Cmd) {
 	return s, tea.Batch(action, ButtonFlashCmd())
 }
 
-func (s *VaultScreen) startInit() tea.Cmd {
+// startAdd opens the file picker for an add. autoload matches the CLI's
+// --no-autoload: off stores the key for this agent's lifetime only, so it is
+// gone again after the daemon restarts.
+func (s *VaultScreen) startAdd(autoload bool) tea.Cmd {
+	s.addAutoload = autoload
+	s.focus = vaultFocusTable
+	return s.fileSelector.Show()
+}
+
+// startInit opens the passphrase prompt for a new vault. withRecovery matches
+// the CLI's --no-recovery inverted: off means no phrase is generated, and the
+// passphrase becomes the only way in — losing it loses the vault.
+func (s *VaultScreen) startInit(withRecovery bool) tea.Cmd {
 	s.showPass = true
 	s.passAction = "init-pass"
 	s.initPassphrase = nil
+	s.initRecovery = withRecovery
 	s.passInput.SetValue("")
 	s.passInput.Placeholder = "new vault passphrase"
+	if !withRecovery {
+		s.passInput.Placeholder = "new vault passphrase (no recovery phrase)"
+	}
 	return s.passInput.Focus()
 }
 
@@ -679,9 +699,33 @@ func (s *VaultScreen) resizeTable() {
 	innerW := keyBoxInnerWidth(w)
 	rowW := innerW + keyCellPadOverhead
 	s.table.SetColumns(vaultTableColumns(innerW))
+	// The columns a width affords decide how many cells a row carries, so the
+	// rows are rebuilt whenever they change.
+	s.syncTableRows()
 	s.table.SetWidth(rowW)
 	s.table.SetHeight(s.tableHeight())
 	s.syncTableSelection()
+}
+
+// syncTableRows renders the identity rows to the table's current columns.
+// bubbles' table indexes its columns by cell position while rendering a row, so
+// a row must never carry more cells than there are columns — which is what lets
+// the key file column disappear on a narrow terminal.
+func (s *VaultScreen) syncTableRows() {
+	cols := len(s.table.Columns())
+	rows := make([]table.Row, len(s.rows))
+	for i, r := range s.rows {
+		autoload := "off"
+		if r.autoload {
+			autoload = "on"
+		}
+		cells := table.Row{r.fingerprint, r.loaded, autoload, r.comment, r.keyType, r.keyFile}
+		if cols > 0 && len(cells) > cols {
+			cells = cells[:cols]
+		}
+		rows[i] = cells
+	}
+	s.table.SetRows(rows)
 }
 
 // syncTableSelection keeps row data visible and toggles the cursor-row highlight only
@@ -747,7 +791,16 @@ func renderVaultTableRow(row table.Row, cols []table.Column, styles table.Styles
 		}
 		w := cols[i].Width
 		box := lipgloss.NewStyle().Width(w).MaxWidth(w).Inline(true)
-		text := box.Render(ansi.Truncate(value, w, "…"))
+		cut := ansi.Truncate(value, w, "…")
+		if cols[i].Title == vaultKeyFileColumn {
+			// A path that does not fit loses its leading directories, not its
+			// file name: "…/work/id_ed25519" says more than "~/Documents/pro…".
+			cut = value
+			if over := ansi.StringWidth(value) - w; over > 0 {
+				cut = ansi.TruncateLeft(value, over+1, "…")
+			}
+		}
+		text := box.Render(cut)
 		if selected {
 			parts = append(parts, styles.Selected.Render(text))
 		} else {
@@ -841,7 +894,9 @@ func (s *VaultScreen) HelpEntries() []string {
 	return []string{
 		st.HelpRow("Vault controls", ""),
 		st.HelpRow("i", "Init vault (until initialized)"),
+		st.HelpRow("I", "Init vault without a recovery phrase"),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow("A", "Add key without autoload (session only)"),
 		st.HelpRow("d / bksp", "Remove identity"),
 		st.HelpRow("o", "Session-load identity"),
 		st.HelpRow("+ / -", "Autoload on / off"),
@@ -853,7 +908,21 @@ func (s *VaultScreen) HelpEntries() []string {
 	}
 }
 
-// vaultTableColumns lays out the 5 vault identity columns within width w.
+// vaultKeyFileColumn titles the column holding the path a key was added from.
+// renderVaultTableRow keys off it to elide from the left, since the file name
+// is the useful half of a path.
+const vaultKeyFileColumn = "Key file"
+
+const (
+	vaultTableCommentMinW = 12
+	// 14 columns is the narrowest that still says something: an elided path
+	// renders as "…/id_ed25519", which is the half worth keeping.
+	vaultTableKeyFileMinW = 14
+	vaultTableKeyFileMaxW = 40
+)
+
+// vaultTableColumns lays out the vault identity columns within width w. The key
+// file column is present only when there is room for it.
 func vaultTableColumns(w int) []table.Column {
 	if w < keyTableMinTotalWidth {
 		w = keyTableMinTotalWidth
@@ -862,17 +931,38 @@ func vaultTableColumns(w int) []table.Column {
 	loadedW := 8
 	autoloadW := 10
 	typeW := 12
-	commentW := w - fpW - loadedW - autoloadW - typeW
-	if commentW < 12 {
-		commentW = 12
+	rest := w - fpW - loadedW - autoloadW - typeW
+
+	// The comment and the key file share whatever the fixed columns leave. The
+	// key file is the column worth dropping when the terminal is narrow: the
+	// comment is what people scan by, and the path is recoverable from the CLI.
+	commentW := rest
+	keyFileW := 0
+	if rest >= vaultTableCommentMinW+vaultTableKeyFileMinW {
+		keyFileW = rest / 2
+		if keyFileW < vaultTableKeyFileMinW {
+			keyFileW = vaultTableKeyFileMinW
+		}
+		if keyFileW > vaultTableKeyFileMaxW {
+			keyFileW = vaultTableKeyFileMaxW
+		}
+		commentW = rest - keyFileW
 	}
-	return []table.Column{
+	if commentW < vaultTableCommentMinW {
+		commentW = vaultTableCommentMinW
+	}
+
+	cols := []table.Column{
 		{Title: "Fingerprint", Width: fpW},
 		{Title: "Loaded", Width: loadedW},
 		{Title: "Autoload", Width: autoloadW},
 		{Title: "Comment", Width: commentW},
 		{Title: "Type", Width: typeW},
 	}
+	if keyFileW > 0 {
+		cols = append(cols, table.Column{Title: vaultKeyFileColumn, Width: keyFileW})
+	}
+	return cols
 }
 
 // vaultTableStyles reuses keyTableStyles so the vault table matches the agent key
@@ -888,76 +978,52 @@ func vaultTableStyles(rowWidth int, st Styles, highlightCursor bool) table.Style
 }
 
 // Commands
+//
+// Every command here is a tea.Cmd wrapper over internal/vaultops: the vault
+// work itself is shared with the CLI, and what is left is turning a typed
+// result into the screen's own message vocabulary. The Env these build never
+// sets AskPassphrase, because a tea.Cmd cannot block for input — the screen's
+// passphrase modal does that, and drives unlockVaultPassphraseCmd itself.
 
-// openVaultStoreForPath opens (or creates the on-disk shell for) the vault at vaultPath,
-// resolving `~` and directory-vs-file the same way the CLI does.
-func openVaultStoreForPath(vaultPath string) (*vault.VaultStore, string, error) {
-	if vaultPath == "" {
-		return nil, "", fmt.Errorf("vault path required: set [vault].vault_path in config")
-	}
-	resolved := vault.ResolveToFile(utils.ExpandHomeDirectory(vaultPath))
-	store, err := vault.Open(resolved)
-	if err != nil {
-		return nil, resolved, fmt.Errorf("open vault: %w", err)
-	}
-	return store, resolved, nil
+// vaultEnv is the environment a vault command runs in. vaultPath is empty for
+// the commands that only need the agent, which then resolve a selected row by
+// its fingerprint alone.
+func vaultEnv(vaultPath, socketPath string) vaultops.Env {
+	return vaultops.Env{VaultPath: vaultPath, SocketPath: socketPath}
 }
 
-// openInitializedVaultStoreForPath is openVaultStoreForPath plus the "already initialized" check.
-func openInitializedVaultStoreForPath(vaultPath string) (*vault.VaultStore, string, error) {
-	store, resolved, err := openVaultStoreForPath(vaultPath)
-	if err != nil {
-		return nil, resolved, err
+// vaultStatusErr flattens a vaultops failure into the one sentence the status
+// line shows, keeping the remedy the CLI prints on a second line rather than
+// dropping it.
+func vaultStatusErr(err error) error {
+	if hint := vaultops.HintOf(err); hint != "" {
+		return fmt.Errorf("%s — %s", err.Error(), hint)
 	}
-	if store.GetMetadata() == nil {
-		return nil, resolved, fmt.Errorf("vault not found or not initialized at %s; press i to initialize", utils.DisplayPath(resolved))
-	}
-	return store, resolved, nil
+	return err
 }
 
 func listVaultIdentitiesCmd(vaultPath, socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		store, _, err := openVaultStoreForPath(vaultPath)
+		res, err := vaultops.List(vaultEnv(vaultPath, socketPath))
 		if err != nil {
-			return vaultIdentitiesMsg{err: err}
+			return vaultIdentitiesMsg{err: vaultStatusErr(err)}
 		}
-		if store.GetMetadata() == nil {
+		if !res.Initialized {
 			return vaultIdentitiesMsg{initialized: false}
 		}
-		identities, err := vault.ListIdentities(store)
-		if err != nil {
-			return vaultIdentitiesMsg{err: fmt.Errorf("list identities: %w", err)}
-		}
-		var loadedSet map[string]struct{}
-		haveAgent := false
-		if session, err := agent.Open(socketPath); err == nil {
-			defer session.Close()
-			if keys, err := session.List(); err == nil {
-				loadedSet = make(map[string]struct{}, len(keys))
-				for _, k := range keys {
-					if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
-						loadedSet[ssh.FingerprintSHA256(pub)] = struct{}{}
-					}
-				}
-				haveAgent = true
-			}
-		}
-		rows := make([]vaultIdentityRow, len(identities))
-		for i, id := range identities {
-			loaded := "n/a"
-			if haveAgent {
-				if _, ok := loadedSet[id.Fingerprint]; ok {
-					loaded = "yes"
-				} else {
-					loaded = "no"
-				}
+		rows := make([]vaultIdentityRow, len(res.Identities))
+		for i, id := range res.Identities {
+			keyFile := "-"
+			if id.Filepath != "" {
+				keyFile = utils.DisplayPath(id.Filepath)
 			}
 			rows[i] = vaultIdentityRow{
 				fingerprint: id.Fingerprint,
-				loaded:      loaded,
+				loaded:      id.Loaded.String(),
 				autoload:    id.Autoload,
 				comment:     id.Comment,
 				keyType:     id.KeyType,
+				keyFile:     keyFile,
 			}
 		}
 		return vaultIdentitiesMsg{rows: rows, initialized: true}
@@ -971,53 +1037,18 @@ func initVaultCmd(vaultPath string, passphrase []byte, withRecovery bool) tea.Cm
 				passphrase[i] = 0
 			}
 		}()
-		resolved := vault.ResolveToFile(utils.ExpandHomeDirectory(vaultPath))
-		if fi, err := os.Stat(resolved); err == nil && !fi.IsDir() {
-			return vaultInitResultMsg{err: fmt.Errorf("vault already exists at %s", utils.DisplayPath(resolved))}
-		}
-		store, err := vault.Open(resolved)
+		res, err := vaultops.Init(vaultEnv(vaultPath, ""), passphrase, vaultops.InitOptions{Recovery: withRecovery})
 		if err != nil {
-			return vaultInitResultMsg{err: fmt.Errorf("create vault: %w", err)}
+			return vaultInitResultMsg{err: vaultStatusErr(err)}
 		}
-		if err := vault.Init(store, passphrase); err != nil {
-			return vaultInitResultMsg{err: fmt.Errorf("init vault: %w", err)}
-		}
-		if !withRecovery {
-			return vaultInitResultMsg{}
-		}
-		mnemonic, err := vault.GenerateRecoveryMnemonic()
-		if err != nil {
-			return vaultInitResultMsg{err: fmt.Errorf("generate recovery phrase: %w", err)}
-		}
-		if err := vault.EnableRecoveryWithPassphrase(store, passphrase, mnemonic); err != nil {
-			return vaultInitResultMsg{err: fmt.Errorf("enable recovery: %w", err)}
-		}
-		recoveryTxt := filepath.Join(filepath.Dir(resolved), "recovery.txt")
-		if err := os.WriteFile(recoveryTxt, []byte(mnemonic+"\n"), 0600); err != nil {
-			return vaultInitResultMsg{err: fmt.Errorf("write recovery.txt: %w", err)}
-		}
-		return vaultInitResultMsg{mnemonic: mnemonic, recoveryFile: recoveryTxt}
+		return vaultInitResultMsg{mnemonic: res.Mnemonic, recoveryFile: res.RecoveryFile}
 	}
 }
 
 func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("add requires a running vault agent; run 'sshush start'")}
-		}
-		defer session.Close()
-		if backend, err := session.Backend(); err != nil || backend.Mode != "vault" {
-			return vaultOpResultMsg{err: fmt.Errorf("add requires a running vault agent; run 'sshush start'")}
-		}
-		if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
-			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-				return vaultOpResultMsg{err: err}
-			}
-			if errors.Is(err, agent.ErrVaultLocked) {
-				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
-			}
-			return vaultOpResultMsg{err: fmt.Errorf("add failed: %w", err)}
+		if _, err := vaultops.Add(vaultEnv("", socketPath), []string{path}, autoload); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "key added: " + utils.DisplayPath(path)}
 	}
@@ -1025,28 +1056,8 @@ func addVaultKeyCmd(socketPath, path string, autoload bool) tea.Cmd {
 
 func removeVaultIdentityCmd(socketPath, vaultPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("remove requires a running vault agent")}
-		}
-		defer session.Close()
-		if backend, err := session.Backend(); err != nil || backend.Mode != "vault" {
-			return vaultOpResultMsg{err: fmt.Errorf("remove requires a running vault agent")}
-		}
-		store, _, err := openInitializedVaultStoreForPath(vaultPath)
-		if err != nil {
-			return vaultOpResultMsg{err: err}
-		}
-		id, err := vault.ResolveIdentityByFingerprint(store, fingerprint)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("resolve identity: %w", err)}
-		}
-		pubKey, err := ssh.ParsePublicKey(id.PublicKey)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("parse stored public key: %w", err)}
-		}
-		if err := session.Remove(pubKey); err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("remove: %w", err)}
+		if _, err := vaultops.Remove(vaultEnv(vaultPath, socketPath), []string{fingerprint}); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "identity removed"}
 	}
@@ -1054,19 +1065,8 @@ func removeVaultIdentityCmd(socketPath, vaultPath, fingerprint string) tea.Cmd {
 
 func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: err}
-		}
-		defer session.Close()
-		if err := vault.SessionLoad(session, fingerprint); err != nil {
-			switch {
-			case errors.Is(err, agent.ErrVaultLocked):
-				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
-			case errors.Is(err, agent.ErrIdentityNotFound):
-				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
-			}
-			return vaultOpResultMsg{err: err}
+		if _, err := vaultops.SessionLoad(vaultEnv("", socketPath), []string{fingerprint}); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "loaded into agent session"}
 	}
@@ -1074,19 +1074,8 @@ func sessionLoadVaultCmd(socketPath, fingerprint string) tea.Cmd {
 
 func setVaultAutoloadCmd(socketPath, fingerprint string, on bool) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: err}
-		}
-		defer session.Close()
-		if err := vault.SetAutoload(session, fingerprint, on); err != nil {
-			switch {
-			case errors.Is(err, agent.ErrVaultLocked):
-				return vaultOpResultMsg{err: fmt.Errorf("vault is locked; unlock first")}
-			case errors.Is(err, agent.ErrIdentityNotFound):
-				return vaultOpResultMsg{err: fmt.Errorf("identity not found in vault")}
-			}
-			return vaultOpResultMsg{err: err}
+		if _, err := vaultops.SetAutoload(vaultEnv("", socketPath), []string{fingerprint}, on); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		state := "off"
 		if on {
@@ -1103,13 +1092,8 @@ func unlockVaultPassphraseCmd(socketPath string, passphrase []byte) tea.Cmd {
 				passphrase[i] = 0
 			}
 		}()
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("unlock failed: %w", err)}
-		}
-		defer session.Close()
-		if err := session.Unlock(passphrase); err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("unlock failed: %w", err)}
+		if err := vaultops.UnlockPassphrase(vaultEnv("", socketPath), passphrase); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "vault unlocked"}
 	}
@@ -1117,35 +1101,20 @@ func unlockVaultPassphraseCmd(socketPath string, passphrase []byte) tea.Cmd {
 
 func unlockVaultRecoveryCmd(socketPath, mnemonic string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("unlock with recovery failed: %w", err)}
-		}
-		defer session.Close()
-		if err := vault.UnlockWithRecoveryPhrase(session, mnemonic); err != nil {
-			switch {
-			case errors.Is(err, agent.ErrNoRecovery):
-				return vaultOpResultMsg{err: fmt.Errorf("this vault was created without a recovery phrase")}
-			case errors.Is(err, agent.ErrWrongPassphrase):
-				return vaultOpResultMsg{err: fmt.Errorf("unlock failed: wrong recovery phrase")}
-			}
-			return vaultOpResultMsg{err: fmt.Errorf("unlock with recovery failed: %w", err)}
+		if err := vaultops.UnlockRecovery(vaultEnv("", socketPath), mnemonic); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "vault unlocked with recovery phrase"}
 	}
 }
 
-// vaultLockCmd locks the vault agent immediately; no passphrase needed since locking
-// just wipes the in-memory master key (mirrors lockVaultCmd in agent.go).
+// vaultLockCmd locks the vault agent immediately; no passphrase needed since
+// locking just wipes the in-memory master key (mirrors lockVaultCmd in
+// agent.go, which serves keys-mode agents too and so cannot share this path).
 func vaultLockCmd(socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		session, err := agent.Open(socketPath)
-		if err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("lock failed: %w", err)}
-		}
-		defer session.Close()
-		if err := session.Lock(nil); err != nil {
-			return vaultOpResultMsg{err: fmt.Errorf("lock failed: %w", err)}
+		if err := vaultops.Lock(vaultEnv("", socketPath)); err != nil {
+			return vaultOpResultMsg{err: vaultStatusErr(err)}
 		}
 		return vaultOpResultMsg{status: "vault locked"}
 	}
