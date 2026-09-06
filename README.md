@@ -31,7 +31,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
-- **SSH server**: Optional TCP SSH server (`sshush server`). See [Config Reference](docs/config.md) `[server]` section.
+- **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell to authorized keys. See [Config Reference](docs/config.md) `[server]` section.
 - **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
 - **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 

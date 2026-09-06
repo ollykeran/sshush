@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"net"
 
 	gliderlabs "github.com/gliderlabs/ssh"
@@ -18,7 +17,8 @@ type AuthKeySource interface {
 	Authorized(key ssh.PublicKey) bool
 }
 
-// Server is a TCP SSH server that authenticates by public key and serves a simple session message.
+// Server is a TCP SSH server that authenticates by public key and serves an interactive
+// shell on a pty to each session.
 // It does not depend on config or CLI; all data is passed via struct fields.
 type Server struct {
 	ListenAddr  string
@@ -59,10 +59,6 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) publicKeyAuth(ctx gliderlabs.Context, key gliderlabs.PublicKey) bool {
 	return s.AuthKeys.Authorized(key)
-}
-
-func (s *Server) handleSession(sess gliderlabs.Session) {
-	io.WriteString(sess, "sshush session (authorized by key)\n")
 }
 
 func generateHostKeyPEM() ([]byte, error) {

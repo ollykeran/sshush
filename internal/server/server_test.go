@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bufio"
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -52,74 +50,6 @@ func TestServer_ListenAndServe_ReadyCalledOnListenSuccess(t *testing.T) {
 		t.Errorf("listener should accept connections once ready fired: %v", err)
 	} else {
 		conn.Close()
-	}
-}
-
-func TestServer_ListenAndServe_sessionMessage(t *testing.T) {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.NewSignerFromKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyring := sshagent.NewKeyring()
-	if err := keyring.Add(sshagent.AddedKey{PrivateKey: priv}); err != nil {
-		t.Fatal(err)
-	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	srv := &Server{
-		ListenAddr:  addr,
-		AuthKeys:    &AgentAuth{Agent: keyring},
-		HostKeyPath: "",
-	}
-	go func() { _ = srv.ListenAndServe() }()
-	time.Sleep(100 * time.Millisecond)
-
-	config := &ssh.ClientConfig{
-		User:            "test",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	}
-	conn, err := ssh.Dial("tcp", addr, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	session, err := conn.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Shell(); err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	buf.ReadFrom(stdout)
-	session.Close()
-
-	scanner := bufio.NewScanner(bytes.NewReader(buf.Bytes()))
-	if !scanner.Scan() {
-		t.Fatal("expected at least one line")
-	}
-	line := scanner.Text()
-	if line != "sshush session (authorized by key)" {
-		t.Errorf("session output = %q, want %q", line, "sshush session (authorized by key)")
 	}
 }
 

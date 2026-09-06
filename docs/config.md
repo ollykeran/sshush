@@ -198,6 +198,20 @@ listen_port = 2222
 
 Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon. When using agent-backed auth (no `authorized_keys`), the agent must be running first: run `sshush start` before `sshush server`.
 
+### What a session gets
+
+Connecting lands you in an interactive shell on the host, on a pty:
+
+```bash
+ssh -p 2222 host
+```
+
+The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+
+**Every authorized key gets a shell as the user running `sshushd`.** There is no per-key OS identity and no restricted mode: the server is single-user by design, so treat `[server].authorized_keys` (or the keys in your agent) as the full list of people you would hand that account to.
+
+Only interactive terminal sessions are served. A remote command (`ssh host echo hi`), `scp`, `sftp` and port forwarding are all refused, promptly rather than by hanging.
+
 ## Vault
 
 When `[agent].type` is `"vault"` and `[vault].vault_path` points to a vault file, the daemon uses that file instead of loading keys only from `key_paths`. The vault is a single plaintext JSON file (e.g. `vault.json`) so you can inspect its structure; private key material is stored as encrypted blobs per-identity. The master key is derived from your passphrase and is wiped when you run `sshush lock`.
