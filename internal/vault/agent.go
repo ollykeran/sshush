@@ -231,7 +231,11 @@ func (a *VaultAgent) UnlockWithRecovery(mnemonic string) error {
 	defer wipe(recoveryKey)
 	masterKey, err := decryptBlob(recoveryKey, meta.WrappedMasterKey)
 	if err != nil {
-		return fmt.Errorf("vault: decrypt with recovery key: %w", err)
+		// Failing to unwrap means the phrase derived the wrong key, which is
+		// the only thing a caller can act on. Unlock treats a failed canary
+		// decrypt the same way, and saying more would describe the vault file
+		// to whoever is guessing at phrases.
+		return errWrongPassphrase
 	}
 	if a.masterKey != nil {
 		wipe(a.masterKey)

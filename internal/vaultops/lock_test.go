@@ -71,24 +71,21 @@ func TestUnlockRecovery_noRecoveryEnabled(t *testing.T) {
 	}
 }
 
-// TestUnlockRecovery_wrongPhrase pins what the agent actually reports today: a
-// phrase that fails to decrypt the wrapped master key comes back as an
-// unexplained internal failure, because VaultAgent.UnlockWithRecovery wraps the
-// decrypt error instead of returning its wrong-passphrase sentinel. describe
-// maps agent.ErrWrongPassphrase to the phrase-specific sentence for when that
-// is fixed; until then the reason does not reach us.
 func TestUnlockRecovery_wrongPhrase(t *testing.T) {
 	f := startVaultAgent(t, true)
 	f.lock(t)
 
 	err := UnlockRecovery(f.silentEnv(), "abandon abandon abandon")
-	if got := CodeOf(err); got != CodeAgentFailed {
-		t.Fatalf("code: want %v, got %v (err %v)", CodeAgentFailed, got, err)
+	if got := CodeOf(err); got != CodeWrongPassphrase {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeWrongPassphrase, got, err)
 	}
-	if !strings.Contains(err.Error(), "unlock-recovery failed") {
-		t.Fatalf("message: want it to name the operation, got %q", err.Error())
+	if want := "unlock failed: wrong recovery phrase"; err.Error() != want {
+		t.Fatalf("message: want %q, got %q", want, err.Error())
 	}
-	if backendOf(t, f).VaultLocked != true {
+	if hint := HintOf(err); !strings.Contains(hint, "24 words") {
+		t.Fatalf("hint: want it to say how many words, got %q", hint)
+	}
+	if !backendOf(t, f).VaultLocked {
 		t.Fatal("vault locked: want it to stay locked after a bad phrase")
 	}
 }
