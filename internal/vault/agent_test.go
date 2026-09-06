@@ -348,6 +348,11 @@ func TestVaultAgent_Recovery(t *testing.T) {
 	}
 
 	va := NewVaultAgent(store)
+	// A phrase that does not unwrap the master key is a wrong phrase, and says
+	// so; it used to come back as an unexplained internal failure.
+	if err := va.UnlockWithRecovery("abandon abandon abandon"); err != errWrongPassphrase {
+		t.Errorf("UnlockWithRecovery with a wrong phrase: want errWrongPassphrase, got %v", err)
+	}
 	if err := va.UnlockWithRecovery(mnemonic); err != nil {
 		t.Fatal(err)
 	}

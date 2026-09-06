@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/theme"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -86,12 +88,21 @@ func newVaultTestSkeleton(vaultPath, socketPath string) (*Skeleton, *VaultScreen
 	return sk, vs
 }
 
+// seedVaultRows fills the screen the way a vaultIdentitiesMsg would, so the
+// table's cells always match the columns its width affords.
 func seedVaultRows(vs *VaultScreen, n int) {
-	rows := make([]table.Row, n)
+	rows := make([]vaultIdentityRow, n)
 	for i := 0; i < n; i++ {
-		rows[i] = table.Row{"SHA256:fp" + string(rune('0'+i)), "no", "off", "key", "ssh-ed25519"}
+		rows[i] = vaultIdentityRow{
+			fingerprint: "SHA256:fp" + string(rune('0'+i)),
+			loaded:      "no",
+			comment:     "key",
+			keyType:     "ssh-ed25519",
+			keyFile:     "~/.ssh/id_ed25519",
+		}
 	}
-	vs.table.SetRows(rows)
+	vs.rows = rows
+	vs.resizeTable()
 }
 
 func TestNewTUIVaultTabRegisteredOnlyInVaultMode(t *testing.T) {
@@ -122,7 +133,7 @@ func TestVaultScreenHasModal(t *testing.T) {
 	if vs.HasModal() {
 		t.Fatal("expected no modal open initially")
 	}
-	vs.startInit()
+	vs.startInit(true)
 	if !vs.HasModal() {
 		t.Fatal("expected HasModal true while passphrase prompt open")
 	}
@@ -270,6 +281,9 @@ func TestVaultAddListRemoveAutoloadRoundtrip(t *testing.T) {
 	}
 	if row.comment != "roundtrip-key" {
 		t.Errorf("comment: got %q, want roundtrip-key", row.comment)
+	}
+	if row.keyFile != utils.DisplayPath(privPath) {
+		t.Errorf("key file: got %q, want %q", row.keyFile, utils.DisplayPath(privPath))
 	}
 
 	// Turn autoload off.
@@ -568,5 +582,173 @@ func TestAgentRemoveVaultKeySessionUnloadsInsteadOfDeleting(t *testing.T) {
 	}
 	if !listMsg.rows[0].autoload {
 		t.Fatal("expected autoload to remain true (Agent-tab remove must not change persisted autoload)")
+	}
+}
+
+// TestVaultTableShowsKeyFileWhenWide: Identity.Filepath is recorded when a key
+// is added and shown by the CLI's FILEPATH column, but was invisible in the TUI.
+func TestVaultTableShowsKeyFileWhenWide(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 160
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/.ssh/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	view := vs.renderTable(st, false)
+	if !strings.Contains(view, "id_ed25519") {
+		t.Fatalf("expected the key file in the rendered table, got:\n%s", view)
+	}
+}
+
+// TestVaultTableDropsKeyFileWhenNarrow: the column is the one worth losing when
+// there is no room, and a row must not carry a cell its columns cannot index.
+func TestVaultTableDropsKeyFileWhenNarrow(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 60
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/.ssh/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	for _, col := range vs.table.Columns() {
+		if col.Title == vaultKeyFileColumn {
+			t.Fatal("expected the key file column to be dropped at this width")
+		}
+	}
+	if got := len(vs.table.Rows()[0]); got != len(vs.table.Columns()) {
+		t.Fatalf("row cells: want %d to match the columns, got %d", len(vs.table.Columns()), got)
+	}
+	// Rendering must not panic on the trimmed row.
+	_ = vs.renderTable(st, false)
+}
+
+// TestVaultTableKeyFileKeepsItsFileName: a path too long for the column loses
+// its leading directories, not the name that identifies it.
+func TestVaultTableKeyFileKeepsItsFileName(t *testing.T) {
+	st := BuildStyles(theme.DefaultTheme())
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+	vs.width = 160
+	vs.rows = []vaultIdentityRow{{
+		fingerprint: "SHA256:fp0",
+		loaded:      "no",
+		comment:     "key",
+		keyType:     "ssh-ed25519",
+		keyFile:     "~/very/deeply/nested/directory/structure/that/will/not/fit/id_ed25519",
+	}}
+	vs.resizeTable()
+
+	view := vs.renderTable(st, false)
+	if !strings.Contains(view, "id_ed25519") {
+		t.Fatalf("expected the file name to survive truncation, got:\n%s", view)
+	}
+	if strings.Contains(view, "~/very/deeply/nested/directory/structure/that/will") {
+		t.Fatalf("expected the leading directories to be elided, got:\n%s", view)
+	}
+}
+
+// TestVaultAddNoAutoloadRoundtrip: 'A' is the tab's --no-autoload. The key is
+// stored, but with autoload off, so a daemon restart forgets it.
+func TestVaultAddNoAutoloadRoundtrip(t *testing.T) {
+	socketPath, vaultPath, _ := startVaultAgentWithPath(t, []byte("no-autoload-pass"))
+	dir := t.TempDir()
+	privPath, fp := writeTUITestKey(t, dir, "id_ed25519", "session-only-key")
+
+	addMsg := addVaultKeyCmd(socketPath, privPath, false)().(vaultOpResultMsg)
+	if addMsg.err != nil {
+		t.Fatalf("add: %v", addMsg.err)
+	}
+	listMsg := listVaultIdentitiesCmd(vaultPath, socketPath)().(vaultIdentitiesMsg)
+	if len(listMsg.rows) != 1 || listMsg.rows[0].fingerprint != fp {
+		t.Fatalf("expected the key in the vault, got %+v", listMsg.rows)
+	}
+	if listMsg.rows[0].autoload {
+		t.Error("autoload: want false after an 'A' add, got true")
+	}
+}
+
+// TestVaultStartAddCarriesAutoloadChoice: the file picker round-trips through
+// its own messages, so the choice made when it opened has to survive until a
+// file comes back.
+func TestVaultStartAddCarriesAutoloadChoice(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'A', Text: "A"})
+	if vs.addAutoload {
+		t.Error("A: want autoload off")
+	}
+	if !vs.fileSelector.Visible() {
+		t.Error("A: want the file picker open")
+	}
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if !vs.addAutoload {
+		t.Error("a: want autoload on")
+	}
+}
+
+// TestVaultInitWithoutRecoveryLeavesNoPhrase: 'I' is the tab's --no-recovery.
+// The vault is created, but the passphrase is the only way in.
+func TestVaultInitWithoutRecoveryLeavesNoPhrase(t *testing.T) {
+	dir := unixSocketTempDirTUI(t)
+	vaultPath := filepath.Join(dir, "vault.json")
+
+	msg := initVaultCmd(vaultPath, []byte("no-recovery-pass"), false)().(vaultInitResultMsg)
+	if msg.err != nil {
+		t.Fatalf("init: %v", msg.err)
+	}
+	if msg.mnemonic != "" || msg.recoveryFile != "" {
+		t.Fatalf("want no recovery phrase, got mnemonic %q file %q", msg.mnemonic, msg.recoveryFile)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "recovery.txt")); !os.IsNotExist(err) {
+		t.Fatalf("recovery.txt: want absent, got %v", err)
+	}
+
+	listMsg := listVaultIdentitiesCmd(vaultPath, "")().(vaultIdentitiesMsg)
+	if !listMsg.initialized {
+		t.Fatal("want the vault to be initialized")
+	}
+}
+
+// TestVaultStartInitCarriesRecoveryChoice: the passphrase prompt is two steps,
+// so the choice made when it opened has to survive the confirm.
+func TestVaultStartInitCarriesRecoveryChoice(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'I', Text: "I"})
+	if vs.initRecovery {
+		t.Error("I: want recovery off")
+	}
+	if !vs.showPass || vs.passAction != "init-pass" {
+		t.Errorf("I: want the passphrase prompt open, got showPass=%v action=%q", vs.showPass, vs.passAction)
+	}
+
+	vs.handleKeys(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if !vs.initRecovery {
+		t.Error("i: want recovery on")
+	}
+}
+
+// TestVaultInitResultSaysWhenThereIsNoPhrase: a vault with no recovery phrase
+// shows no phrase modal, so the status line is the only place that can say so.
+func TestVaultInitResultSaysWhenThereIsNoPhrase(t *testing.T) {
+	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
+
+	vs.Update(vaultInitResultMsg{})
+	if vs.recoveryDisplay.visible {
+		t.Error("want no recovery-phrase modal")
+	}
+	if !strings.Contains(vs.status, "without a recovery phrase") {
+		t.Errorf("status: want it to say there is no phrase, got %q", vs.status)
 	}
 }

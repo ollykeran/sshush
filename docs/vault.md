@@ -2,7 +2,7 @@
 
 The sshush **vault** is an optional mode where SSH private keys live in a single JSON file on disk. Material is **encrypted at rest** with a **master key** derived from your passphrase. The running agent holds the master key only while **unlocked**; locking wipes it from memory. The `sshush vault` command group creates the vault file and manages identities (list, add, remove, autoload, session load, recovery unlock).
 
-This page matches the implementation in `internal/vault/` and `internal/cli/vault.go`. For config keys and high-level setup, see [Config Reference](config.md) (sections `[agent]`, `[vault]`, and **Vault**). If you are upgrading from a flat `config.toml`, read [Migration from flat TOML](config.md#migration-from-flat-toml-breaking) first.
+This page matches the implementation in `internal/vault/` (the store and the agent), `internal/vaultops/` (the operations themselves) and `internal/cli/vault.go` (the command surface). For config keys and high-level setup, see [Config Reference](config.md) (sections `[agent]`, `[vault]`, and **Vault**). If you are upgrading from a flat `config.toml`, read [Migration from flat TOML](config.md#migration-from-flat-toml-breaking) first.
 
 ## What the vault does
 
@@ -188,7 +188,14 @@ No subcommand-specific flags beyond global `-c` / `-s`.
 
 ## TUI
 
-`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it mirrors every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
+`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it runs every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. It is not a second implementation: both front ends call `internal/vaultops`, so a fix to a verb reaches the CLI and the tab at once. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
+
+Three surface differences are deliberate, and each is a property of the front end rather than of the operation:
+
+- The CLI resolves a selector by fingerprint, exact comment **or** key file path; the tab resolves by fingerprint, because it selects a table row and already holds one.
+- The CLI unlocks a locked agent in passing, prompting for the passphrase; the tab cannot, because a `tea.Cmd` cannot block for input. It reports the lock and offers its own unlock modal.
+- `--no-recovery` and `--no-autoload` have tab equivalents on the shifted key: `I` initialises with no recovery phrase where `i` generates one, and `A` adds with autoload off where `a` adds with it. `--recovery-file` has none — the tab writes `recovery.txt` beside the vault and shows the phrase once.
+- The CLI copies a freshly generated recovery phrase to the clipboard; the tab does not, and shows it instead.
 
 One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the session-unload operation, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. Session-unload is the reverse of session-load: the payload is a UTF-8 SHA256 fingerprint, carried by `sshush-op` and dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
 
