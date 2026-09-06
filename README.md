@@ -14,8 +14,6 @@ Stock agent is minimal: good for some workflows, easy to make invisible. sshush 
 
 ## Demo
 
-[Asciinema recording](https://asciinema.org/a/917054) (click through for the player)
-
 **CLI:** `eval $(sshush)`, then list/add/selftest
 
 ![CLI demo](demos/cli-basics.gif)
@@ -23,10 +21,6 @@ Stock agent is minimal: good for some workflows, easy to make invisible. sshush 
 **TUI:** `sshush tui`
 
 ![TUI demo](demos/tui-basics.gif)
-
-**A real connection:** `sshush server` plus an actual `ssh` authenticated through the agent
-
-![Server connect demo](demos/server-connect.gif)
 
 ## Quick Start
 
