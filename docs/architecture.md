@@ -66,7 +66,9 @@ A command that needs a vault and finds `SpeaksOps` false says so, because the us
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 
-Two things deliberately do not use a Session. `internal/sshushd`'s liveness probes (`CheckAlreadyRunning`, `WaitForSocket`) dial and close without speaking the protocol, so a Session would spawn a client and a goroutine to learn nothing. And `RunServerOnly` holds one long-lived agent client for the life of the SSH server daemon, handing it to `server.AgentAuth`, which is typed against `sshagent.Agent`.
+Two things deliberately do not use a Session. `internal/sshushd`'s liveness probes (`CheckAlreadyRunning`, `WaitForSocket`) dial and close without speaking the protocol, so a Session would spawn a client and a goroutine to learn nothing. And the SSH server's `server.SocketAuth` dials the agent socket directly for each authorization, because all it needs is `List` over the plain agent protocol.
+
+`SocketAuth` dialling per check, rather than the server holding one agent client for its lifetime, is what lets `sshush server` start before `sshush start` and survive a `reload`. A held connection dies with the agent that served it, and the server would go on refusing every key until someone restarted it — with nothing on either side saying why. Per-connection dialling costs one Unix socket dial per SSH handshake and needs no reconnect logic. `server.AgentAuth`, typed against `sshagent.Agent`, is still the comparison itself, and is what tests use directly.
 
 ## Daemon startup
 

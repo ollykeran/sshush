@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/server"
@@ -45,19 +46,10 @@ func runServer(cmd *cobra.Command, _ []string) error {
 			Info("Set [server].listen_port in config (e.g. listen_port = 2222) then run 'sshush server'.").
 			AsError()
 	}
-	if cfg.ServerAuthorizedKeys == "" && !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
-		out := style.NewOutput().Error("Agent not running.")
-		if cfg.IsExternal() {
-			if cfg.SocketPath == "" {
-				out.Info("[agent].type = \"external\" but no socket found; set [agent].socket_path or export SSH_AUTH_SOCK.")
-			} else {
-				out.Info("[agent].type = \"external\": start your external agent at " + cfg.SocketPath + " first.")
-			}
-		} else {
-			out.Info("Start the agent first with 'sshush start'.")
-		}
-		return out.AsError()
-	}
+	// The server asks the agent per connection, so it can start without one: it
+	// authorizes nobody until the agent is up, and needs no restart once it is.
+	// Worth saying out loud, though, since nothing else would explain the refusals.
+	agentDown := cfg.ServerAuthorizedKeys == "" && !sshushd.CheckAlreadyRunning(cfg.SocketPath)
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return fmt.Errorf("cli: resolve config path: %w", err)
@@ -69,8 +61,25 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		}
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	style.NewOutput().Success("SSH server started on port " + fmt.Sprint(cfg.ServerListenPort)).Print()
+	out := style.NewOutput().Success("SSH server started on port " + fmt.Sprint(cfg.ServerListenPort))
+	if agentDown {
+		out.Warn("No agent is running, so no key can be authorized yet.")
+		out.Info(startAgentHint(cfg))
+	}
+	out.Print()
 	return nil
+}
+
+// startAgentHint says how to get an agent up, which differs when the agent is
+// somebody else's.
+func startAgentHint(cfg config.Config) string {
+	if !cfg.IsExternal() {
+		return "Start the agent with 'sshush start'; the server picks it up on the next connection."
+	}
+	if cfg.SocketPath == "" {
+		return "[agent].type = \"external\" but no socket found; set [agent].socket_path or export SSH_AUTH_SOCK."
+	}
+	return "[agent].type = \"external\": start your external agent at " + cfg.SocketPath + "."
 }
 
 func newServerStatusCommand() *cobra.Command {
@@ -120,30 +129,55 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	out := style.NewOutput()
-	out.Info(fmt.Sprintf("port: %d", cfg.ServerListenPort))
+	out.Add(statusLabel("port") + style.Success(fmt.Sprintf("%d", cfg.ServerListenPort)))
+
+	if cfg.ServerAuthorizedKeys != "" {
+		out.Add(statusLabel("auth") + style.Success("authorized_keys "+utils.DisplayPath(cfg.ServerAuthorizedKeys)+"  ✓"))
+	} else if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
+		out.Add(statusLabel("auth") + style.Success("agent "+utils.DisplayPath(cfg.SocketPath)+"  ✓"))
+	} else {
+		out.Add(statusLabel("auth") + style.Warn("agent "+utils.DisplayPath(cfg.SocketPath)+" is not running"))
+		out.Add(statusLabel("") + style.Warn("no key can be authorized until it is"))
+	}
+
 	hostKeyPath := platform.ServerHostKeyPath(cfg.ServerHostKey)
-	if fingerprint, fpErr := server.HostKeyFingerprint(hostKeyPath); fpErr == nil {
-		out.Info("host key: " + utils.DisplayPath(hostKeyPath))
-		out.Info("host key fingerprint: " + fingerprint)
+	fingerprint, fpErr := server.HostKeyFingerprint(hostKeyPath)
+	if fpErr == nil {
+		out.Add(statusLabel("host key") + style.Success(utils.DisplayPath(hostKeyPath)+"  ✓"))
+		out.Add(statusLabel("fingerprint") + style.Text(fingerprint))
 	} else {
-		out.Info("host key: " + utils.DisplayPath(hostKeyPath) + " (not created yet)")
+		out.Add(statusLabel("host key") + style.Warn(utils.DisplayPath(hostKeyPath)+" (created on first start)"))
 	}
+
 	if processRunning {
-		out.Info(fmt.Sprintf("process: running (PID %d)", pid))
+		out.Add(statusLabel("process") + style.Success(fmt.Sprintf("running (PID %d)  ✓", pid)))
 	} else {
-		out.Info("process: not running")
+		out.Add(statusLabel("process") + style.Err("not running  ✗"))
 	}
-	if dialErr != nil {
-		out.Info("connection: failed (" + dialErr.Error() + ")")
-		if processRunning {
-			out.Info("(process has pidfile but port not reachable)")
-		}
+
+	if dialErr == nil {
+		out.Add(statusLabel("connection") + style.Success("ok  ✓"))
 	} else {
-		out.Info("connection: ok")
+		out.Add(statusLabel("connection") + style.Err("✗ "+dialErr.Error()))
+		if processRunning {
+			out.Add(statusLabel("") + style.Err("pidfile exists but the port is not reachable"))
+		}
 	}
 	out.Print()
 	return nil
 }
+
+// statusLabel renders a status line's label, padded so the values line up. An
+// empty name gives the blank label a continuation line hangs from.
+func statusLabel(name string) string {
+	if name != "" {
+		name += ":"
+	}
+	return style.Focus(fmt.Sprintf("%-*s", statusLabelWidth, name))
+}
+
+// statusLabelWidth fits the longest label plus a space.
+const statusLabelWidth = len("fingerprint:") + 1
 
 func newServerStopCommand() *cobra.Command {
 	return &cobra.Command{
