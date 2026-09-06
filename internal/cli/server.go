@@ -10,9 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/runtime"
+	"github.com/ollykeran/sshush/internal/server"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -118,6 +121,13 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 
 	out := style.NewOutput()
 	out.Info(fmt.Sprintf("port: %d", cfg.ServerListenPort))
+	hostKeyPath := platform.ServerHostKeyPath(cfg.ServerHostKey)
+	if fingerprint, fpErr := server.HostKeyFingerprint(hostKeyPath); fpErr == nil {
+		out.Info("host key: " + utils.DisplayPath(hostKeyPath))
+		out.Info("host key fingerprint: " + fingerprint)
+	} else {
+		out.Info("host key: " + utils.DisplayPath(hostKeyPath) + " (not created yet)")
+	}
 	if processRunning {
 		out.Info(fmt.Sprintf("process: running (PID %d)", pid))
 	} else {

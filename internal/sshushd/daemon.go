@@ -14,6 +14,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/server"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -140,10 +141,11 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		defer conn.Close()
 		authSource = &server.AgentAuth{Agent: sshagent.NewClient(conn)}
 	}
-	if cfg.ServerHostKey != "" {
-		if _, err := os.Stat(cfg.ServerHostKey); err != nil {
-			return fmt.Errorf("server host key %s: %w", utils.DisplayPath(cfg.ServerHostKey), err)
-		}
+	// Resolve and create the host key before detaching, so a bad path is reported
+	// to the caller rather than disappearing into a background process.
+	hostKeyPath := platform.ServerHostKeyPath(cfg.ServerHostKey)
+	if _, err := server.EnsureHostKey(hostKeyPath); err != nil {
+		return fmt.Errorf("server host key %s: %w", utils.DisplayPath(hostKeyPath), err)
 	}
 
 	if err := detachProcess(); err != nil {
@@ -159,7 +161,7 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	srv := &server.Server{
 		ListenAddr:  listenAddr,
 		AuthKeys:    authSource,
-		HostKeyPath: cfg.ServerHostKey,
+		HostKeyPath: hostKeyPath,
 		Ready:       ready.Ready,
 	}
 	return srv.ListenAndServe()

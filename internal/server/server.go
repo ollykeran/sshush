@@ -1,9 +1,6 @@
 package server
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"fmt"
 	"net"
 
@@ -21,8 +18,11 @@ type AuthKeySource interface {
 // shell on a pty to each session.
 // It does not depend on config or CLI; all data is passed via struct fields.
 type Server struct {
-	ListenAddr  string
-	AuthKeys    AuthKeySource
+	ListenAddr string
+	AuthKeys   AuthKeySource
+	// HostKeyPath is the server's host key file. It is created if missing.
+	// Empty means an ephemeral key for this process, which every client will see
+	// as a host key change, so callers that outlive one run should always set it.
 	HostKeyPath string
 	// Ready, if set, is called once the TCP listener is accepting
 	// connections, before ListenAndServe blocks serving them.
@@ -30,12 +30,16 @@ type Server struct {
 }
 
 // ListenAndServe starts the SSH server on s.ListenAddr. It does not return until the server exits.
-// If HostKeyPath is set, that file is used; otherwise an ephemeral in-memory key is used for this process.
+// If HostKeyPath is set, that file is used, and a host key is generated there when the file
+// does not exist yet; otherwise an ephemeral in-memory key is used for this process.
 func (s *Server) ListenAndServe() error {
 	opts := []gliderlabs.Option{
 		gliderlabs.PublicKeyAuth(s.publicKeyAuth),
 	}
 	if s.HostKeyPath != "" {
+		if _, err := EnsureHostKey(s.HostKeyPath); err != nil {
+			return err
+		}
 		opts = append(opts, gliderlabs.HostKeyFile(s.HostKeyPath))
 	} else {
 		pem, err := generateHostKeyPEM()
@@ -59,16 +63,4 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) publicKeyAuth(ctx gliderlabs.Context, key gliderlabs.PublicKey) bool {
 	return s.AuthKeys.Authorized(key)
-}
-
-func generateHostKeyPEM() ([]byte, error) {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("server: generate ed25519 key: %w", err)
-	}
-	block, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		return nil, fmt.Errorf("server: marshal host key: %w", err)
-	}
-	return pem.EncodeToMemory(block), nil
 }
