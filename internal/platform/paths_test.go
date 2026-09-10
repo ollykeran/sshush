@@ -53,3 +53,23 @@ func TestDefaultSocketPath_absoluteWithoutXDG(t *testing.T) {
 		t.Fatalf("basename: got %q, want %q", filepath.Base(p), SocketFileName)
 	}
 }
+
+func TestServerHostKeyPath_usesTheConfiguredPath(t *testing.T) {
+	if got, want := ServerHostKeyPath("/etc/sshush/host_key"), "/etc/sshush/host_key"; got != want {
+		t.Fatalf("ServerHostKeyPath: got %q, want %q", got, want)
+	}
+}
+
+func TestServerHostKeyPath_fallsBackToTheConfigDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	// The runtime dir is deliberately not used: a host key there would not survive
+	// a reboot, and every returning client would see a host key change.
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
+
+	want := filepath.Join(tmp, ".config", "sshush", ServerHostKeyFileName)
+	if got := ServerHostKeyPath("  "); got != want {
+		t.Fatalf("ServerHostKeyPath: got %q, want %q", got, want)
+	}
+}

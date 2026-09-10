@@ -1,14 +1,15 @@
 package e2e
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,82 @@ func writeE2EConfigWithServer(t *testing.T, dir, socketPath, vaultPath string, k
 		t.Fatalf("write config: %v", err)
 	}
 	return configPath
+}
+
+// openPtyShell opens a session on conn, requests a pty of the given size and
+// starts the shell, returning the pipes needed to drive it.
+func openPtyShell(t *testing.T, conn *ssh.Client, rows, cols int) (*ssh.Session, io.WriteCloser, io.Reader) {
+	t.Helper()
+	session, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := session.RequestPty("xterm", rows, cols, ssh.TerminalModes{}); err != nil {
+		t.Fatalf("request pty: %v", err)
+	}
+	if err := session.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	return session, stdin, stdout
+}
+
+// runInPtyShell types command into a fresh pty shell on conn and waits for want
+// to appear in its output.
+func runInPtyShell(t *testing.T, conn *ssh.Client, command, want string) {
+	t.Helper()
+	_, stdin, stdout := openPtyShell(t, conn, 24, 80)
+	if _, err := io.WriteString(stdin, command); err != nil {
+		t.Fatalf("write to shell: %v", err)
+	}
+	waitForShellOutput(t, stdout, regexp.MustCompile(regexp.QuoteMeta(want)))
+}
+
+// waitForShellOutput reads the shell's output until re matches, failing on
+// timeout with everything seen so far.
+func waitForShellOutput(t *testing.T, stdout io.Reader, re *regexp.Regexp) string {
+	t.Helper()
+	chunks := make(chan []byte, 64)
+	go func() {
+		defer close(chunks)
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				chunks <- chunk
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	var seen strings.Builder
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				t.Fatalf("shell output ended before %s matched; got:\n%s", re, seen.String())
+			}
+			seen.Write(chunk)
+			if re.MatchString(seen.String()) {
+				return seen.String()
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s; got:\n%s", re, seen.String())
+		}
+	}
 }
 
 func TestE2E_ServerStartStop(t *testing.T) {
@@ -181,24 +258,7 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 		t.Fatalf("SSH dial: %v", err)
 	}
 	defer sshConn.Close()
-	session, err := sshConn.NewSession()
-	if err != nil {
-		t.Fatalf("new session: %v", err)
-	}
-	defer session.Close()
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
-	}
-	if err := session.Shell(); err != nil {
-		t.Fatalf("shell: %v", err)
-	}
-	var out bytes.Buffer
-	out.ReadFrom(stdout)
-	session.Close()
-	if !bytes.Contains(out.Bytes(), []byte("sshush session (authorized by key)")) {
-		t.Errorf("expected session message; got: %s", out.String())
-	}
+	runInPtyShell(t, sshConn, "echo sshush-e2e-$((6*7))\n", "sshush-e2e-42")
 
 	runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
 	runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
@@ -249,19 +309,7 @@ func TestE2E_ServerFileAuth(t *testing.T) {
 		t.Fatalf("SSH dial: %v", err)
 	}
 	defer sshConn.Close()
-	session, err := sshConn.NewSession()
-	if err != nil {
-		t.Fatalf("new session: %v", err)
-	}
-	defer session.Close()
-	stdout, _ := session.StdoutPipe()
-	_ = session.Shell()
-	var out bytes.Buffer
-	out.ReadFrom(stdout)
-	session.Close()
-	if !bytes.Contains(out.Bytes(), []byte("sshush session (authorized by key)")) {
-		t.Errorf("expected session message; got: %s", out.String())
-	}
+	runInPtyShell(t, sshConn, "echo sshush-e2e-$((6*7))\n", "sshush-e2e-42")
 
 	runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
 	runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
@@ -375,20 +423,311 @@ func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
 		t.Fatalf("SSH dial: %v", err)
 	}
 	defer sshConn.Close()
+	runInPtyShell(t, sshConn, "echo sshush-e2e-$((6*7))\n", "sshush-e2e-42")
+
+	runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+	runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+}
+
+// TestE2E_ServerPtyShellResizes drives a real client through a window change and
+// checks the shell sees the new size. It lives here rather than in the server
+// package because the server runs out of process, where the race detector does
+// not see gliderlabs' own write to the session's Pty on a window-change request.
+func TestE2E_ServerPtyShellResizes(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs.
+	t.Setenv("SHELL", "/bin/sh")
+
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "resize-key")
+	serverPort := 22407
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := buildBins(t)
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	runtimeDir := dir
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+		t.Fatalf("server: exit %d", code)
+	}
+	t.Cleanup(func() {
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	})
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshConn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+		User:            "e2e",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("SSH dial: %v", err)
+	}
+	defer sshConn.Close()
+
+	session, stdin, stdout := openPtyShell(t, sshConn, 30, 120)
+	if _, err := io.WriteString(stdin, "stty size\n"); err != nil {
+		t.Fatalf("write to shell: %v", err)
+	}
+	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)^30 120\r?$`))
+
+	if err := session.WindowChange(40, 100); err != nil {
+		t.Fatalf("window change: %v", err)
+	}
+	// The resize is a separate channel request, so ask again until it lands.
+	go func() {
+		for {
+			if _, err := io.WriteString(stdin, "stty size\n"); err != nil {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)^40 100\r?$`))
+}
+
+// TestE2E_ServerRejectsNonPtySession checks that `ssh host <cmd>` — and by
+// extension scp and anything else that does not ask for a terminal — is turned
+// away with a message rather than left hanging.
+func TestE2E_ServerRejectsNonPtySession(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "nopty-key")
+	serverPort := 22408
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := buildBins(t)
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	runtimeDir := dir
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+		t.Fatalf("server: exit %d", code)
+	}
+	t.Cleanup(func() {
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	})
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshConn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+		User:            "e2e",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("SSH dial: %v", err)
+	}
+	defer sshConn.Close()
+
 	session, err := sshConn.NewSession()
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
 	defer session.Close()
-	stdout, _ := session.StdoutPipe()
-	_ = session.Shell()
-	var out bytes.Buffer
-	out.ReadFrom(stdout)
-	session.Close()
-	if !bytes.Contains(out.Bytes(), []byte("sshush session (authorized by key)")) {
-		t.Errorf("expected session message after add key; got: %s", out.String())
+	var stderr strings.Builder
+	session.Stderr = &stderr
+
+	done := make(chan error, 1)
+	go func() { done <- session.Run("echo hi") }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a remote command should be rejected, not run")
+		}
+		if !strings.Contains(stderr.String(), "only interactive PTY sessions are supported") {
+			t.Errorf("stderr = %q, want the PTY-only message", stderr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a non-PTY request should be rejected, not left hanging")
+	}
+}
+
+// TestE2E_ServerKeepsItsHostKeyAcrossRestarts is the check behind persistent host
+// keys: a client that pinned the host key on one run must not be told the host key
+// changed on the next, which is what an ephemeral key caused.
+func TestE2E_ServerKeepsItsHostKeyAcrossRestarts(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "hostkey-persist")
+	serverPort := 22409
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
-	runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	binDir := buildBins(t)
+	// No host_key in the config: the point is that an unconfigured server still
+	// keeps one identity.
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	runtimeDir := dir
+	// The default host key lives in the config dir, so keep it inside the test's
+	// own directory rather than the developer's real one.
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	t.Cleanup(func() { runSSHush(t, binDir, configPath, runtimeDir, nil, "stop") })
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// hostKeyOffered starts the server, connects, and reports the host key the
+	// client was given, then stops the server again.
+	hostKeyOffered := func() string {
+		t.Helper()
+		if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+			t.Fatalf("server: exit %d", code)
+		}
+		defer runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+
+		var offered string
+		sshConn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User: "e2e",
+			Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+				offered = ssh.FingerprintSHA256(key)
+				return nil
+			},
+			Timeout: 5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("SSH dial: %v", err)
+		}
+		sshConn.Close()
+		return offered
+	}
+
+	first := hostKeyOffered()
+	// The port takes a moment to free up between the two runs.
+	for i := 0; i < 40; i++ {
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), 100*time.Millisecond); err != nil {
+			break
+		} else {
+			c.Close()
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	second := hostKeyOffered()
+
+	if first != second {
+		t.Errorf("host key changed across restarts: %s then %s", first, second)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sshush", "server_host_ed25519")); err != nil {
+		t.Errorf("expected a host key in the config dir: %v", err)
+	}
+}
+
+// TestE2E_ServerStartsBeforeTheAgent covers the server being brought up with no
+// agent to authenticate against: connections are refused until the agent appears,
+// and it is picked up without restarting the server — including after the agent is
+// stopped and started again.
+func TestE2E_ServerStartsBeforeTheAgent(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "later-agent")
+	serverPort := 22410
+
+	binDir := buildBins(t)
+	// No authorized_keys: auth goes through the agent, which is not running yet.
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, "", "")
+	runtimeDir := dir
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	stdout, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server")
+	if code != 0 {
+		t.Fatalf("server should start without an agent: exit %d\nstderr: %s", code, stderr)
+	}
+	if combined := stdout + stderr; !strings.Contains(combined, "No agent is running") {
+		t.Errorf("starting without an agent should say so; got stdout: %q stderr: %q", stdout, stderr)
+	}
+	t.Cleanup(func() {
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop")
+		runSSHush(t, binDir, configPath, runtimeDir, nil, "stop")
+	})
+
+	signer, err := readSignerFromFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// connects reports whether the key is accepted right now.
+	connects := func() bool {
+		t.Helper()
+		conn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User:            "e2e",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		})
+		if err != nil {
+			return false
+		}
+		conn.Close()
+		return true
+	}
+
+	if connects() {
+		t.Error("no key should be authorized while the agent is down")
+	}
+
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("start: exit %d", code)
+	}
+	if !connects() {
+		t.Error("the key should be accepted once the agent is up, without restarting the server")
+	}
+
+	// A replaced agent is the case a connection held for the server's lifetime
+	// would never recover from.
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "stop"); code != 0 {
+		t.Fatalf("stop: exit %d", code)
+	}
+	if connects() {
+		t.Error("no key should be authorized after the agent stops")
+	}
+	if _, _, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "start"); code != 0 {
+		t.Fatalf("restart agent: exit %d", code)
+	}
+	if !connects() {
+		t.Error("the key should be accepted again after the agent is restarted")
+	}
 }

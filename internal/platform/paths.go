@@ -13,6 +13,8 @@ const (
 	PidFileName = "sshush.pid"
 	// ConfigFileName is the config file name inside the config directory.
 	ConfigFileName = "config.toml"
+	// ServerHostKeyFileName is the SSH server's host key file inside the config directory.
+	ServerHostKeyFileName = "server_host_ed25519"
 )
 
 // ConfigDir returns the absolute path to the sshush config directory:
@@ -51,4 +53,15 @@ func DefaultSocketPath() string {
 // DefaultPidFilePath returns the default absolute path to the sshushd pidfile.
 func DefaultPidFilePath() string {
 	return filepath.Join(RuntimeDataDir(), PidFileName)
+}
+
+// ServerHostKeyPath returns where the SSH server's host key lives: the configured
+// path when one is set, otherwise a stable file in the config directory. It goes
+// there rather than in the runtime dir because a host key that did not survive a
+// reboot would greet returning clients with a host-key-changed warning.
+func ServerHostKeyPath(configured string) string {
+	if p := strings.TrimSpace(configured); p != "" {
+		return p
+	}
+	return filepath.Join(ConfigDir(), ServerHostKeyFileName)
 }

@@ -13,6 +13,8 @@ key_paths = {{ .KeyPathsTOML }}
 # [server]
 # listen_port = 2222
 # authorized_keys = "~/.ssh/authorized_keys"
+# host_key is optional: the server keeps one at ~/.config/sshush/server_host_ed25519,
+# creating it on first start. Set this only to put it somewhere else.
 # host_key = "~/.ssh/sshush_host_ed25519"
 
 [theme]
