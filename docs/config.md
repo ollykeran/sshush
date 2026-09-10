@@ -189,14 +189,50 @@ The TCP SSH server runs in a **separate daemon process** (not inside the agent).
 |--------|-------------|---------|
 | `listen_port` | TCP port (integer); omit or `0` = not enabled | `2222` |
 | `authorized_keys` | Path to authorized_keys file; empty = use keys from the agent (and vault when vault mode is on) | `"~/.ssh/authorized_keys"` |
-| `host_key` | Path to host private key file; empty = ephemeral in-memory key for this process | `"~/.ssh/sshush_host_ed25519"` |
+| `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519`, created on first start | `"~/.ssh/sshush_host_ed25519"` |
 
 ```toml
 [server]
 listen_port = 2222
 ```
 
-Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon. When using agent-backed auth (no `authorized_keys`), the agent must be running first: run `sshush start` before `sshush server`.
+Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon.
+
+### Authorizing keys
+
+With `authorized_keys` set, the file is read once at startup, and changing it needs a `sshush server stop` and `sshush server`.
+
+With it unset, the server asks the agent on every connection. That has two consequences worth knowing:
+
+- **The server can start before the agent.** It says so, and authorizes nobody until the agent is up — then picks it up on the next connection, with no restart.
+- **`sshush reload`, `stop`/`start`, or an agent crash are survivable.** The server has no connection to lose, so a replaced agent is simply the one it asks next time.
+
+`sshush server status` shows which of the two is in use and whether the agent is reachable.
+
+### Host key
+
+The server needs a stable identity, or every client that has connected before gets OpenSSH's host-key-changed warning on the next start. So the host key is a file, kept across restarts:
+
+- With no `host_key` set, the server uses `~/.config/sshush/server_host_ed25519` (`$XDG_CONFIG_HOME/sshush/...` when that is set) and creates an ed25519 key there, mode `600`, the first time it starts. Nothing to set up.
+- Set `host_key` to put it somewhere else — a path you already manage, or one shared between machines behind the same address. That file is created too if it does not exist yet, so `ssh-keygen` beforehand is optional.
+
+The key lives in the config directory rather than the runtime directory on purpose: a host key under `$XDG_RUNTIME_DIR` would not survive a reboot, which is the problem it exists to solve.
+
+`sshush server status` prints the path and the key's SHA256 fingerprint, in the same form `ssh` shows when asking about an unknown host, so you can compare the two rather than trusting the prompt.
+
+### What a session gets
+
+Connecting lands you in an interactive shell on the host, on a pty:
+
+```bash
+ssh -p 2222 host
+```
+
+The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+
+**Every authorized key gets a shell as the user running `sshushd`.** There is no per-key OS identity and no restricted mode: the server is single-user by design, so treat `[server].authorized_keys` (or the keys in your agent) as the full list of people you would hand that account to.
+
+Only interactive terminal sessions are served. A remote command (`ssh host echo hi`), `scp`, `sftp` and port forwarding are all refused, promptly rather than by hanging.
 
 ## Vault
 

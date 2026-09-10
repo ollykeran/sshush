@@ -167,22 +167,38 @@ func TestExternalMode_StartErrorsWhenNoSocketFoundAtAll(t *testing.T) {
 	}
 }
 
-func TestExternalMode_ServerErrorMentionsExternal(t *testing.T) {
-	orig := env.Config
-	env.Config = &config.Config{
-		SocketPath:       filepath.Join(t.TempDir(), "no-agent-here.sock"),
+// An unreachable agent no longer stops the server from starting — it asks the
+// agent per connection, so one that appears later is picked up. The hint printed
+// alongside that warning still has to say whose agent it is waiting for.
+func TestExternalMode_ServerHintMentionsExternal(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "no-agent-here.sock")
+	cfg := config.Config{
+		SocketPath:       socketPath,
 		AgentType:        config.AgentTypeExternal,
 		ServerListenPort: 2222,
 	}
-	t.Cleanup(func() { env.Config = orig })
-
-	cmd := &cobra.Command{}
-	cmd.Flags().StringP("config", "c", "", "path to config file")
-	err := runServer(cmd, nil)
-	if err == nil {
-		t.Fatal("expected runServer to error when external agent is unreachable")
+	hint := startAgentHint(cfg)
+	if !strings.Contains(hint, "external") {
+		t.Errorf("hint should mention external mode, got: %q", hint)
 	}
-	if !strings.Contains(err.Error(), "external") {
-		t.Errorf("expected error to mention external mode, got: %v", err)
+	if !strings.Contains(hint, socketPath) {
+		t.Errorf("hint should name the socket to start the agent at, got: %q", hint)
+	}
+	if strings.Contains(hint, "sshush start") {
+		t.Errorf("hint should not offer to start somebody else's agent, got: %q", hint)
+	}
+}
+
+func TestExternalMode_ServerHintWithNoSocketSaysSo(t *testing.T) {
+	hint := startAgentHint(config.Config{AgentType: config.AgentTypeExternal, ServerListenPort: 2222})
+	if !strings.Contains(hint, "no socket found") {
+		t.Errorf("hint should mention that no socket was found, got: %q", hint)
+	}
+}
+
+func TestServerHint_ForSSHushOwnAgentOffersStart(t *testing.T) {
+	hint := startAgentHint(config.Config{ServerListenPort: 2222})
+	if !strings.Contains(hint, "sshush start") {
+		t.Errorf("hint should point at 'sshush start', got: %q", hint)
 	}
 }
