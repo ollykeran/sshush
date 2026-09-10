@@ -24,15 +24,29 @@ type Server struct {
 	// Empty means an ephemeral key for this process, which every client will see
 	// as a host key change, so callers that outlive one run should always set it.
 	HostKeyPath string
+	// Shell is the shell sessions run, as a path or a name looked up on PATH. Empty
+	// means the daemon's own $SHELL, then /bin/bash, then /bin/sh.
+	Shell string
 	// Ready, if set, is called once the TCP listener is accepting
 	// connections, before ListenAndServe blocks serving them.
 	Ready func()
+
+	// shellPath is Shell resolved to a path, set before any session starts.
+	shellPath string
 }
 
 // ListenAndServe starts the SSH server on s.ListenAddr. It does not return until the server exits.
 // If HostKeyPath is set, that file is used, and a host key is generated there when the file
 // does not exist yet; otherwise an ephemeral in-memory key is used for this process.
+// A Shell that cannot be found is an error before anything listens.
 func (s *Server) ListenAndServe() error {
+	if s.Shell != "" {
+		path, err := ResolveShell(s.Shell)
+		if err != nil {
+			return fmt.Errorf("server: shell: %w", err)
+		}
+		s.shellPath = path
+	}
 	opts := []gliderlabs.Option{
 		gliderlabs.PublicKeyAuth(s.publicKeyAuth),
 	}

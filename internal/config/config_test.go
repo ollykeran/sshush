@@ -138,6 +138,35 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("server shell roundtrips with tilde expanded", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory available")
+		}
+		cfg := Config{
+			KeyPaths:         []string{"/tmp/id_ed25519"},
+			SocketPath:       "/tmp/agent.sock",
+			AgentType:        AgentTypeKeys,
+			ServerListenPort: 2222,
+			ServerShell:      "~/bin/myshell",
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+		}
+		if want := filepath.Join(home, "bin/myshell"); loaded.ServerShell != want {
+			t.Errorf("ServerShell: got %q, want %q", loaded.ServerShell, want)
+		}
+	})
+
 	t.Run("marshal roundtrip preserves AgentType vault and VaultPath", func(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/s.sock",

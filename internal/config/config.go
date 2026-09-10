@@ -42,6 +42,7 @@ type Config struct {
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
 	ServerHostKey        string // From [server].host_key.
+	ServerShell          string // From [server].shell; empty means the server daemon's own $SHELL.
 }
 
 // IsVault reports whether the agent uses the vault backend.
@@ -72,6 +73,7 @@ type serverSection struct {
 	ListenPort     int64  `toml:"listen_port"`
 	AuthorizedKeys string `toml:"authorized_keys"`
 	HostKey        string `toml:"host_key"`
+	Shell          string `toml:"shell"`
 }
 
 // configDocumentThemePreset is used when encoding theme preset-only (avoid empty hex keys in file).
@@ -97,11 +99,12 @@ func toDocument(cfg Config) configDocument {
 	if cfg.VaultPath != "" {
 		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
 	}
-	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" {
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" || cfg.ServerShell != "" {
 		doc.Server = serverSection{
 			ListenPort:     cfg.ServerListenPort,
 			AuthorizedKeys: cfg.ServerAuthorizedKeys,
 			HostKey:        cfg.ServerHostKey,
+			Shell:          cfg.ServerShell,
 		}
 	}
 	return doc
@@ -167,6 +170,7 @@ func LoadConfig(path string) (Config, error) {
 	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
 	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
 	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)
+	cfg.ServerShell = utils.ExpandHomeDirectory(cfg.ServerShell)
 	for i, p := range cfg.KeyPaths {
 		cfg.KeyPaths[i] = utils.ExpandHomeDirectory(p)
 	}
@@ -240,6 +244,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
 		ServerHostKey:        doc.Server.HostKey,
+		ServerShell:          doc.Server.Shell,
 	}
 	return cfg, nil
 }
