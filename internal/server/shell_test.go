@@ -303,7 +303,116 @@ func waitForExit(t *testing.T, pid int, what string) {
 	t.Errorf("%s (pid %d) still running after the client disconnected", what, pid)
 }
 
-func TestServer_NonPtySessionIsRejected(t *testing.T) {
+// runCommand runs command on a fresh session without a pty, feeding it stdin, and
+// returns what it wrote to stdout and stderr and how the session ended. It fails
+// rather than blocking the suite if the session never ends.
+func runCommand(t *testing.T, conn *ssh.Client, stdin io.Reader, command string) (string, string, error) {
+	t.Helper()
+	t.Setenv("SHELL", "/bin/sh")
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+
+	var stdout, stderr strings.Builder
+	sess.Stdin = stdin
+	sess.Stdout = &stdout
+	sess.Stderr = &stderr
+
+	done := make(chan error, 1)
+	go func() { done <- sess.Run(command) }()
+	select {
+	case err := <-done:
+		return stdout.String(), stderr.String(), err
+	case <-time.After(10 * time.Second):
+		t.Fatalf("remote command %q did not finish", command)
+		return "", "", nil
+	}
+}
+
+func TestServer_RemoteCommandReturnsItsOutput(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	stdout, stderr, err := runCommand(t, conn, nil, "echo hi")
+	if err != nil {
+		t.Fatalf("echo hi: %v (stderr %q)", err, stderr)
+	}
+	if stdout != "hi\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "hi\n")
+	}
+}
+
+func TestServer_RemoteCommandReportsItsOwnExitCode(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	_, _, err := runCommand(t, conn, nil, "exit 3")
+	var exitErr *ssh.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("session error = %v, want an *ssh.ExitError", err)
+	}
+	if exitErr.ExitStatus() != 3 {
+		t.Errorf("exit status = %d, want 3", exitErr.ExitStatus())
+	}
+}
+
+// TestServer_RemoteCommandRunsThroughTheShell checks the command is handed to the
+// shell rather than exec'd as argv, which is what makes pipes and quoting work.
+func TestServer_RemoteCommandRunsThroughTheShell(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	stdout, stderr, err := runCommand(t, conn, nil, "printf '%s\\n' a b c | wc -l")
+	if err != nil {
+		t.Fatalf("pipeline: %v (stderr %q)", err, stderr)
+	}
+	if got := strings.TrimSpace(stdout); got != "3" {
+		t.Errorf("stdout = %q, want 3", stdout)
+	}
+}
+
+func TestServer_RemoteCommandKeepsStdoutAndStderrApart(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	stdout, stderr, err := runCommand(t, conn, nil, "echo out; echo err >&2")
+	if err != nil {
+		t.Fatalf("command: %v", err)
+	}
+	if stdout != "out\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "out\n")
+	}
+	if stderr != "err\n" {
+		t.Errorf("stderr = %q, want %q", stderr, "err\n")
+	}
+}
+
+func TestServer_RemoteCommandReadsTheClientsStdin(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	stdout, stderr, err := runCommand(t, conn, strings.NewReader("from the client\n"), "cat")
+	if err != nil {
+		t.Fatalf("cat: %v (stderr %q)", err, stderr)
+	}
+	if stdout != "from the client\n" {
+		t.Errorf("stdout = %q, want the client's input back", stdout)
+	}
+}
+
+// TestServer_RemoteCommandFinishesWhileTheClientsStdinIsOpen covers `ssh host
+// echo hi` typed at a terminal, whose stdin never reaches EOF: the session has to
+// end when the command does.
+func TestServer_RemoteCommandFinishesWhileTheClientsStdinIsOpen(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	addr, signer := startShellServer(t)
 	conn := dialShellServer(t, addr, signer)
 	defer conn.Close()
@@ -313,26 +422,112 @@ func TestServer_NonPtySessionIsRejected(t *testing.T) {
 		t.Fatalf("new session: %v", err)
 	}
 	defer sess.Close()
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	defer stdin.Close()
 
-	var stderr strings.Builder
-	sess.Stderr = &stderr
+	if err := sess.Start("echo hi"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := waitForSession(t, sess); err != nil {
+		t.Errorf("session ended with %v, want a clean exit", err)
+	}
+}
 
-	done := make(chan error, 1)
-	go func() { done <- sess.Run("echo hi") }()
-	select {
-	case err := <-done:
-		var exitErr *ssh.ExitError
-		if !errors.As(err, &exitErr) {
-			t.Fatalf("remote command error = %v, want an *ssh.ExitError", err)
-		}
-		if exitErr.ExitStatus() != 1 {
-			t.Errorf("exit status = %d, want 1", exitErr.ExitStatus())
-		}
-		if !strings.Contains(stderr.String(), "only interactive PTY sessions are supported") {
-			t.Errorf("stderr = %q, want the PTY-only message", stderr.String())
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("a non-PTY request should be rejected, not left hanging")
+func TestServer_ShellWithoutAPtyReadsCommandsFromStdin(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	var stdout strings.Builder
+	sess.Stdin = strings.NewReader("echo sshush-$((6*7))\n")
+	sess.Stdout = &stdout
+
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if err := waitForSession(t, sess); err != nil {
+		t.Fatalf("session ended with %v, want a clean exit", err)
+	}
+	if stdout.String() != "sshush-42\n" {
+		t.Errorf("stdout = %q, want %q", stdout.String(), "sshush-42\n")
+	}
+}
+
+// TestServer_RemoteCommandCanAskForAPty covers `ssh -t host <command>`, which
+// wants the command run on a terminal rather than the interactive shell.
+func TestServer_RemoteCommandCanAskForAPty(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := sess.RequestPty("xterm", 30, 120, ssh.TerminalModes{}); err != nil {
+		t.Fatalf("request pty: %v", err)
+	}
+	if err := sess.Start("stty size"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	watchShellOutput(stdout).waitForMatch(t, regexp.MustCompile(`(?m)^30 120\r?$`), 10*time.Second)
+}
+
+func TestServer_DisconnectEndsARemoteCommand(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := sess.Start("sleep 300 & printf 'pids %d %d\\n' $$ $!; wait"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	pids := watchShellOutput(stdout).waitForMatch(t, regexp.MustCompile(`pids (\d+) (\d+)`), 10*time.Second)
+	shellPid, err := strconv.Atoi(pids[1])
+	if err != nil {
+		t.Fatalf("shell pid %q: %v", pids[1], err)
+	}
+	childPid, err := strconv.Atoi(pids[2])
+	if err != nil {
+		t.Fatalf("child pid %q: %v", pids[2], err)
+	}
+
+	sess.Close()
+	conn.Close()
+
+	waitForExit(t, shellPid, "remote command's shell")
+	waitForExit(t, childPid, "remote command's background child")
+}
+
+func TestSessionCommand_RunsACommandThroughTheShell(t *testing.T) {
+	if got := sessionCommand("/bin/sh", "").Args; len(got) != 1 || got[0] != "/bin/sh" {
+		t.Errorf("no command: args = %q, want just the shell", got)
+	}
+	got := sessionCommand("/bin/sh", "ls | wc -l").Args
+	if want := []string{"/bin/sh", "-c", "ls | wc -l"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("with a command: args = %q, want %q", got, want)
 	}
 }
 

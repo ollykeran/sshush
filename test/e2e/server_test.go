@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -503,10 +504,10 @@ func TestE2E_ServerPtyShellResizes(t *testing.T) {
 	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)^40 100\r?$`))
 }
 
-// TestE2E_ServerRejectsNonPtySession checks that `ssh host <cmd>` — and by
-// extension scp and anything else that does not ask for a terminal — is turned
-// away with a message rather than left hanging.
-func TestE2E_ServerRejectsNonPtySession(t *testing.T) {
+// TestE2E_ServerRunsARemoteCommand checks `ssh host <command>`: the command's
+// output comes back, and so does its own exit status rather than a generic
+// failure.
+func TestE2E_ServerRunsARemoteCommand(t *testing.T) {
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "nopty-key")
@@ -551,26 +552,43 @@ func TestE2E_ServerRejectsNonPtySession(t *testing.T) {
 	}
 	defer sshConn.Close()
 
-	session, err := sshConn.NewSession()
-	if err != nil {
-		t.Fatalf("new session: %v", err)
+	// Commands any login shell runs the same way: the daemon runs whatever
+	// $SHELL it inherited from the test process.
+	run := func(command string) (string, error) {
+		t.Helper()
+		session, err := sshConn.NewSession()
+		if err != nil {
+			t.Fatalf("new session: %v", err)
+		}
+		defer session.Close()
+		var stdout strings.Builder
+		session.Stdout = &stdout
+		done := make(chan error, 1)
+		go func() { done <- session.Run(command) }()
+		select {
+		case err := <-done:
+			return stdout.String(), err
+		case <-time.After(15 * time.Second):
+			t.Fatalf("remote command %q did not finish", command)
+			return "", nil
+		}
 	}
-	defer session.Close()
-	var stderr strings.Builder
-	session.Stderr = &stderr
 
-	done := make(chan error, 1)
-	go func() { done <- session.Run("echo hi") }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("a remote command should be rejected, not run")
-		}
-		if !strings.Contains(stderr.String(), "only interactive PTY sessions are supported") {
-			t.Errorf("stderr = %q, want the PTY-only message", stderr.String())
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("a non-PTY request should be rejected, not left hanging")
+	stdout, err := run("echo hi")
+	if err != nil {
+		t.Fatalf("echo hi: %v", err)
+	}
+	if stdout != "hi\n" {
+		t.Errorf("stdout = %q, want %q", stdout, "hi\n")
+	}
+
+	_, err = run("exit 3")
+	var exitErr *ssh.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("exit 3: error = %v, want an *ssh.ExitError", err)
+	}
+	if exitErr.ExitStatus() != 3 {
+		t.Errorf("exit status = %d, want 3", exitErr.ExitStatus())
 	}
 }
 
