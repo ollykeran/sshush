@@ -14,7 +14,7 @@ Options are grouped into TOML tables:
 |---------|---------|
 | `[agent]` | Socket path, key paths, agent backend type |
 | `[vault]` | Vault file path; required when `[agent].type` is `"vault"`, optional otherwise (for `sshush vault` CLI while the agent uses `key_paths`) |
-| `[server]` | TCP SSH server listen port and related paths |
+| `[server]` | Optional TCP SSH server: off until `listen_port` is set; auth, host key, shell |
 | `[theme]` | Colours (preset or custom hex) and plain output mode |
 
 ### Migration from flat TOML (breaking)
@@ -183,22 +183,72 @@ When `[agent].type` is not `"vault"`, `[vault].vault_path` is optional and used 
 
 ## `[server]`
 
-The TCP SSH server runs in a **separate daemon process** (not inside the agent). Start it with `sshush server` (or `sshush serve`), stop it with `sshush server stop`. It uses the same config file; no second config.
+The TCP SSH server runs in a **separate daemon process** (not inside the agent). Start it with `sshush server` (or `sshush serve`), stop it with `sshush server stop`. It uses the same config file; no second config. It is **off until you enable it** — see [Enabling the server](#enabling-the-server).
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `listen_port` | TCP port (integer); omit or `0` = not enabled | `2222` |
+| `listen_port` | TCP port (integer). Unset or `0` = server off, the default; setting it is what enables the server | `2222` |
 | `authorized_keys` | Path to authorized_keys file; empty = use keys from the agent (and vault when vault mode is on) | `"~/.ssh/authorized_keys"` |
-| `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519`, created on first start | `"~/.ssh/sshush_host_ed25519"` |
+| `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519` (under `$XDG_CONFIG_HOME` when set), created on first start | `"~/.ssh/sshush_host_ed25519"` |
 | `shell` | Shell sessions run, as a path or a name on `PATH`; empty = the daemon's `$SHELL`, then `/bin/bash`, then `/bin/sh` | `"/bin/zsh"` |
 | `password_auth` | `true` lets clients sign in with the vault's passphrase as well as a key; needs `[vault].vault_path`. Default `false` | `true` |
+
+Paths support `~` expansion.
+
+### Enabling the server
+
+**The server is off until you turn it on.** Whoever signs in gets a shell as you, so starting it is left as a deliberate edit to your config: nothing runs the server until `[server].listen_port` is set.
+
+The config sshush generates (on first run, or with `sshush generate config`) lists every `[server]` option, all commented out. Above each is a line saying what happens while it stays commented out:
+
+```toml
+# [server]
+# The SSH server is off until you enable it: whoever signs in gets a shell as you,
+# so turning it on should be a deliberate choice. To enable it, uncomment [server]
+# and listen_port, then run 'sshush server'. Every other key is optional, and the
+# comment above it says what happens while it stays commented out.
+#
+# TCP port to listen on. Unset or 0 keeps the server off.
+# listen_port = 2222
+#
+# File of keys allowed to sign in. Unset: any key the running agent holds.
+# authorized_keys = "~/.ssh/authorized_keys"
+#
+# The server's host key, created on first start if missing. Unset: this path.
+# host_key = "~/.config/sshush/server_host_ed25519"
+#
+# Shell sessions run, as a path or a name on PATH. Unset: the server daemon's
+# $SHELL, then /bin/bash, then /bin/sh.
+# shell = "/bin/zsh"
+#
+# Also accept the vault's passphrase as an SSH password. Needs [vault].vault_path,
+# and checking a password never unlocks the agent. Unset: false.
+# password_auth = false
+```
+
+To enable the server, uncomment `[server]` and `listen_port`, then run `sshush server`:
 
 ```toml
 [server]
 listen_port = 2222
 ```
 
-Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon.
+The other options can stay commented out until you want something other than the default.
+
+Run `sshush server` before that and it does not start. It prints a warning naming the lines to change, then exits with status 1. `sshush server status` prints the same warning:
+
+```text
+SSH server is not enabled ([server].listen_port is unset or 0).
+~/.config/sshush/config.toml:13: uncomment [server]
+~/.config/sshush/config.toml:20: uncomment listen_port = 2222
+Then run 'sshush server'.
+```
+
+The lines named are the ones in your file as it stands:
+- a `listen_port` commented out inside a live `[server]` table: uncomment that line
+- `listen_port = 0`: set a port on that line
+- a `[server]` table with no `listen_port`: add one under its header
+- no `[server]` table at all: add one
 
 ### Authorizing keys
 

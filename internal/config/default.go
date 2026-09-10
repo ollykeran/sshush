@@ -25,13 +25,14 @@ var defaultConfigTemplate = template.Must(
 
 // defaultConfigTemplateData is input for default_config.toml.tmpl.
 type defaultConfigTemplateData struct {
-	SocketPath   string
-	KeyPathsTOML string
-	ThemeText    string
-	ThemeFocus   string
-	ThemeAccent  string
-	ThemeError   string
-	ThemeWarning string
+	SocketPath    string
+	KeyPathsTOML  string
+	ServerHostKey string // where the server keeps its host key when [server].host_key is unset
+	ThemeText     string
+	ThemeFocus    string
+	ThemeAccent   string
+	ThemeError    string
+	ThemeWarning  string
 }
 
 func findDefaultKeys() []string {
@@ -99,13 +100,14 @@ func keyPathsToTOMLArray(keyPaths []string) string {
 // renderDefaultConfigBytes renders the embedded default config template. Exposed for tests.
 func renderDefaultConfigBytes(socketPath string, keyPaths []string, def theme.Theme) ([]byte, error) {
 	data := defaultConfigTemplateData{
-		SocketPath:   socketPath,
-		KeyPathsTOML: keyPathsToTOMLArray(keyPaths),
-		ThemeText:    def.Text,
-		ThemeFocus:   def.Focus,
-		ThemeAccent:  def.Accent,
-		ThemeError:   def.Error,
-		ThemeWarning: def.Warning,
+		SocketPath:    socketPath,
+		KeyPathsTOML:  keyPathsToTOMLArray(keyPaths),
+		ServerHostKey: utils.ContractHomeDirectory(platform.ServerHostKeyPath("")),
+		ThemeText:     def.Text,
+		ThemeFocus:    def.Focus,
+		ThemeAccent:   def.Accent,
+		ThemeError:    def.Error,
+		ThemeWarning:  def.Warning,
 	}
 	var buf bytes.Buffer
 	if err := defaultConfigTemplate.Execute(&buf, data); err != nil {
