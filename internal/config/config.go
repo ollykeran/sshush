@@ -43,6 +43,7 @@ type Config struct {
 	ServerAuthorizedKeys string // From [server].authorized_keys.
 	ServerHostKey        string // From [server].host_key.
 	ServerShell          string // From [server].shell; empty means the server daemon's own $SHELL.
+	ServerPasswordAuth   bool   // From [server].password_auth; accept the vault's passphrase as an SSH password.
 }
 
 // IsVault reports whether the agent uses the vault backend.
@@ -74,6 +75,7 @@ type serverSection struct {
 	AuthorizedKeys string `toml:"authorized_keys"`
 	HostKey        string `toml:"host_key"`
 	Shell          string `toml:"shell"`
+	PasswordAuth   bool   `toml:"password_auth"`
 }
 
 // configDocumentThemePreset is used when encoding theme preset-only (avoid empty hex keys in file).
@@ -99,12 +101,13 @@ func toDocument(cfg Config) configDocument {
 	if cfg.VaultPath != "" {
 		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
 	}
-	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" || cfg.ServerShell != "" {
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" || cfg.ServerShell != "" || cfg.ServerPasswordAuth {
 		doc.Server = serverSection{
 			ListenPort:     cfg.ServerListenPort,
 			AuthorizedKeys: cfg.ServerAuthorizedKeys,
 			HostKey:        cfg.ServerHostKey,
 			Shell:          cfg.ServerShell,
+			PasswordAuth:   cfg.ServerPasswordAuth,
 		}
 	}
 	return doc
@@ -245,6 +248,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
 		ServerHostKey:        doc.Server.HostKey,
 		ServerShell:          doc.Server.Shell,
+		ServerPasswordAuth:   doc.Server.PasswordAuth,
 	}
 	return cfg, nil
 }

@@ -157,6 +157,15 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	switch {
+	case !cfg.ServerPasswordAuth:
+		out.Add(statusLabel("password") + style.Text("off (public keys only)"))
+	case cfg.VaultPath == "":
+		out.Add(statusLabel("password") + style.Err("on, but [vault].vault_path is not set  ✗"))
+	default:
+		out.Add(statusLabel("password") + style.Success("vault passphrase "+utils.DisplayPath(cfg.VaultPath)+"  ✓"))
+	}
+
 	if processRunning {
 		out.Add(statusLabel("process") + style.Success(fmt.Sprintf("running (PID %d)  ✓", pid)))
 	} else {

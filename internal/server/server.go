@@ -14,8 +14,8 @@ type AuthKeySource interface {
 	Authorized(key ssh.PublicKey) bool
 }
 
-// Server is a TCP SSH server that authenticates by public key and serves an interactive
-// shell on a pty to each session.
+// Server is a TCP SSH server that authenticates by public key (and, if Passwords is set,
+// by password) and serves each session a shell or the command it asked for.
 // It does not depend on config or CLI; all data is passed via struct fields.
 type Server struct {
 	ListenAddr string
@@ -27,6 +27,10 @@ type Server struct {
 	// Shell is the shell sessions run, as a path or a name looked up on PATH. Empty
 	// means the daemon's own $SHELL, then /bin/bash, then /bin/sh.
 	Shell string
+	// Passwords, if set, turns on password authentication alongside public keys,
+	// every attempt going through a passwordGuard before it reaches Passwords. Nil
+	// offers public keys alone.
+	Passwords PasswordSource
 	// Ready, if set, is called once the TCP listener is accepting
 	// connections, before ListenAndServe blocks serving them.
 	Ready func()
@@ -49,6 +53,12 @@ func (s *Server) ListenAndServe() error {
 	}
 	opts := []gliderlabs.Option{
 		gliderlabs.PublicKeyAuth(s.publicKeyAuth),
+	}
+	if s.Passwords != nil {
+		guard := newPasswordGuard(s.Passwords)
+		opts = append(opts, gliderlabs.PasswordAuth(func(ctx gliderlabs.Context, password string) bool {
+			return guard.check(ctx, ctx.RemoteAddr(), []byte(password))
+		}))
 	}
 	if s.HostKeyPath != "" {
 		if _, err := EnsureHostKey(s.HostKeyPath); err != nil {

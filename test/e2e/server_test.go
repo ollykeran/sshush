@@ -629,6 +629,72 @@ func TestE2E_ServerRefusesAShellThatCannotBeFound(t *testing.T) {
 	}
 }
 
+// TestE2E_ServerSignsInWithTheVaultPassphrase covers [server].password_auth end to
+// end, with no agent running at all: checking the passphrase needs the vault file
+// and nothing else.
+func TestE2E_ServerSignsInWithTheVaultPassphrase(t *testing.T) {
+	const passphrase = "e2epassthatalwaysmeetspasswordrequirementsA1!"
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	vaultPath := filepath.Join(dir, "vault.json")
+	serverPort := 22412
+
+	binDir := buildBins(t)
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, vaultPath, nil, serverPort, "", "")
+	appendToFile(t, configPath, "password_auth = true\n")
+	runtimeDir := dir
+
+	initStdinFile := filepath.Join(dir, "init_stdin.txt")
+	if err := os.WriteFile(initStdinFile, []byte(passphrase+"\n"+passphrase+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initStdin, err := os.Open(initStdinFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initStdin.Close()
+	if _, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, initStdin, "vault", "init", "--no-recovery"); code != 0 {
+		t.Fatalf("vault init: exit %d\nstderr: %s", code, stderr)
+	}
+
+	if _, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+		t.Fatalf("server: exit %d\nstderr: %s", code, stderr)
+	}
+	t.Cleanup(func() { runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop") })
+
+	dial := func(password string) (*ssh.Client, error) {
+		return ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User:            "e2e",
+			Auth:            []ssh.AuthMethod{ssh.Password(password)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         10 * time.Second,
+		})
+	}
+
+	if conn, err := dial("not the passphrase"); err == nil {
+		conn.Close()
+		t.Error("a wrong password signed in")
+	}
+
+	conn, err := dial(passphrase)
+	if err != nil {
+		t.Fatalf("dial with the vault passphrase: %v", err)
+	}
+	defer conn.Close()
+	session, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer session.Close()
+	output, err := session.Output("echo hi")
+	if err != nil {
+		t.Fatalf("echo hi: %v", err)
+	}
+	if string(output) != "hi\n" {
+		t.Errorf("output = %q, want %q", output, "hi\n")
+	}
+}
+
 // appendToFile appends text to the file at path. The [server] table is the last
 // one writeE2EConfigWithServer writes, so a key appended here lands in it.
 func appendToFile(t *testing.T, path, text string) {

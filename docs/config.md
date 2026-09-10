@@ -191,6 +191,7 @@ The TCP SSH server runs in a **separate daemon process** (not inside the agent).
 | `authorized_keys` | Path to authorized_keys file; empty = use keys from the agent (and vault when vault mode is on) | `"~/.ssh/authorized_keys"` |
 | `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519`, created on first start | `"~/.ssh/sshush_host_ed25519"` |
 | `shell` | Shell sessions run, as a path or a name on `PATH`; empty = the daemon's `$SHELL`, then `/bin/bash`, then `/bin/sh` | `"/bin/zsh"` |
+| `password_auth` | `true` lets clients sign in with the vault's passphrase as well as a key; needs `[vault].vault_path`. Default `false` | `true` |
 
 ```toml
 [server]
@@ -209,6 +210,29 @@ With it unset, the server asks the agent on every connection. That has two conse
 - **`sshush reload`, `stop`/`start`, or an agent crash are survivable.** The server has no connection to lose, so a replaced agent is simply the one it asks next time.
 
 `sshush server status` shows which of the two is in use and whether the agent is reachable.
+
+### Password authentication
+
+Set `password_auth = true` to let a client sign in with your vault's master passphrase instead of a key — from a machine that has none of yours loaded:
+
+```toml
+[vault]
+vault_path = "~/.config/sshush/vault.json"
+
+[server]
+listen_port = 2222
+password_auth = true
+```
+
+```bash
+ssh -p 2222 -o PreferredAuthentications=password host
+```
+
+- **It checks the passphrase; it does not unlock anything.** The server reads the vault file, verifies the passphrase the way `sshush unlock` would, and throws the derived key away. The agent is never asked, so a locked agent stays locked — run `sshush unlock` inside the session if you need your keys there.
+- **It needs an initialized vault.** `sshush server` refuses to start with `password_auth` on and no `[vault].vault_path`, or with a vault that has not been through `sshush vault init`. It works with any `[agent].type`, and with no agent running at all.
+- **Guessing is slowed down.** Every wrong password costs the client a second. Five in a row from one address lock that address out of password authentication for a minute — the right passphrase is refused too while it lasts. At most two passphrase checks run at once, since each is a deliberately expensive key derivation. None of this touches public-key authentication.
+
+It is off by default, and public keys keep working either way. Anyone who has the passphrase gets a shell as you, so turn it on only where you would expose that passphrase to the network, and prefer keys wherever you have them. `sshush server status` shows whether it is on.
 
 ### Host key
 
