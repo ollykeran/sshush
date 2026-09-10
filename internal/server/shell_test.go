@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,7 +27,15 @@ func startShellServer(t *testing.T, configure ...func(*Server)) (string, ssh.Sig
 	t.Helper()
 	// Sessions start login shells, which read ~/.profile. An empty home keeps
 	// whatever the developer's own profile prints out of the output tests match.
-	t.Setenv("HOME", t.TempDir())
+	// It is removed best-effort rather than by t.TempDir: a shell hung up on at
+	// the end of a test writes its history there, possibly after the test has
+	// returned, and t.TempDir fails the test over a file that lands mid-cleanup.
+	home, err := os.MkdirTemp("", "sshush-server-home-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
