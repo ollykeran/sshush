@@ -53,6 +53,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	opts := []gliderlabs.Option{
 		gliderlabs.PublicKeyAuth(s.publicKeyAuth),
+		serveOnlySessions,
 	}
 	if s.Passwords != nil {
 		guard := newPasswordGuard(s.Passwords)

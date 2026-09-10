@@ -267,7 +267,11 @@ ssh -p 2222 host 'ls | wc -l'
 
 A command gets a pty only when asked for one (`ssh -t`); otherwise its stdout and stderr come back separately and your stdin is relayed to it. Its exit code becomes the session's. The session ends once the command and anything still holding its output have finished — so, as with sshd, a background job left writing to the session keeps it open. Redirect its output (`nohup cmd >/dev/null 2>&1 &`) to leave it running on its own.
 
-`sftp` (and so plain `scp`, which uses it) and port forwarding are refused, promptly rather than by hanging.
+Everything else is refused promptly rather than by hanging:
+
+- **Port forwarding** (`-L`, `-D`, `-W`) is refused with a message the client prints: `open failed: administratively prohibited: sshush server does not support port forwarding`. Remote forwards (`-R`) are refused too, though the protocol gives that refusal no room for a reason.
+- **`sftp`**, and so plain `scp`, which runs over it, fails with `subsystem request failed`.
+- **Agent forwarding** (`-A`) is not provided. The protocol lets the request succeed, but no agent is ever forwarded: the session sees whatever `SSH_AUTH_SOCK` the daemon itself started with, if any.
 
 ## Vault
 
