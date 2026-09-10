@@ -19,6 +19,9 @@ key_paths = {{ .KeyPathsTOML }}
 # shell is optional: sessions run the server daemon's $SHELL, falling back to
 # /bin/bash and then /bin/sh. Set this to run something else.
 # shell = "/bin/zsh"
+# password_auth lets clients sign in with the vault's passphrase as well as a key.
+# It needs [vault].vault_path, and checking a password never unlocks the agent.
+# password_auth = true
 
 [theme]
 name = "default"

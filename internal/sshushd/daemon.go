@@ -151,6 +151,14 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 			return fmt.Errorf("server shell: %w", err)
 		}
 	}
+	var passwords server.PasswordSource
+	if cfg.ServerPasswordAuth {
+		vaultFile, err := passwordAuthVault(cfg)
+		if err != nil {
+			return err
+		}
+		passwords = &server.VaultPassphraseAuth{VaultPath: vaultFile}
+	}
 
 	if err := detachProcess(); err != nil {
 		return err
@@ -167,9 +175,32 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		AuthKeys:    authSource,
 		HostKeyPath: hostKeyPath,
 		Shell:       cfg.ServerShell,
+		Passwords:   passwords,
 		Ready:       ready.Ready,
 	}
 	return srv.ListenAndServe()
+}
+
+// passwordAuthVault resolves the vault file [server].password_auth checks
+// passwords against. No vault configured, a missing file, or a vault never
+// initialized is an error before the server starts: each would refuse every
+// password, with nothing saying why.
+func passwordAuthVault(cfg config.Config) (string, error) {
+	if cfg.VaultPath == "" {
+		return "", fmt.Errorf("[server].password_auth needs [vault].vault_path: passwords are checked against the vault's passphrase")
+	}
+	path := vault.ResolveToFile(cfg.VaultPath)
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("[server].password_auth: vault %s: %w", utils.DisplayPath(path), err)
+	}
+	store, err := vault.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("[server].password_auth: %w", err)
+	}
+	if store.GetMetadata() == nil {
+		return "", fmt.Errorf("[server].password_auth: vault %s is not initialized; run 'sshush vault init' first", utils.DisplayPath(path))
+	}
+	return path, nil
 }
 
 // WaitForSocket waits until the socket at socketPath is accepting connections or timeout.

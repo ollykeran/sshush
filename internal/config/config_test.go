@@ -167,6 +167,31 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("server password_auth roundtrips", func(t *testing.T) {
+		cfg := Config{
+			SocketPath:         "/tmp/s.sock",
+			AgentType:          AgentTypeVault,
+			VaultPath:          "/tmp/v.json",
+			ServerListenPort:   2222,
+			ServerPasswordAuth: true,
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+		}
+		if !loaded.ServerPasswordAuth {
+			t.Errorf("ServerPasswordAuth: got false, want true\n%s", string(data))
+		}
+	})
+
 	t.Run("marshal roundtrip preserves AgentType vault and VaultPath", func(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/s.sock",

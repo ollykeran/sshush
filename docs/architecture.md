@@ -14,7 +14,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/openssh** – OpenSSH key parsing
 - **internal/readypipe** – Parent/child readiness handshake used when forking `sshushd`
 - **internal/runtime** – Config/socket path resolution
-- **internal/server** – The TCP SSH server: public-key auth against a file or the agent, and the shell or remote command each session runs, on a pty or over pipes
+- **internal/server** – The TCP SSH server: public-key auth against a file or the agent, optional password auth against the vault's passphrase, and the shell or remote command each session runs, on a pty or over pipes
 - **internal/sshushd** – Daemon start/stop/reload control
 - **internal/style** – Styled terminal output
 - **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens)
