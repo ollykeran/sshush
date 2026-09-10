@@ -9,19 +9,29 @@ key_paths = {{ .KeyPathsTOML }}
 
 # [vault]
 # vault_path = "~/.config/sshush/vault.json"
-#
+
 # [server]
+# The SSH server is off until you enable it: whoever signs in gets a shell as you,
+# so turning it on should be a deliberate choice. To enable it, uncomment [server]
+# and listen_port, then run 'sshush server'. Every other key is optional, and the
+# comment above it says what happens while it stays commented out.
+#
+# TCP port to listen on. Unset or 0 keeps the server off.
 # listen_port = 2222
+#
+# File of keys allowed to sign in. Unset: any key the running agent holds.
 # authorized_keys = "~/.ssh/authorized_keys"
-# host_key is optional: the server keeps one at ~/.config/sshush/server_host_ed25519,
-# creating it on first start. Set this only to put it somewhere else.
-# host_key = "~/.ssh/sshush_host_ed25519"
-# shell is optional: sessions run the server daemon's $SHELL, falling back to
-# /bin/bash and then /bin/sh. Set this to run something else.
+#
+# The server's host key, created on first start if missing. Unset: this path.
+# host_key = {{ printf "%q" .ServerHostKey }}
+#
+# Shell sessions run, as a path or a name on PATH. Unset: the server daemon's
+# $SHELL, then /bin/bash, then /bin/sh.
 # shell = "/bin/zsh"
-# password_auth lets clients sign in with the vault's passphrase as well as a key.
-# It needs [vault].vault_path, and checking a password never unlocks the agent.
-# password_auth = true
+#
+# Also accept the vault's passphrase as an SSH password. Needs [vault].vault_path,
+# and checking a password never unlocks the agent. Unset: false.
+# password_auth = false
 
 [theme]
 name = "default"
