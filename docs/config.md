@@ -232,7 +232,15 @@ The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/b
 
 **Every authorized key gets a shell as the user running `sshushd`.** There is no per-key OS identity and no restricted mode: the server is single-user by design, so treat `[server].authorized_keys` (or the keys in your agent) as the full list of people you would hand that account to.
 
-Only interactive terminal sessions are served. A remote command (`ssh host echo hi`), `scp`, `sftp` and port forwarding are all refused, promptly rather than by hanging.
+Connecting with a command runs that instead, handed to the shell as `$SHELL -c <command>` the way sshd does it, so pipes, globs and quoting behave as they would locally:
+
+```bash
+ssh -p 2222 host 'ls | wc -l'
+```
+
+A command gets a pty only when asked for one (`ssh -t`); otherwise its stdout and stderr come back separately and your stdin is relayed to it. Its exit code becomes the session's. The session ends once the command and anything still holding its output have finished — so, as with sshd, a background job left writing to the session keeps it open. Redirect its output (`nohup cmd >/dev/null 2>&1 &`) to leave it running on its own.
+
+`sftp` (and so plain `scp`, which uses it) and port forwarding are refused, promptly rather than by hanging.
 
 ## Vault
 
