@@ -228,7 +228,9 @@ Connecting lands you in an interactive shell on the host, on a pty:
 ssh -p 2222 host
 ```
 
-The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+
+The session's environment is the daemon's own plus what sshd would set: `SSH_CLIENT`, `SSH_CONNECTION` and, on a pty, `SSH_TTY` describe this connection, and `SHELL` names the shell. `USER`, `LOGNAME` and `HOME` are filled in if the daemon was started without them. Variables the client sends (`SendEnv`) are ignored, and `/etc/environment` is not read: the daemon runs as you, and already inherits the environment your own login set up.
 
 **Every authorized key gets a shell as the user running `sshushd`.** There is no per-key OS identity and no restricted mode: the server is single-user by design, so treat `[server].authorized_keys` (or the keys in your agent) as the full list of people you would hand that account to.
 

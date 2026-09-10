@@ -23,6 +23,9 @@ import (
 // the returned signer's, and waits until it is accepting connections.
 func startShellServer(t *testing.T) (string, ssh.Signer) {
 	t.Helper()
+	// Sessions start login shells, which read ~/.profile. An empty home keeps
+	// whatever the developer's own profile prints out of the output tests match.
+	t.Setenv("HOME", t.TempDir())
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +240,10 @@ func TestServer_PtySessionEndsCleanlyWhenTheShellExits(t *testing.T) {
 	sess, stdin, _ := startPtyShell(t, conn, 24, 80)
 	defer sess.Close()
 
-	if _, err := io.WriteString(stdin, "exit\n"); err != nil {
+	// An explicit status: a bare `exit` returns the last command's, and a login
+	// shell's last command is whatever the system profile ran — on macOS, a test
+	// in /etc/bashrc that is false on most machines.
+	if _, err := io.WriteString(stdin, "exit 0\n"); err != nil {
 		t.Fatalf("write to shell: %v", err)
 	}
 	if err := waitForSession(t, sess); err != nil {
@@ -521,13 +527,89 @@ func TestServer_DisconnectEndsARemoteCommand(t *testing.T) {
 	waitForExit(t, childPid, "remote command's background child")
 }
 
-func TestSessionCommand_RunsACommandThroughTheShell(t *testing.T) {
-	if got := sessionCommand("/bin/sh", "").Args; len(got) != 1 || got[0] != "/bin/sh" {
-		t.Errorf("no command: args = %q, want just the shell", got)
+func TestSessionCommand_StartsALoginShellOrRunsACommandThroughIt(t *testing.T) {
+	shell := sessionCommand("/bin/sh", "")
+	if shell.Path != "/bin/sh" || len(shell.Args) != 1 || shell.Args[0] != "-sh" {
+		t.Errorf("no command: path %q, args %q; want /bin/sh run as -sh", shell.Path, shell.Args)
 	}
 	got := sessionCommand("/bin/sh", "ls | wc -l").Args
 	if want := []string{"/bin/sh", "-c", "ls | wc -l"}; strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("with a command: args = %q, want %q", got, want)
+	}
+}
+
+func TestServer_ShellStartsAsALoginShell(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	var stdout strings.Builder
+	sess.Stdin = strings.NewReader("echo \"$0\"\n")
+	sess.Stdout = &stdout
+
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	if err := waitForSession(t, sess); err != nil {
+		t.Fatalf("session ended with %v, want a clean exit", err)
+	}
+	if stdout.String() != "-sh\n" {
+		t.Errorf("$0 = %q, want -sh", stdout.String())
+	}
+}
+
+func TestServer_RemoteCommandSeesItsConnectionInTheEnvironment(t *testing.T) {
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	stdout, stderr, err := runCommand(t, conn, nil, `printf '%s|%s|%s' "$SSH_CLIENT" "$SSH_CONNECTION" "${SSH_TTY-unset}"`)
+	if err != nil {
+		t.Fatalf("printf: %v (stderr %q)", err, stderr)
+	}
+	_, serverPort, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientPort := strconv.Itoa(conn.LocalAddr().(*net.TCPAddr).Port)
+	want := "127.0.0.1 " + clientPort + " " + serverPort +
+		"|127.0.0.1 " + clientPort + " 127.0.0.1 " + serverPort +
+		"|unset"
+	if stdout != want {
+		t.Errorf("SSH_CLIENT|SSH_CONNECTION|SSH_TTY = %q, want %q", stdout, want)
+	}
+}
+
+func TestServer_PtySessionNamesItsTerminal(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	addr, signer := startShellServer(t)
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := sess.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
+		t.Fatalf("request pty: %v", err)
+	}
+	if err := sess.Start(`printf 'ssh_tty=%s tty=%s\n' "$SSH_TTY" "$(tty)"`); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	got := watchShellOutput(stdout).waitForMatch(t, regexp.MustCompile(`ssh_tty=(\S*) tty=(\S+)`), 10*time.Second)
+	if got[1] == "" || got[1] != got[2] {
+		t.Errorf("SSH_TTY = %q, want the session's terminal %q", got[1], got[2])
 	}
 }
 

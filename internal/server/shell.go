@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,8 +32,9 @@ const (
 // pty when the client requested one (a terminal login, or `ssh -t host <command>`)
 // and over plain pipes otherwise. Subsystems such as sftp never reach here.
 func (s *Server) handleSession(sess gliderlabs.Session) {
-	cmd := sessionCommand(loginShell(), sess.RawCommand())
-	cmd.Env = os.Environ()
+	shell := loginShell()
+	cmd := sessionCommand(shell, sess.RawCommand())
+	cmd.Env = sessionEnv(os.Environ(), sess.RemoteAddr(), sess.LocalAddr(), shell)
 
 	var code int
 	var err error
@@ -49,13 +51,17 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 	_ = sess.Exit(code)
 }
 
-// sessionCommand builds the process a session runs: the shell itself, or, when the
-// client sent a command, the shell running it. A command goes through `shell -c`
-// rather than being exec'd as argv, as sshd does it, so `ssh host 'ls | wc -l'` gets
-// the pipes, globbing and quoting whoever typed it was counting on.
+// sessionCommand builds the process a session runs, as sshd does. With no command
+// it is the shell as a login shell: argv[0] prefixed with "-", which is what tells
+// a shell to read ~/.profile and friends the way a terminal login does. With one it
+// is the shell running it via `shell -c`, rather than the command exec'd as argv, so
+// `ssh host 'ls | wc -l'` gets the pipes, globbing and quoting whoever typed it was
+// counting on.
 func sessionCommand(shell, rawCommand string) *exec.Cmd {
 	if rawCommand == "" {
-		return exec.Command(shell)
+		cmd := exec.Command(shell)
+		cmd.Args[0] = "-" + filepath.Base(shell)
+		return cmd
 	}
 	return exec.Command(shell, "-c", rawCommand)
 }
@@ -63,13 +69,31 @@ func sessionCommand(shell, rawCommand string) *exec.Cmd {
 // runOnPty runs cmd on a pty sized from the client's request, relaying resizes,
 // and returns its exit status once it has ended.
 func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, winCh <-chan gliderlabs.Window) (int, error) {
-	cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term)
-
+	ptyFile, tty, err := pty.Open()
+	if err != nil {
+		return 0, err
+	}
 	// Size the pty before the shell starts, not on the first resize event, or it
 	// runs at the wrong size until the client's terminal happens to change. Every
 	// size after this one arrives on winCh.
-	ptyFile, err := pty.StartWithSize(cmd, winsize(ptyReq.Window))
+	if err := pty.Setsize(ptyFile, winsize(ptyReq.Window)); err != nil {
+		_ = tty.Close()
+		_ = ptyFile.Close()
+		return 0, err
+	}
+
+	// Opening the pty here rather than through pty.StartWithSize is what lets
+	// SSH_TTY name it. The rest is what StartWithSize would do: the shell leads a
+	// new session, with the pty as its controlling terminal.
+	cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term, "SSH_TTY="+tty.Name())
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	err = cmd.Start()
+	// The shell has its own descriptors for the tty now. Holding this one open
+	// would keep the pty read below from ever seeing the shell hang up.
+	_ = tty.Close()
 	if err != nil {
+		_ = ptyFile.Close()
 		return 0, err
 	}
 
