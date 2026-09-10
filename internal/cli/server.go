@@ -149,6 +149,14 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 		out.Add(statusLabel("host key") + style.Warn(utils.DisplayPath(hostKeyPath)+" (created on first start)"))
 	}
 
+	if cfg.ServerShell != "" {
+		if path, err := server.ResolveShell(cfg.ServerShell); err == nil {
+			out.Add(statusLabel("shell") + style.Success(utils.DisplayPath(path)+"  ✓"))
+		} else {
+			out.Add(statusLabel("shell") + style.Err(cfg.ServerShell+" not found  ✗"))
+		}
+	}
+
 	if processRunning {
 		out.Add(statusLabel("process") + style.Success(fmt.Sprintf("running (PID %d)  ✓", pid)))
 	} else {

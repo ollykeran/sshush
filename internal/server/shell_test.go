@@ -20,8 +20,9 @@ import (
 )
 
 // startShellServer starts a Server on a free port whose only authorized key is
-// the returned signer's, and waits until it is accepting connections.
-func startShellServer(t *testing.T) (string, ssh.Signer) {
+// the returned signer's, and waits until it is accepting connections. configure,
+// if given, adjusts the Server before it starts.
+func startShellServer(t *testing.T, configure ...func(*Server)) (string, ssh.Signer) {
 	t.Helper()
 	// Sessions start login shells, which read ~/.profile. An empty home keeps
 	// whatever the developer's own profile prints out of the output tests match.
@@ -51,6 +52,9 @@ func startShellServer(t *testing.T) (string, ssh.Signer) {
 		ListenAddr: addr,
 		AuthKeys:   &AgentAuth{Agent: keyring},
 		Ready:      func() { close(ready) },
+	}
+	for _, c := range configure {
+		c(srv)
 	}
 	go func() { _ = srv.ListenAndServe() }()
 	select {
@@ -613,16 +617,23 @@ func TestServer_PtySessionNamesItsTerminal(t *testing.T) {
 	}
 }
 
-func TestLoginShell_PrefersTheInheritedShell(t *testing.T) {
+func TestLoginShell_PrefersTheConfiguredShell(t *testing.T) {
 	t.Setenv("SHELL", "/usr/local/bin/fish")
-	if got := loginShell(); got != "/usr/local/bin/fish" {
-		t.Errorf("loginShell() = %q, want /usr/local/bin/fish", got)
+	if got := loginShell("/bin/zsh"); got != "/bin/zsh" {
+		t.Errorf(`loginShell("/bin/zsh") = %q, want /bin/zsh`, got)
+	}
+}
+
+func TestLoginShell_OtherwiseTakesTheInheritedShell(t *testing.T) {
+	t.Setenv("SHELL", "/usr/local/bin/fish")
+	if got := loginShell(""); got != "/usr/local/bin/fish" {
+		t.Errorf(`loginShell("") = %q, want /usr/local/bin/fish`, got)
 	}
 }
 
 func TestLoginShell_FallsBackWhenNoShellIsSet(t *testing.T) {
 	t.Setenv("SHELL", "   ")
-	got := loginShell()
+	got := loginShell("")
 	if got != "/bin/bash" && got != "/bin/sh" {
 		t.Errorf("loginShell() = %q, want /bin/bash or /bin/sh", got)
 	}
@@ -636,6 +647,69 @@ func TestWinsize_SubstitutesDefaultsForAZeroWindow(t *testing.T) {
 	got = winsize(gliderlabs.Window{Width: 120, Height: 30})
 	if got.Cols != 120 || got.Rows != 30 {
 		t.Errorf("winsize(120x30) = %dx%d, want 120x30", got.Cols, got.Rows)
+	}
+}
+
+func TestServer_SessionsRunTheConfiguredShell(t *testing.T) {
+	// An inherited $SHELL that cannot run, so only the configured shell can get
+	// the command through.
+	t.Setenv("SHELL", "/nonexistent/shell")
+	addr, signer := startShellServer(t, func(s *Server) { s.Shell = "sh" })
+	conn := dialShellServer(t, addr, signer)
+	defer conn.Close()
+
+	want, err := ResolveShell("sh")
+	if err != nil {
+		t.Fatalf("resolve sh: %v", err)
+	}
+	sess, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	defer sess.Close()
+	var stdout strings.Builder
+	sess.Stdout = &stdout
+	done := make(chan error, 1)
+	go func() { done <- sess.Run(`printf '%s' "$SHELL"`) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("remote command: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("remote command did not finish")
+	}
+	if stdout.String() != want {
+		t.Errorf("$SHELL = %q, want the configured shell resolved to %q", stdout.String(), want)
+	}
+}
+
+func TestServer_RefusesToStartWithAShellThatCannotBeFound(t *testing.T) {
+	srv := &Server{
+		ListenAddr: "127.0.0.1:0",
+		AuthKeys:   &AgentAuth{Agent: sshagent.NewKeyring()},
+		Shell:      "/nonexistent/sshush-no-such-shell",
+		Ready:      func() { t.Error("server listened despite a missing shell") },
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.ListenAndServe() }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "sshush-no-such-shell") {
+			t.Errorf("ListenAndServe error = %v, want one naming the missing shell", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListenAndServe should refuse a missing shell, not serve")
+	}
+}
+
+func TestResolveShell_LooksUpABareNameOnPath(t *testing.T) {
+	path, err := ResolveShell("sh")
+	if err != nil {
+		t.Fatalf("ResolveShell(sh): %v", err)
+	}
+	if !strings.HasPrefix(path, "/") || !strings.HasSuffix(path, "/sh") {
+		t.Errorf("ResolveShell(sh) = %q, want an absolute path to sh", path)
 	}
 }
 

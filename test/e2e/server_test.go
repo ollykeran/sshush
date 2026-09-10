@@ -592,6 +592,57 @@ func TestE2E_ServerRunsARemoteCommand(t *testing.T) {
 	}
 }
 
+// TestE2E_ServerRefusesAShellThatCannotBeFound checks a bad [server].shell is
+// reported by `sshush server` itself, rather than the daemon starting and then
+// failing every connection.
+func TestE2E_ServerRefusesAShellThatCannotBeFound(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "bad-shell")
+	serverPort := 22411
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := buildBins(t)
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	appendToFile(t, configPath, "shell = \"/nonexistent/sshush-no-such-shell\"\n")
+	runtimeDir := dir
+
+	stdout, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server")
+	t.Cleanup(func() { runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop") })
+	if code == 0 {
+		t.Fatalf("server started with a shell that does not exist; stdout:\n%s", stdout)
+	}
+	if !strings.Contains(stdout+stderr, "sshush-no-such-shell") {
+		t.Errorf("output does not name the missing shell; stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), time.Second); err == nil {
+		conn.Close()
+		t.Error("something is listening on the server port after a refused start")
+	}
+}
+
+// appendToFile appends text to the file at path. The [server] table is the last
+// one writeE2EConfigWithServer writes, so a key appended here lands in it.
+func appendToFile(t *testing.T, path, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestE2E_ServerKeepsItsHostKeyAcrossRestarts is the check behind persistent host
 // keys: a client that pinned the host key on one run must not be told the host key
 // changed on the next, which is what an ephemeral key caused.

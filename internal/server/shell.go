@@ -32,7 +32,7 @@ const (
 // pty when the client requested one (a terminal login, or `ssh -t host <command>`)
 // and over plain pipes otherwise. Subsystems such as sftp never reach here.
 func (s *Server) handleSession(sess gliderlabs.Session) {
-	shell := loginShell()
+	shell := loginShell(s.shellPath)
 	cmd := sessionCommand(shell, sess.RawCommand())
 	cmd.Env = sessionEnv(os.Environ(), sess.RemoteAddr(), sess.LocalAddr(), shell)
 
@@ -270,9 +270,20 @@ func dimension(requested, fallback int) uint16 {
 	}
 }
 
-// loginShell picks the shell to run: whatever $SHELL the daemon inherited, then
-// bash, then sh. There is deliberately no config knob for it yet.
-func loginShell() string {
+// ResolveShell finds a configured shell the way a command line would — a path as
+// given, a bare name on PATH — and returns its path. Checking it before any
+// session needs it is what turns a typo into a startup error rather than a
+// failure served to every client.
+func ResolveShell(name string) (string, error) {
+	return exec.LookPath(name)
+}
+
+// loginShell picks the shell to run: the configured one if there is one, then
+// whatever $SHELL the daemon inherited, then bash, then sh.
+func loginShell(configured string) string {
+	if configured != "" {
+		return configured
+	}
 	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
 		return shell
 	}

@@ -190,6 +190,7 @@ The TCP SSH server runs in a **separate daemon process** (not inside the agent).
 | `listen_port` | TCP port (integer); omit or `0` = not enabled | `2222` |
 | `authorized_keys` | Path to authorized_keys file; empty = use keys from the agent (and vault when vault mode is on) | `"~/.ssh/authorized_keys"` |
 | `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519`, created on first start | `"~/.ssh/sshush_host_ed25519"` |
+| `shell` | Shell sessions run, as a path or a name on `PATH`; empty = the daemon's `$SHELL`, then `/bin/bash`, then `/bin/sh` | `"/bin/zsh"` |
 
 ```toml
 [server]
@@ -228,7 +229,7 @@ Connecting lands you in an interactive shell on the host, on a pty:
 ssh -p 2222 host
 ```
 
-The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+The shell is `[server].shell` when that is set, and otherwise `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. A `shell` that cannot be found stops `sshush server` from starting, rather than failing every connection. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
 
 The session's environment is the daemon's own plus what sshd would set: `SSH_CLIENT`, `SSH_CONNECTION` and, on a pty, `SSH_TTY` describe this connection, and `SHELL` names the shell. `USER`, `LOGNAME` and `HOME` are filled in if the daemon was started without them. Variables the client sends (`SendEnv`) are ignored, and `/etc/environment` is not read: the daemon runs as you, and already inherits the environment your own login set up.
 

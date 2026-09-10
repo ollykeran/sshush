@@ -144,6 +144,13 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	if _, err := server.EnsureHostKey(hostKeyPath); err != nil {
 		return fmt.Errorf("server host key %s: %w", utils.DisplayPath(hostKeyPath), err)
 	}
+	// Same for the shell: a typo here would otherwise fail every connection, with
+	// nothing on the client's side saying why.
+	if cfg.ServerShell != "" {
+		if _, err := server.ResolveShell(cfg.ServerShell); err != nil {
+			return fmt.Errorf("server shell: %w", err)
+		}
+	}
 
 	if err := detachProcess(); err != nil {
 		return err
@@ -159,6 +166,7 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		ListenAddr:  listenAddr,
 		AuthKeys:    authSource,
 		HostKeyPath: hostKeyPath,
+		Shell:       cfg.ServerShell,
 		Ready:       ready.Ready,
 	}
 	return srv.ListenAndServe()
