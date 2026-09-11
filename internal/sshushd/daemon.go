@@ -169,10 +169,10 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		return fmt.Errorf("[server].%w", err)
 	}
 	logPath := platform.ServerLogPath(cfg.ServerLogFile)
-	logFile, err := server.OpenLogFile(logPath, server.DefaultLogMaxBytes)
-	if err != nil {
+	if err := prepareServerLog(logPath); err != nil {
 		return fmt.Errorf("server log %s: %w", utils.DisplayPath(logPath), err)
 	}
+	logFile := newServerLogWriter(logPath)
 	defer logFile.Close()
 	logger := slog.New(server.NewLogHandler(logFile, logLevel))
 
@@ -186,15 +186,16 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		defer os.Remove(pidFilePath)
 	}
 
-	logger.Info(version.Line("sshushd") + " starting")
+	starting := []any{"version", version.Line("sshushd"), "pid", os.Getpid()}
 	if cfg.ServerAuthorizedKeys != "" {
-		logger.Info("Public keys authorized by " + cfg.ServerAuthorizedKeys)
+		starting = append(starting, "authorized_keys", cfg.ServerAuthorizedKeys)
 	} else {
-		logger.Info("Public keys authorized by the agent at " + cfg.SocketPath)
+		starting = append(starting, "agent_socket", cfg.SocketPath)
 	}
 	if passwords != nil {
-		logger.Info("Passwords checked against the passphrase of the vault at " + vaultFile)
+		starting = append(starting, "password_vault", vaultFile)
 	}
+	logger.Info("server starting", starting...)
 
 	srv := &server.Server{
 		ListenAddr:  listenAddr,
@@ -213,14 +214,12 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
 	go func() {
-		if sig, ok := (<-signals).(syscall.Signal); ok {
-			logger.Info(fmt.Sprintf("Received signal %d; terminating.", int(sig)))
-		}
+		logger.Info("server stopping", "signal", (<-signals).String())
 		_ = srv.Close()
 	}()
 
 	if err := srv.ListenAndServe(); err != nil {
-		logger.Error(err.Error())
+		logger.Error("server failed", "err", err)
 		return err
 	}
 	return nil

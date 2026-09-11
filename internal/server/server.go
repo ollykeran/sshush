@@ -36,9 +36,9 @@ type Server struct {
 	// every attempt going through a passwordGuard before it reaches Passwords. Nil
 	// offers public keys alone.
 	Passwords PasswordSource
-	// Log, if set, receives an sshd-style account of what the server does: its
-	// startup, every connection and sign-in attempt, each session, and everything
-	// it refuses. Nil logs nothing.
+	// Log, if set, receives a record of what the server does: its startup, every
+	// connection and sign-in attempt, each session, and everything it refuses. Nil
+	// logs nothing.
 	Log *slog.Logger
 	// Ready, if set, is called once the TCP listener is accepting
 	// connections, before ListenAndServe blocks serving them.
@@ -79,15 +79,15 @@ func (s *Server) ListenAndServe() error {
 		guard := newPasswordGuard(s.Passwords)
 		opts = append(opts, gliderlabs.PasswordAuth(s.passwordAuth(guard)))
 	}
-	var hostKey string
+	var hostKey []any
 	if s.HostKeyPath != "" {
 		if _, err := EnsureHostKey(s.HostKeyPath); err != nil {
 			return err
 		}
 		opts = append(opts, gliderlabs.HostKeyFile(s.HostKeyPath))
-		hostKey = s.HostKeyPath
+		hostKey = []any{"host_key_path", s.HostKeyPath}
 		if fingerprint, err := HostKeyFingerprint(s.HostKeyPath); err == nil {
-			hostKey = fingerprint + " (" + s.HostKeyPath + ")"
+			hostKey = append(hostKey, "host_key", fingerprint)
 		}
 	} else {
 		pem, err := generateHostKeyPEM()
@@ -95,7 +95,7 @@ func (s *Server) ListenAndServe() error {
 			return fmt.Errorf("server: generate host key: %w", err)
 		}
 		opts = append(opts, gliderlabs.HostKeyPEM(pem))
-		hostKey = "ephemeral, for this run only"
+		hostKey = []any{"host_key", "ephemeral"}
 	}
 
 	serving := &gliderlabs.Server{Handler: s.handleSession}
@@ -117,10 +117,9 @@ func (s *Server) ListenAndServe() error {
 	s.serving = serving
 	s.mu.Unlock()
 
-	s.logf(slog.LevelInfo, "Server listening on %s.", describeAddr(ln.Addr()))
-	s.logf(slog.LevelInfo, "Host key: %s", hostKey)
-	s.logf(slog.LevelInfo, "Authentication methods offered: %s", s.offeredMethods())
-	s.logf(slog.LevelInfo, "Sessions run %s", loginShell(s.shellPath))
+	listening := append([]any{"addr", ln.Addr().String()}, hostKey...)
+	listening = append(listening, "auth_methods", s.offeredMethods(), "shell", loginShell(s.shellPath))
+	s.logger().Info("server listening", listening...)
 	if s.Ready != nil {
 		s.Ready()
 	}

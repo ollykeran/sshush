@@ -1,44 +1,17 @@
 package server
 
 import (
-	"context"
 	"log/slog"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestLogHandler_WritesOneSshdStyleLinePerRecord(t *testing.T) {
+func TestLogHandler_WritesKeyValueRecords(t *testing.T) {
 	var out strings.Builder
-	h := NewLogHandler(&out, slog.LevelInfo)
+	slog.New(NewLogHandler(&out, slog.LevelInfo)).Info("auth accepted", "method", "publickey", "user", "kerano")
 
-	at := time.Date(2026, 9, 11, 10, 22, 1, 123_000_000, time.FixedZone("BST", 3600))
-	r := slog.NewRecord(at, slog.LevelInfo, "Accepted publickey for kerano from 203.0.113.5 port 50022 ssh2", 0)
-	if err := h.Handle(context.Background(), r); err != nil {
-		t.Fatal(err)
-	}
-
-	want := "2026-09-11T10:22:01.123+01:00 sshushd[" + strconv.Itoa(os.Getpid()) + "]: " +
-		"Accepted publickey for kerano from 203.0.113.5 port 50022 ssh2\n"
-	if out.String() != want {
-		t.Errorf("line = %q\nwant   %q", out.String(), want)
-	}
-}
-
-func TestLogHandler_MarksLevelsTheWaySshdDoes(t *testing.T) {
-	var out strings.Builder
-	logger := slog.New(NewLogHandler(&out, slog.LevelDebug))
-	logger.Debug("one")
-	logger.Info("two")
-	logger.Warn("three")
-	logger.Error("four")
-
-	for _, want := range []string{"]: debug: one\n", "]: two\n", "]: warning: three\n", "]: error: four\n"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("log does not contain %q:\n%s", want, out.String())
-		}
+	if !strings.Contains(out.String(), `level=INFO msg="auth accepted" method=publickey user=kerano`+"\n") {
+		t.Errorf("record = %q, want a key=value line", out.String())
 	}
 }
 
@@ -52,20 +25,19 @@ func TestLogHandler_DropsRecordsBelowItsLevel(t *testing.T) {
 	}
 }
 
-// TestLogHandler_KeepsClientTextOnOneLine checks a client cannot forge a log line
-// by putting a newline in something that gets logged, such as its user name.
-func TestLogHandler_KeepsClientTextOnOneLine(t *testing.T) {
+// TestLogHandler_KeepsClientTextInItsField checks a client cannot forge a record,
+// or a field, through something that gets logged, such as its user name.
+func TestLogHandler_KeepsClientTextInItsField(t *testing.T) {
 	var out strings.Builder
-	logger := slog.New(NewLogHandler(&out, slog.LevelInfo))
-	logger.Info("Failed password for evil\n2026-01-01T00:00:00.000Z sshushd[1]: Accepted password for root\x1b[2K\u202e")
+	forged := "evil\ntime=2026-01-01T00:00:00Z level=INFO msg=\"auth accepted\" user=root"
+	slog.New(NewLogHandler(&out, slog.LevelInfo)).Info("auth failed", "user", forged, "remote", "203.0.113.5:40120")
 
-	if strings.Count(out.String(), "\n") != 1 {
-		t.Fatalf("one record became %d lines:\n%s", strings.Count(out.String(), "\n"), out.String())
+	if n := strings.Count(out.String(), "\n"); n != 1 {
+		t.Fatalf("one record became %d lines:\n%s", n, out.String())
 	}
-	for _, want := range []string{`evil\x0a2026`, `root\x1b[2K`, `\u202e`} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("line %q does not escape to %q", out.String(), want)
-		}
+	want := `user="evil\ntime=2026-01-01T00:00:00Z level=INFO msg=\"auth accepted\" user=root" remote=203.0.113.5:40120`
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("record = %q, want the user name quoted in its own field", out.String())
 	}
 }
 

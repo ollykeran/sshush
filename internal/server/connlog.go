@@ -3,9 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -15,34 +13,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// discardLogger stands in for a nil Server.Log.
-var discardLogger = slog.New(slog.DiscardHandler)
-
-func (s *Server) logger() *slog.Logger {
-	if s.Log != nil {
-		return s.Log
-	}
-	return discardLogger
-}
-
-// logf logs a formatted record at level, not formatting it at all when the level
-// is off.
-func (s *Server) logf(level slog.Level, format string, args ...any) {
-	l := s.logger()
-	if !l.Enabled(context.Background(), level) {
-		return
-	}
-	l.Log(context.Background(), level, fmt.Sprintf(format, args...))
-}
-
 type connStateKey struct{}
 
 // connState is what the log knows about one client connection, gathered from the
 // separate callbacks gliderlabs and x/crypto make for it.
 type connState struct {
-	remote    string // "203.0.113.5 port 50022", the way sshd writes an address
-	local     string
-	remoteKey string // the remote address as given, for finding this state again
+	remote    string // the client's address, host:port
+	local     string // the address it connected to
 	opened    time.Time
 	closeOnce sync.Once
 
@@ -84,18 +61,17 @@ func (s *Server) observe(srv *gliderlabs.Server) error {
 // onConnect logs a new connection and wraps it so its end is logged too.
 func (s *Server) onConnect(ctx gliderlabs.Context, conn net.Conn) net.Conn {
 	state := &connState{
-		remote:    describeAddr(conn.RemoteAddr()),
-		local:     describeAddr(conn.LocalAddr()),
-		remoteKey: conn.RemoteAddr().String(),
-		opened:    time.Now(),
+		remote: conn.RemoteAddr().String(),
+		local:  conn.LocalAddr().String(),
+		opened: time.Now(),
 	}
 	ctx.SetValue(connStateKey{}, state)
-	s.pending.Store(state.remoteKey, state)
-	s.logf(slog.LevelInfo, "Connection from %s on %s", state.remote, state.local)
+	s.pending.Store(state.remote, state)
+	s.logger().Info("connection opened", "remote", state.remote, "local", state.local)
 	return &loggedConn{Conn: conn, server: s, state: state}
 }
 
-// onHandshakeFailed notes why a connection's handshake failed, for the line
+// onHandshakeFailed notes why a connection's handshake failed, for the record
 // logged when gliderlabs closes it straight after. The callback is given no
 // context, so the connection's state is found by its remote address.
 func (s *Server) onHandshakeFailed(conn net.Conn, err error) {
@@ -123,10 +99,9 @@ func (s *Server) serverConfig(ctx gliderlabs.Context) *ssh.ServerConfig {
 	}
 }
 
-// logAuth logs one authentication attempt the way sshd does: accepted or failed,
-// by which method, for whom, from where, with the key's fingerprint for publickey
-// and the methods still on offer after a failure. A "none" attempt is a client
-// asking what it may use, so it logs the answer.
+// logAuth logs one authentication attempt: its method, the user name the client
+// gave, where from, whether it was accepted, and for publickey which key. A "none"
+// attempt is a client asking what it may use, so it logs what it was offered.
 func (s *Server) logAuth(state *connState, user, method string, err error) {
 	state.mu.Lock()
 	state.user = user
@@ -142,28 +117,30 @@ func (s *Server) logAuth(state *connState, user, method string, err error) {
 	}
 	state.mu.Unlock()
 
-	detail := ""
-	if method == "publickey" && key != nil {
-		detail = ": " + keyTypeLabel(key.Type()) + " " + ssh.FingerprintSHA256(key)
+	if method == "none" && err != nil {
+		s.logger().Info("auth methods offered", "user", user, "remote", state.remote, "methods", s.offeredMethods())
+		return
 	}
-	switch {
-	case err == nil:
-		s.logf(slog.LevelInfo, "Accepted %s for %s from %s ssh2%s", method, user, state.remote, detail)
-	case method == "none":
-		s.logf(slog.LevelInfo, "Authentication methods offered to %s from %s: %s", user, state.remote, s.offeredMethods())
-	default:
-		reason := refusal
-		if reason == "" {
-			reason = authFailureReason(err)
-		}
-		if reason != "" {
-			reason = " (" + reason + ")"
-		}
-		s.logf(slog.LevelInfo, "Failed %s for %s from %s ssh2%s%s; methods offered: %s",
-			method, user, state.remote, detail, reason, s.offeredMethods())
-		if method == "password" && lockedOut != "" {
-			s.logLockout(lockedOut)
-		}
+	attrs := []any{"method", method, "user", user, "remote", state.remote}
+	if method == "publickey" && key != nil {
+		attrs = append(attrs, "key_type", key.Type(), "fingerprint", ssh.FingerprintSHA256(key))
+	}
+	if err == nil {
+		s.logger().Info("auth accepted", attrs...)
+		return
+	}
+	if refusal == "" {
+		refusal = authFailureReason(err)
+	}
+	if refusal != "" {
+		attrs = append(attrs, "reason", refusal)
+	}
+	s.logger().Info("auth failed", append(attrs, "methods_offered", s.offeredMethods())...)
+	// After the failure that caused it, so a lockout "after 5 failures" is read
+	// after the fifth: x/crypto logs an attempt only once its handler has returned.
+	if method == "password" && lockedOut != "" {
+		s.logger().Warn("password lockout", "host", lockedOut,
+			"failures", passwordLockoutFailures, "duration", passwordLockout)
 	}
 }
 
@@ -182,19 +159,12 @@ func authFailureReason(err error) string {
 }
 
 // offeredMethods lists the authentication methods clients are offered, in the
-// comma-separated form the protocol and sshd use.
+// comma-separated form the protocol uses.
 func (s *Server) offeredMethods() string {
 	if s.Passwords != nil {
 		return "publickey,password"
 	}
 	return "publickey"
-}
-
-// logLockout reports that host has just been locked out of password
-// authentication. It follows the log line of the failure that did it.
-func (s *Server) logLockout(host string) {
-	s.logf(slog.LevelWarn, "Locking %s out of password authentication for %v after %d failed passwords",
-		host, passwordLockout, passwordLockoutFailures)
 }
 
 // onSessionRequest logs and refuses subsystem requests, which is how sftp and so
@@ -205,8 +175,8 @@ func (s *Server) onSessionRequest(sess gliderlabs.Session, requestType string) b
 	if requestType != "subsystem" {
 		return true
 	}
-	s.logf(slog.LevelInfo, "Refused subsystem request for %s by user %s from %s: not supported",
-		sess.Subsystem(), sess.User(), remoteOf(sess.Context()))
+	s.logger().Info("subsystem refused", "subsystem", sess.Subsystem(),
+		"user", sess.User(), "remote", remoteOf(sess.Context()))
 	return false
 }
 
@@ -222,80 +192,58 @@ type loggedConn struct {
 func (c *loggedConn) Close() error {
 	err := c.Conn.Close()
 	c.state.closeOnce.Do(func() {
-		c.server.pending.Delete(c.state.remoteKey)
+		c.server.pending.Delete(c.state.remote)
 		c.server.logDisconnect(c.state)
 	})
 	return err
 }
 
-// logDisconnect logs how a connection ended, in sshd's words: after signing in,
-// or before it ("[preauth]") — and then whether the client gave up, ran out of
-// attempts, or never managed a handshake at all.
+// logDisconnect logs how a connection ended: who it was, whether it had signed in,
+// how long it lasted, and — for one that never signed in — why, when that was
+// something other than the client going away.
 func (s *Server) logDisconnect(state *connState) {
 	state.mu.Lock()
 	user, authenticated, failure := state.user, state.authenticated, state.failure
 	state.mu.Unlock()
 
+	attrs := []any{"remote", state.remote}
+	if user != "" {
+		attrs = append(attrs, "user", user)
+	}
+	attrs = append(attrs, "authenticated", authenticated, "duration", time.Since(state.opened).Round(time.Millisecond))
+	if !authenticated {
+		if reason := handshakeFailureReason(failure); reason != "" {
+			attrs = append(attrs, "reason", reason)
+		}
+	}
+	s.logger().Info("connection closed", attrs...)
+}
+
+// handshakeFailureReason says why a connection's handshake failed, or nothing when
+// the client simply went away before signing in.
+func handshakeFailureReason(failure error) string {
 	var authErr *ssh.ServerAuthError
 	switch {
-	case authenticated:
-		s.logf(slog.LevelInfo, "Disconnected from user %s %s (connected %v)",
-			user, state.remote, time.Since(state.opened).Round(time.Millisecond))
-	case failure != nil && strings.Contains(failure.Error(), "too many authentication failures"):
-		s.logf(slog.LevelInfo, "Disconnecting authenticating user %s %s: Too many authentication failures [preauth]", user, state.remote)
-	case failure != nil && strings.Contains(failure.Error(), "too many authentication attempts"):
-		s.logf(slog.LevelInfo, "Disconnecting authenticating user %s %s: Too many authentication attempts [preauth]", user, state.remote)
-	case user != "":
-		s.logf(slog.LevelInfo, "Connection closed by authenticating user %s %s [preauth]", user, state.remote)
-	case failure == nil, errors.Is(failure, io.EOF), errors.As(failure, &authErr):
-		s.logf(slog.LevelInfo, "Connection closed by %s [preauth]", state.remote)
+	case failure == nil, errors.Is(failure, io.EOF):
+		return ""
+	case strings.Contains(failure.Error(), "too many authentication failures"):
+		return "too many authentication failures"
+	case strings.Contains(failure.Error(), "too many authentication attempts"):
+		return "too many authentication attempts"
+	case errors.As(failure, &authErr):
+		return ""
 	default:
-		s.logf(slog.LevelInfo, "Handshake with %s failed: %v [preauth]", state.remote, failure)
+		return failure.Error()
 	}
 }
 
-// remoteOf describes the client a gliderlabs context belongs to.
+// remoteOf is the address of the client a gliderlabs context belongs to.
 func remoteOf(ctx gliderlabs.Context) string {
 	if state := connStateFrom(ctx); state != nil {
 		return state.remote
 	}
-	return describeAddr(ctx.RemoteAddr())
-}
-
-// describeAddr writes a TCP address the way sshd logs one: "203.0.113.5 port 50022".
-func describeAddr(addr net.Addr) string {
-	if addr == nil {
-		return "unknown address"
-	}
-	host, port, err := net.SplitHostPort(addr.String())
-	if err != nil {
+	if addr := ctx.RemoteAddr(); addr != nil {
 		return addr.String()
 	}
-	return host + " port " + port
-}
-
-// keyTypeLabel names a public key type the way sshd does in its log: ED25519,
-// RSA, ECDSA, with -SK for security keys and -CERT for certificates.
-func keyTypeLabel(keyType string) string {
-	var label string
-	switch {
-	case strings.HasPrefix(keyType, "sk-ssh-ed25519"):
-		label = "ED25519-SK"
-	case strings.HasPrefix(keyType, "sk-ecdsa-"):
-		label = "ECDSA-SK"
-	case strings.HasPrefix(keyType, "ssh-ed25519"):
-		label = "ED25519"
-	case strings.HasPrefix(keyType, "ssh-rsa"):
-		label = "RSA"
-	case strings.HasPrefix(keyType, "ecdsa-sha2-"):
-		label = "ECDSA"
-	case strings.HasPrefix(keyType, "ssh-dss"):
-		label = "DSA"
-	default:
-		return keyType
-	}
-	if strings.Contains(keyType, "-cert-") {
-		label += "-CERT"
-	}
-	return label
+	return ""
 }
