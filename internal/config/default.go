@@ -28,6 +28,7 @@ type defaultConfigTemplateData struct {
 	SocketPath    string
 	KeyPathsTOML  string
 	ServerHostKey string // where the server keeps its host key when [server].host_key is unset
+	ServerLogFile string // where the server logs when [server].log_file is unset
 	ThemeText     string
 	ThemeFocus    string
 	ThemeAccent   string
@@ -103,6 +104,7 @@ func renderDefaultConfigBytes(socketPath string, keyPaths []string, def theme.Th
 		SocketPath:    socketPath,
 		KeyPathsTOML:  keyPathsToTOMLArray(keyPaths),
 		ServerHostKey: utils.ContractHomeDirectory(platform.ServerHostKeyPath("")),
+		ServerLogFile: utils.ContractHomeDirectory(platform.ServerLogPath("")),
 		ThemeText:     def.Text,
 		ThemeFocus:    def.Focus,
 		ThemeAccent:   def.Accent,

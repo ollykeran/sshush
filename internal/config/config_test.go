@@ -192,6 +192,39 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("server log settings roundtrip with tilde expanded", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory available")
+		}
+		cfg := Config{
+			SocketPath:       "/tmp/s.sock",
+			AgentType:        AgentTypeKeys,
+			KeyPaths:         []string{"/tmp/k"},
+			ServerListenPort: 2222,
+			ServerLogFile:    "~/logs/sshush.log",
+			ServerLogLevel:   "debug",
+		}
+		data, err := MarshalConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(t.TempDir(), "cfg.toml")
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadConfig(tmp)
+		if err != nil {
+			t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+		}
+		if want := filepath.Join(home, "logs/sshush.log"); loaded.ServerLogFile != want {
+			t.Errorf("ServerLogFile: got %q, want %q", loaded.ServerLogFile, want)
+		}
+		if loaded.ServerLogLevel != "debug" {
+			t.Errorf("ServerLogLevel: got %q, want debug", loaded.ServerLogLevel)
+		}
+	})
+
 	t.Run("marshal roundtrip preserves AgentType vault and VaultPath", func(t *testing.T) {
 		cfg := Config{
 			SocketPath: "/tmp/s.sock",

@@ -44,6 +44,8 @@ type Config struct {
 	ServerHostKey        string // From [server].host_key.
 	ServerShell          string // From [server].shell; empty means the server daemon's own $SHELL.
 	ServerPasswordAuth   bool   // From [server].password_auth; accept the vault's passphrase as an SSH password.
+	ServerLogFile        string // From [server].log_file; empty means the platform default.
+	ServerLogLevel       string // From [server].log_level: "info" (empty) or "debug".
 }
 
 // IsVault reports whether the agent uses the vault backend.
@@ -76,6 +78,8 @@ type serverSection struct {
 	HostKey        string `toml:"host_key"`
 	Shell          string `toml:"shell"`
 	PasswordAuth   bool   `toml:"password_auth"`
+	LogFile        string `toml:"log_file"`
+	LogLevel       string `toml:"log_level"`
 }
 
 // configDocumentThemePreset is used when encoding theme preset-only (avoid empty hex keys in file).
@@ -101,13 +105,16 @@ func toDocument(cfg Config) configDocument {
 	if cfg.VaultPath != "" {
 		doc.Vault = vaultSection{VaultPath: cfg.VaultPath}
 	}
-	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" || cfg.ServerShell != "" || cfg.ServerPasswordAuth {
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" || cfg.ServerShell != "" || cfg.ServerPasswordAuth ||
+		cfg.ServerLogFile != "" || cfg.ServerLogLevel != "" {
 		doc.Server = serverSection{
 			ListenPort:     cfg.ServerListenPort,
 			AuthorizedKeys: cfg.ServerAuthorizedKeys,
 			HostKey:        cfg.ServerHostKey,
 			Shell:          cfg.ServerShell,
 			PasswordAuth:   cfg.ServerPasswordAuth,
+			LogFile:        cfg.ServerLogFile,
+			LogLevel:       cfg.ServerLogLevel,
 		}
 	}
 	return doc
@@ -174,6 +181,7 @@ func LoadConfig(path string) (Config, error) {
 	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
 	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)
 	cfg.ServerShell = utils.ExpandHomeDirectory(cfg.ServerShell)
+	cfg.ServerLogFile = utils.ExpandHomeDirectory(cfg.ServerLogFile)
 	for i, p := range cfg.KeyPaths {
 		cfg.KeyPaths[i] = utils.ExpandHomeDirectory(p)
 	}
@@ -249,6 +257,8 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		ServerHostKey:        doc.Server.HostKey,
 		ServerShell:          doc.Server.Shell,
 		ServerPasswordAuth:   doc.Server.PasswordAuth,
+		ServerLogFile:        doc.Server.LogFile,
+		ServerLogLevel:       doc.Server.LogLevel,
 	}
 	return cfg, nil
 }

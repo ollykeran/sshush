@@ -235,6 +235,36 @@ func TestPasswordGuard_DelaysRejectionsButNotSuccesses(t *testing.T) {
 	}
 }
 
+func TestPasswordGuard_SaysWhichFailureLockedAnAddressOut(t *testing.T) {
+	g, _ := testGuard(&fakePasswords{accept: "right"})
+	ctx := context.Background()
+	attacker := clientAt("203.0.113.5")
+
+	for i := 1; i <= passwordLockoutFailures; i++ {
+		_, _, lockedOutNow := g.verify(ctx, attacker, []byte("wrong"))
+		if want := i == passwordLockoutFailures; lockedOutNow != want {
+			t.Errorf("failure %d: lockedOutNow = %v, want %v", i, lockedOutNow, want)
+		}
+	}
+	if _, refusal, lockedOutNow := g.verify(ctx, attacker, []byte("wrong")); lockedOutNow || refusal != refusedLockedOut {
+		t.Errorf("an attempt during the lockout = %q, %v; want %q, and no second lockout", refusal, lockedOutNow, refusedLockedOut)
+	}
+}
+
+func TestPasswordGuard_SaysWhyItRefusedWithoutChecking(t *testing.T) {
+	g, _ := testGuard(&fakePasswords{accept: "right"})
+	ctx := context.Background()
+	attacker := clientAt("203.0.113.5")
+
+	if _, refusal, _ := g.verify(ctx, attacker, []byte("wrong")); refusal != "" {
+		t.Errorf("a wrong password was refused as %q, want no reason beyond being wrong", refusal)
+	}
+	lockOut(g, attacker)
+	if ok, refusal, _ := g.verify(ctx, attacker, []byte("right")); ok || refusal != refusedLockedOut {
+		t.Errorf("verify during a lockout = %v, %q; want false, %q", ok, refusal, refusedLockedOut)
+	}
+}
+
 func TestAddressHost_DropsThePort(t *testing.T) {
 	cases := map[string]net.Addr{
 		"203.0.113.5": &net.TCPAddr{IP: net.ParseIP("203.0.113.5"), Port: 1},

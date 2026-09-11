@@ -32,6 +32,7 @@ func newServerCommand() *cobra.Command {
 	cmd.Flags().StringP("config", "c", "", "path to config file")
 	cmd.AddCommand(newServerStatusCommand())
 	cmd.AddCommand(newServerStopCommand())
+	cmd.AddCommand(newServerLogsCommand())
 	return cmd
 }
 
@@ -158,6 +159,21 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 		out.Add(statusLabel("password") + style.Err("on, but [vault].vault_path is not set  ✗"))
 	default:
 		out.Add(statusLabel("password") + style.Success("vault passphrase "+utils.DisplayPath(cfg.VaultPath)+"  ✓"))
+	}
+
+	logPath := platform.ServerLogPath(cfg.ServerLogFile)
+	logLevel := ""
+	if level, err := server.ParseLogLevel(cfg.ServerLogLevel); err != nil {
+		out.Add(statusLabel("log") + style.Err("[server]."+err.Error()+"  ✗"))
+	} else {
+		if level < 0 {
+			logLevel = " (debug)"
+		}
+		if _, err := os.Stat(logPath); err == nil {
+			out.Add(statusLabel("log") + style.Success(utils.DisplayPath(logPath)+logLevel+"  ✓"))
+		} else {
+			out.Add(statusLabel("log") + style.Warn(utils.DisplayPath(logPath)+logLevel+" (created on first start)"))
+		}
 	}
 
 	if processRunning {

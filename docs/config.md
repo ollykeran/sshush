@@ -192,6 +192,8 @@ The TCP SSH server runs in a **separate daemon process** (not inside the agent).
 | `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519` (under `$XDG_CONFIG_HOME` when set), created on first start | `"~/.ssh/sshush_host_ed25519"` |
 | `shell` | Shell sessions run, as a path or a name on `PATH`; empty = the daemon's `$SHELL`, then `/bin/bash`, then `/bin/sh` | `"/bin/zsh"` |
 | `password_auth` | `true` lets clients sign in with the vault's passphrase as well as a key; needs `[vault].vault_path`. Default `false` | `true` |
+| `log_file` | Where the server logs connections, sign-ins, sessions and refusals; empty = `$XDG_STATE_HOME/sshush/server.log` when that is set, else `~/.config/sshush/server.log` (see [Logging](#logging)) | `"~/logs/sshush-server.log"` |
+| `log_level` | `"info"` logs every connection, sign-in attempt, session and refusal; `"debug"` adds the commands sessions run and requests refused quietly. Default `"info"` | `"debug"` |
 
 Paths support `~` expansion.
 
@@ -224,6 +226,14 @@ The config sshush generates (on first run, or with `sshush generate config`) lis
 # Also accept the vault's passphrase as an SSH password. Needs [vault].vault_path,
 # and checking a password never unlocks the agent. Unset: false.
 # password_auth = false
+#
+# File the server logs every connection, sign-in attempt and session to, as sshd
+# logs to syslog. Read it with 'sshush server logs'. Unset: this path.
+# log_file = "~/.config/sshush/server.log"
+#
+# How much to log. "info" records every connection, sign-in attempt and session;
+# "debug" adds the commands sessions run and requests refused quietly. Unset: "info".
+# log_level = "info"
 ```
 
 To enable the server, uncomment `[server]` and `listen_port`, then run `sshush server`:
@@ -322,6 +332,61 @@ Everything else is refused promptly rather than by hanging:
 - **Port forwarding** (`-L`, `-D`, `-W`) is refused with a message the client prints: `open failed: administratively prohibited: sshush server does not support port forwarding`. Remote forwards (`-R`) are refused too, though the protocol gives that refusal no room for a reason.
 - **`sftp`**, and so plain `scp`, which runs over it, fails with `subsystem request failed`.
 - **Agent forwarding** (`-A`) is not provided. The protocol lets the request succeed, but no agent is ever forwarded: the session sees whatever `SSH_AUTH_SOCK` the daemon itself started with, if any.
+
+### Logging
+
+The server keeps a log the way sshd does, one line per event, in a file.
+
+- **Location:** `$XDG_STATE_HOME/sshush/server.log` when `XDG_STATE_HOME` is set, otherwise `~/.config/sshush/server.log` beside the host key. Set `log_file` to put it somewhere else.
+- **Reading it:** `sshush server logs` prints the end of it (`-n` for how many lines, `0` for all), and `sshush server logs -f` follows it as lines are written. `sshush server status` shows where it is.
+
+A sample:
+
+```text
+2026-09-11T18:59:51.484+01:00 sshushd[53909]: sshushd 0.0.10 (go1.27.0 darwin/arm64) starting
+2026-09-11T18:59:51.484+01:00 sshushd[53909]: Public keys authorized by /Users/you/.ssh/authorized_keys
+2026-09-11T18:59:51.484+01:00 sshushd[53909]: Passwords checked against the passphrase of the vault at /Users/you/.config/sshush/vault.json
+2026-09-11T18:59:51.485+01:00 sshushd[53909]: Server listening on :: port 2222.
+2026-09-11T18:59:51.485+01:00 sshushd[53909]: Host key: SHA256:FsMw7ywD/B/03MTbBlMkAaU2LNXfkrZALfV6WycRwNI (/Users/you/.config/sshush/server_host_ed25519)
+2026-09-11T18:59:51.485+01:00 sshushd[53909]: Authentication methods offered: publickey,password
+2026-09-11T18:59:51.485+01:00 sshushd[53909]: Sessions run /bin/zsh
+2026-09-11T19:02:10.492+01:00 sshushd[53909]: Connection from 203.0.113.5 port 54821 on 192.0.2.10 port 2222
+2026-09-11T19:02:10.498+01:00 sshushd[53909]: Authentication methods offered to you from 203.0.113.5 port 54821: publickey,password
+2026-09-11T19:02:10.500+01:00 sshushd[53909]: Accepted publickey for you from 203.0.113.5 port 54821 ssh2: ED25519 SHA256:DGihZ4bDgcQgHYXC0j2wyIWgG1MAjKN6lZDj9NNH0T8
+2026-09-11T19:02:10.502+01:00 sshushd[53909]: Starting session: shell on ttys001 for you from 203.0.113.5 port 54821
+2026-09-11T19:02:31.866+01:00 sshushd[53909]: Refused port forwarding to 127.0.0.1 port 5432 for you from 203.0.113.5 port 54821
+2026-09-11T19:14:37.510+01:00 sshushd[53909]: Session closed for you from 203.0.113.5 port 54821: exit status 0
+2026-09-11T19:14:37.510+01:00 sshushd[53909]: Disconnected from user you 203.0.113.5 port 54821 (connected 12m27.018s)
+2026-09-11T19:20:03.533+01:00 sshushd[53909]: Connection from 198.51.100.7 port 40112 on 192.0.2.10 port 2222
+2026-09-11T19:20:03.536+01:00 sshushd[53909]: Authentication methods offered to root from 198.51.100.7 port 40112: publickey,password
+2026-09-11T19:20:04.661+01:00 sshushd[53909]: Failed password for root from 198.51.100.7 port 40112 ssh2; methods offered: publickey,password
+2026-09-11T19:20:04.662+01:00 sshushd[53909]: Connection closed by authenticating user root 198.51.100.7 port 40112 [preauth]
+2026-09-11T19:20:09.120+01:00 sshushd[53909]: Failed password for root from 198.51.100.7 port 40120 ssh2; methods offered: publickey,password
+2026-09-11T19:20:09.121+01:00 sshushd[53909]: warning: Locking 198.51.100.7 out of password authentication for 1m0s after 5 failed passwords
+2026-09-11T20:31:44.970+01:00 sshushd[53909]: Received signal 15; terminating.
+```
+
+At the default `log_level = "info"`, the log records:
+
+- **Startup and shutdown.** How keys and passwords are checked, the address the server listens on, the host key's fingerprint, the methods clients are offered and the shell sessions run. When `sshush server stop` ends the server: `Received signal 15; terminating.`
+- **Every connection.** Where it came from and which address it reached, then how it ended:
+  - `Disconnected from user …` after signing in, with how long it lasted
+  - `Connection closed by … [preauth]` before signing in. A bare connect-and-close shows up this way too, including the port check `sshush server status` does.
+- **Every sign-in attempt.** Which methods the client was offered, then each attempt as `Accepted` or `Failed`, by method, user name and address.
+  - Public-key attempts name the key by type and SHA256 fingerprint; compare with `ssh-keygen -lf key.pub`.
+  - A password turned away without being checked says why, e.g. `(address locked out)`.
+  - A lockout is logged as a warning.
+- **Sessions.** A shell or command starting, the terminal it runs on if it has one, and its exit status when it ends.
+- **Refusals.** Port forwarding (with the destination asked for), remote forwarding, `sftp` and other subsystems, and unknown channel types.
+
+`log_level = "debug"` adds the shell each session runs, the command a session runs, and global requests refused quietly, such as keepalives. The command is left out at `info` because commands can carry secrets.
+
+The user name in these lines is whatever the client sent. It changes nothing: every session runs as the user running `sshushd`.
+
+A few things protect the log itself:
+- **No forged lines.** Anything a client sends that ends up in a line (a user name, a subsystem name, a forwarding destination) has control characters escaped.
+- **Permissions.** The file is created mode `600`.
+- **Size.** Past 10 MiB it is rotated to `server.log.1`, replacing the previous copy, so the log never takes much more than 20 MiB.
 
 ## Vault
 

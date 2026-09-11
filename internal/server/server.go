@@ -1,8 +1,13 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	gliderlabs "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -31,18 +36,32 @@ type Server struct {
 	// every attempt going through a passwordGuard before it reaches Passwords. Nil
 	// offers public keys alone.
 	Passwords PasswordSource
+	// Log, if set, receives an sshd-style account of what the server does: its
+	// startup, every connection and sign-in attempt, each session, and everything
+	// it refuses. Nil logs nothing.
+	Log *slog.Logger
 	// Ready, if set, is called once the TCP listener is accepting
 	// connections, before ListenAndServe blocks serving them.
 	Ready func()
 
 	// shellPath is Shell resolved to a path, set before any session starts.
 	shellPath string
+
+	mu      sync.Mutex
+	serving *gliderlabs.Server // set once listening
+	closed  bool
+
+	// pending finds a connection's log state by remote address, for the one
+	// callback that is given no context.
+	pending        sync.Map
+	activeSessions atomic.Int64
 }
 
 // ListenAndServe starts the SSH server on s.ListenAddr. It does not return until the server exits.
 // If HostKeyPath is set, that file is used, and a host key is generated there when the file
 // does not exist yet; otherwise an ephemeral in-memory key is used for this process.
-// A Shell that cannot be found is an error before anything listens.
+// A Shell that cannot be found is an error before anything listens. After Close it
+// returns nil.
 func (s *Server) ListenAndServe() error {
 	if s.Shell != "" {
 		path, err := ResolveShell(s.Shell)
@@ -53,39 +72,117 @@ func (s *Server) ListenAndServe() error {
 	}
 	opts := []gliderlabs.Option{
 		gliderlabs.PublicKeyAuth(s.publicKeyAuth),
-		serveOnlySessions,
+		s.serveOnlySessions,
+		s.observe,
 	}
 	if s.Passwords != nil {
 		guard := newPasswordGuard(s.Passwords)
-		opts = append(opts, gliderlabs.PasswordAuth(func(ctx gliderlabs.Context, password string) bool {
-			return guard.check(ctx, ctx.RemoteAddr(), []byte(password))
-		}))
+		opts = append(opts, gliderlabs.PasswordAuth(s.passwordAuth(guard)))
 	}
+	var hostKey string
 	if s.HostKeyPath != "" {
 		if _, err := EnsureHostKey(s.HostKeyPath); err != nil {
 			return err
 		}
 		opts = append(opts, gliderlabs.HostKeyFile(s.HostKeyPath))
+		hostKey = s.HostKeyPath
+		if fingerprint, err := HostKeyFingerprint(s.HostKeyPath); err == nil {
+			hostKey = fingerprint + " (" + s.HostKeyPath + ")"
+		}
 	} else {
 		pem, err := generateHostKeyPEM()
 		if err != nil {
 			return fmt.Errorf("server: generate host key: %w", err)
 		}
 		opts = append(opts, gliderlabs.HostKeyPEM(pem))
+		hostKey = "ephemeral, for this run only"
+	}
+
+	serving := &gliderlabs.Server{Handler: s.handleSession}
+	for _, opt := range opts {
+		if err := serving.SetOption(opt); err != nil {
+			return fmt.Errorf("server: %w", err)
+		}
 	}
 	ln, err := net.Listen("tcp", s.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = ln.Close()
+		return nil
+	}
+	s.serving = serving
+	s.mu.Unlock()
+
+	s.logf(slog.LevelInfo, "Server listening on %s.", describeAddr(ln.Addr()))
+	s.logf(slog.LevelInfo, "Host key: %s", hostKey)
+	s.logf(slog.LevelInfo, "Authentication methods offered: %s", s.offeredMethods())
+	s.logf(slog.LevelInfo, "Sessions run %s", loginShell(s.shellPath))
 	if s.Ready != nil {
 		s.Ready()
 	}
-	if err := gliderlabs.Serve(ln, s.handleSession, opts...); err != nil {
-		return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
+
+	err = serving.Serve(ln)
+	if errors.Is(err, gliderlabs.ErrServerClosed) {
+		s.waitForSessions(shellKillGrace + time.Second)
+		return nil
 	}
-	return nil
+	return fmt.Errorf("server: listen %s: %w", s.ListenAddr, err)
 }
 
+// Close stops the server: the listener first, then every signed-in connection,
+// whose sessions end the way they would on a disconnect. ListenAndServe then
+// returns nil, once those sessions have had time to end. Closing a server that has
+// not started listening yet keeps it from starting.
+func (s *Server) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	serving := s.serving
+	s.mu.Unlock()
+	if serving == nil {
+		return nil
+	}
+	return serving.Close()
+}
+
+// waitForSessions gives the sessions Close hung up on up to limit to finish.
+// ListenAndServe returning is what lets the daemon exit, and a session still
+// tearing down then would leave its shell without the SIGKILL that follows an
+// ignored SIGHUP.
+func (s *Server) waitForSessions(limit time.Duration) {
+	deadline := time.Now().Add(limit)
+	for s.activeSessions.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// publicKeyAuth checks key against AuthKeys, noting the key for the auth log line
+// x/crypto reports next.
 func (s *Server) publicKeyAuth(ctx gliderlabs.Context, key gliderlabs.PublicKey) bool {
+	if state := connStateFrom(ctx); state != nil {
+		state.noteOfferedKey(key)
+	}
 	return s.AuthKeys.Authorized(key)
+}
+
+// passwordAuth checks a password through guard, noting for the auth log line why
+// the guard refused it when that was not the password being wrong, and whether
+// this failure locked the address out. The lockout is logged with that line, not
+// here: x/crypto logs the attempt only once this handler has returned, and a
+// lockout "after 5 failed passwords" read before the fifth would not add up.
+func (s *Server) passwordAuth(guard *passwordGuard) gliderlabs.PasswordHandler {
+	return func(ctx gliderlabs.Context, password string) bool {
+		ok, refusal, lockedOutNow := guard.verify(ctx, ctx.RemoteAddr(), []byte(password))
+		if state := connStateFrom(ctx); state != nil {
+			lockedOut := ""
+			if lockedOutNow {
+				lockedOut = addressHost(ctx.RemoteAddr())
+			}
+			state.notePasswordCheck(refusal, lockedOut)
+		}
+		return ok
+	}
 }

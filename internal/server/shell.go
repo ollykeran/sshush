@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -32,22 +33,48 @@ const (
 // pty when the client requested one (a terminal login, or `ssh -t host <command>`)
 // and over plain pipes otherwise. Subsystems such as sftp never reach here.
 func (s *Server) handleSession(sess gliderlabs.Session) {
+	s.activeSessions.Add(1)
+	defer s.activeSessions.Add(-1)
+
 	shell := loginShell(s.shellPath)
-	cmd := sessionCommand(shell, sess.RawCommand())
+	rawCommand := sess.RawCommand()
+	cmd := sessionCommand(shell, rawCommand)
 	cmd.Env = sessionEnv(os.Environ(), sess.RemoteAddr(), sess.LocalAddr(), shell)
+
+	// Logged as sshd does: that a session started, what kind, and on which
+	// terminal. The command itself is only logged at debug, since commands can
+	// carry things nobody meant to leave in a log.
+	who := sess.User() + " from " + remoteOf(sess.Context())
+	kind := "shell"
+	if rawCommand != "" {
+		kind = "command"
+	}
+	started := func(tty string) {
+		on := ""
+		if tty != "" {
+			on = " on " + strings.TrimPrefix(tty, "/dev/")
+		}
+		s.logf(slog.LevelInfo, "Starting session: %s%s for %s", kind, on, who)
+		s.logf(slog.LevelDebug, "Session for %s runs %s", who, shell)
+		if rawCommand != "" {
+			s.logf(slog.LevelDebug, "Session command for %s: %s", who, rawCommand)
+		}
+	}
 
 	var code int
 	var err error
 	if ptyReq, winCh, isPty := sess.Pty(); isPty {
-		code, err = runOnPty(sess, cmd, ptyReq, winCh)
+		code, err = runOnPty(sess, cmd, ptyReq, winCh, started)
 	} else {
-		code, err = runOnPipes(sess, cmd)
+		code, err = runOnPipes(sess, cmd, started)
 	}
 	if err != nil {
+		s.logf(slog.LevelError, "Session for %s could not start %s: %v", who, shell, err)
 		_, _ = io.WriteString(sess.Stderr(), fmt.Sprintf("sshush: start shell: %v\n", err))
 		_ = sess.Exit(1)
 		return
 	}
+	s.logf(slog.LevelInfo, "Session closed for %s: exit status %d", who, code)
 	_ = sess.Exit(code)
 }
 
@@ -67,8 +94,9 @@ func sessionCommand(shell, rawCommand string) *exec.Cmd {
 }
 
 // runOnPty runs cmd on a pty sized from the client's request, relaying resizes,
-// and returns its exit status once it has ended.
-func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, winCh <-chan gliderlabs.Window) (int, error) {
+// and returns its exit status once it has ended. started is called with the
+// terminal's name once cmd is running.
+func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, winCh <-chan gliderlabs.Window, started func(tty string)) (int, error) {
 	ptyFile, tty, err := pty.Open()
 	if err != nil {
 		return 0, err
@@ -96,6 +124,7 @@ func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, win
 		_ = ptyFile.Close()
 		return 0, err
 	}
+	started(tty.Name())
 
 	// reaped closes once the shell has been waited on, which is what tells the
 	// two goroutines below that the session is over.
@@ -143,8 +172,8 @@ func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, win
 
 // runOnPipes runs cmd with its stdin, stdout and stderr relayed over the session,
 // as a remote command without a pty is, and returns its exit status once it has
-// ended.
-func runOnPipes(sess gliderlabs.Session, cmd *exec.Cmd) (int, error) {
+// ended. started is called, with no terminal to name, once cmd is running.
+func runOnPipes(sess gliderlabs.Session, cmd *exec.Cmd, started func(tty string)) (int, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return 0, err
@@ -163,6 +192,7 @@ func runOnPipes(sess gliderlabs.Session, cmd *exec.Cmd) (int, error) {
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	started("")
 
 	reaped := make(chan struct{})
 	var watcher sync.WaitGroup
