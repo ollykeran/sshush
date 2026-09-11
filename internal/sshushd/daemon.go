@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/ollykeran/sshush/internal/server"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
+	"github.com/ollykeran/sshush/internal/version"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -152,13 +154,27 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		}
 	}
 	var passwords server.PasswordSource
+	var vaultFile string
 	if cfg.ServerPasswordAuth {
-		vaultFile, err := passwordAuthVault(cfg)
-		if err != nil {
+		var err error
+		if vaultFile, err = passwordAuthVault(cfg); err != nil {
 			return err
 		}
 		passwords = &server.VaultPassphraseAuth{VaultPath: vaultFile}
 	}
+	// And the log: a bad path or level found after detaching would leave a server
+	// running with nothing recording what it does.
+	logLevel, err := server.ParseLogLevel(cfg.ServerLogLevel)
+	if err != nil {
+		return fmt.Errorf("[server].%w", err)
+	}
+	logPath := platform.ServerLogPath(cfg.ServerLogFile)
+	logFile, err := server.OpenLogFile(logPath, server.DefaultLogMaxBytes)
+	if err != nil {
+		return fmt.Errorf("server log %s: %w", utils.DisplayPath(logPath), err)
+	}
+	defer logFile.Close()
+	logger := slog.New(server.NewLogHandler(logFile, logLevel))
 
 	if err := detachProcess(); err != nil {
 		return err
@@ -170,15 +186,44 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		defer os.Remove(pidFilePath)
 	}
 
+	logger.Info(version.Line("sshushd") + " starting")
+	if cfg.ServerAuthorizedKeys != "" {
+		logger.Info("Public keys authorized by " + cfg.ServerAuthorizedKeys)
+	} else {
+		logger.Info("Public keys authorized by the agent at " + cfg.SocketPath)
+	}
+	if passwords != nil {
+		logger.Info("Passwords checked against the passphrase of the vault at " + vaultFile)
+	}
+
 	srv := &server.Server{
 		ListenAddr:  listenAddr,
 		AuthKeys:    authSource,
 		HostKeyPath: hostKeyPath,
 		Shell:       cfg.ServerShell,
 		Passwords:   passwords,
+		Log:         logger,
 		Ready:       ready.Ready,
 	}
-	return srv.ListenAndServe()
+
+	// SIGTERM is how `sshush server stop` asks the server to go. Catching it, rather
+	// than dying mid-write, is what gives the log its last line and hangs up on live
+	// sessions the way a disconnect would.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	go func() {
+		if sig, ok := (<-signals).(syscall.Signal); ok {
+			logger.Info(fmt.Sprintf("Received signal %d; terminating.", int(sig)))
+		}
+		_ = srv.Close()
+	}()
+
+	if err := srv.ListenAndServe(); err != nil {
+		logger.Error(err.Error())
+		return err
+	}
+	return nil
 }
 
 // passwordAuthVault resolves the vault file [server].password_auth checks

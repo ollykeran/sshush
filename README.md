@@ -54,7 +54,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 | `sshush validate` | validate and inspect a key file (private or public) |
 | `sshush selftest` | test agent connectivity (env, socket, list, sign) |
 | `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
-| `sshush server` | optional TCP SSH server |
+| `sshush server` / `server status` / `server logs` | optional TCP SSH server, off until enabled in config, and its sshd-style log |
 | `sshush theme` / `completion` / `version` | theming, shell completion, build info |
 
 For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.

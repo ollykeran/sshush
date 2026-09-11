@@ -695,6 +695,113 @@ func TestE2E_ServerSignsInWithTheVaultPassphrase(t *testing.T) {
 	}
 }
 
+// TestE2E_ServerLogsLikeSshd runs the daemon for real and reads back its log file:
+// startup, a refused key, a sign-in and the session it ran, and the signal that
+// stopped it — then checks `sshush server logs` prints the end of it.
+func TestE2E_ServerLogsLikeSshd(t *testing.T) {
+	dir := e2eWorkDir(t)
+	socketPath := filepath.Join(dir, "agent.sock")
+	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "log-key")
+	strangerPath := writeE2ETestKey(t, dir, "id_stranger", "stranger")
+	serverPort := 22413
+	authorizedKeysPath := filepath.Join(dir, "authorized_keys")
+	logPath := filepath.Join(dir, "logs", "server.log")
+
+	pubBytes, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authorizedKeysPath, pubBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := buildBins(t)
+	configPath := writeE2EConfigWithServer(t, dir, socketPath, "", []string{keyPath}, serverPort, authorizedKeysPath, "")
+	appendToFile(t, configPath, fmt.Sprintf("log_file = %q\n", logPath))
+	runtimeDir := dir
+
+	if _, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server"); code != 0 {
+		t.Fatalf("server: exit %d\nstderr: %s", code, stderr)
+	}
+	t.Cleanup(func() { runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop") })
+
+	dial := func(keyFile string) (*ssh.Client, error) {
+		signer, err := readSignerFromFile(keyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort), &ssh.ClientConfig{
+			User:            "e2e",
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		})
+	}
+	if conn, err := dial(strangerPath); err == nil {
+		conn.Close()
+		t.Fatal("a key not in authorized_keys signed in")
+	}
+	conn, err := dial(keyPath)
+	if err != nil {
+		t.Fatalf("SSH dial: %v", err)
+	}
+	session, err := conn.NewSession()
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err := session.Run("true"); err != nil {
+		t.Fatalf("true: %v", err)
+	}
+	session.Close()
+	conn.Close()
+	waitForLogLine(t, logPath, `Disconnected from user e2e 127\.0\.0\.1 port \d+`)
+
+	if _, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "stop"); code != 0 {
+		t.Fatalf("server stop: exit %d\nstderr: %s", code, stderr)
+	}
+	log := waitForLogLine(t, logPath, `sshushd\[\d+\]: Received signal 15; terminating\.`)
+	for _, pattern := range []string{
+		`sshushd \S+.* starting`,
+		`Public keys authorized by ` + regexp.QuoteMeta(authorizedKeysPath),
+		`Server listening on \S+ port 22413\.`,
+		`Connection from 127\.0\.0\.1 port \d+ on 127\.0\.0\.1 port 22413`,
+		`Failed publickey for e2e from 127\.0\.0\.1 port \d+ ssh2: ED25519 SHA256:\S+; methods offered: publickey`,
+		`Accepted publickey for e2e from 127\.0\.0\.1 port \d+ ssh2: ED25519 SHA256:\S+`,
+		`Starting session: command for e2e from 127\.0\.0\.1 port \d+`,
+		`Session closed for e2e from 127\.0\.0\.1 port \d+: exit status 0`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(log) {
+			t.Errorf("server log does not match %s:\n%s", pattern, log)
+		}
+	}
+
+	stdout, stderr, code := runSSHush(t, binDir, configPath, runtimeDir, nil, "server", "logs", "-n", "1")
+	if code != 0 {
+		t.Fatalf("server logs: exit %d\nstderr: %s", code, stderr)
+	}
+	if strings.Count(stdout, "\n") != 1 || !strings.Contains(stdout, "Received signal 15; terminating.") {
+		t.Errorf("server logs -n 1 = %q, want just the last line", stdout)
+	}
+}
+
+// waitForLogLine waits for the log file at path to match pattern and returns its
+// content, failing with whatever it holds if that never happens.
+func waitForLogLine(t *testing.T, path, pattern string) string {
+	t.Helper()
+	re := regexp.MustCompile(pattern)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		data, _ := os.ReadFile(path)
+		if re.Match(data) {
+			return string(data)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server log never matched %s; got:\n%s", pattern, data)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // appendToFile appends text to the file at path. The [server] table is the last
 // one writeE2EConfigWithServer writes, so a key appended here lands in it.
 func appendToFile(t *testing.T, path, text string) {

@@ -64,27 +64,41 @@ func newPasswordGuard(source PasswordSource) *passwordGuard {
 // one, or the lockout would still confirm a right guess. The client going away
 // (ctx ending) while a check waits its turn refuses it.
 func (g *passwordGuard) check(ctx context.Context, addr net.Addr, password []byte) bool {
+	ok, _, _ := g.verify(ctx, addr, password)
+	return ok
+}
+
+// Reasons verify gives for refusing a password without it being checked.
+const (
+	refusedLockedOut  = "address locked out"
+	refusedClientLeft = "client left while waiting its turn"
+)
+
+// verify is check, saying more about a refusal: why the password never reached
+// the source (refusedLockedOut or refusedClientLeft), or, for one that was checked
+// and wrong, whether that failure is the one that locked the address out.
+func (g *passwordGuard) verify(ctx context.Context, addr net.Addr, password []byte) (ok bool, refusal string, lockedOutNow bool) {
 	host := addressHost(addr)
 	if g.lockedOut(host) {
 		g.pause(ctx)
-		return false
+		return false, refusedLockedOut, false
 	}
 
 	select {
 	case g.slots <- struct{}{}:
 	case <-ctx.Done():
-		return false
+		return false, refusedClientLeft, false
 	}
-	ok := g.source.Verify(password)
+	ok = g.source.Verify(password)
 	<-g.slots
 
 	if ok {
 		g.forget(host)
-		return true
+		return true, "", false
 	}
-	g.recordFailure(host)
+	lockedOutNow = g.recordFailure(host)
 	g.pause(ctx)
-	return false
+	return false, "", lockedOutNow
 }
 
 // lockedOut reports whether host has failed often enough, recently enough, to be
@@ -96,10 +110,11 @@ func (g *passwordGuard) lockedOut(host string) bool {
 	return ok && f.count >= g.lockoutFailures && g.now().Sub(f.last) < g.lockout
 }
 
-// recordFailure counts a failed password against host. Runs that have gone quiet
-// for a lockout's length are forgotten here too, which keeps the map from growing
-// with every address that ever got a password wrong.
-func (g *passwordGuard) recordFailure(host string) {
+// recordFailure counts a failed password against host, reporting whether this
+// failure is the one that locks host out. Runs that have gone quiet for a
+// lockout's length are forgotten here too, which keeps the map from growing with
+// every address that ever got a password wrong.
+func (g *passwordGuard) recordFailure(host string) (nowLockedOut bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := g.now()
@@ -112,6 +127,7 @@ func (g *passwordGuard) recordFailure(host string) {
 	f.count++
 	f.last = now
 	g.failures[host] = f
+	return f.count == g.lockoutFailures
 }
 
 // forget clears host's failures after it authenticates.

@@ -32,6 +32,14 @@ key_paths = {{ .KeyPathsTOML }}
 # Also accept the vault's passphrase as an SSH password. Needs [vault].vault_path,
 # and checking a password never unlocks the agent. Unset: false.
 # password_auth = false
+#
+# File the server logs every connection, sign-in attempt and session to, as sshd
+# logs to syslog. Read it with 'sshush server logs'. Unset: this path.
+# log_file = {{ printf "%q" .ServerLogFile }}
+#
+# How much to log. "info" records every connection, sign-in attempt and session;
+# "debug" adds the commands sessions run and requests refused quietly. Unset: "info".
+# log_level = "info"
 
 [theme]
 name = "default"
