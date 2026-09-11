@@ -33,8 +33,8 @@ key_paths = {{ .KeyPathsTOML }}
 # and checking a password never unlocks the agent. Unset: false.
 # password_auth = false
 #
-# File the server logs every connection, sign-in attempt and session to, as sshd
-# logs to syslog. Read it with 'sshush server logs'. Unset: this path.
+# File the server logs every connection, sign-in attempt and session to. Read it
+# with 'sshush server logs'. Unset: this path.
 # log_file = {{ printf "%q" .ServerLogFile }}
 #
 # How much to log. "info" records every connection, sign-in attempt and session;

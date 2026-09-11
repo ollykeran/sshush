@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,70 +37,117 @@ func (l *logBuffer) String() string {
 	return l.b.String()
 }
 
+// records decodes the records logged so far. Tests log as JSON and read the
+// records back, so they check what was recorded rather than how a handler lays
+// it out.
+func (l *logBuffer) records(t *testing.T) []map[string]any {
+	t.Helper()
+	var recs []map[string]any
+	for _, line := range strings.Split(l.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line %q is not a JSON record: %v", line, err)
+		}
+		recs = append(recs, rec)
+	}
+	return recs
+}
+
+func jsonLogger(log *logBuffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
 // startLoggedServer starts a shell server logging at debug into the returned buffer.
 func startLoggedServer(t *testing.T, configure ...func(*Server)) (string, ssh.Signer, *logBuffer) {
 	t.Helper()
 	log := &logBuffer{}
-	withLog := func(s *Server) { s.Log = slog.New(NewLogHandler(log, slog.LevelDebug)) }
+	withLog := func(s *Server) { s.Log = jsonLogger(log) }
 	addr, signer := startShellServer(t, append([]func(*Server){withLog}, configure...)...)
 	return addr, signer, log
 }
 
-// waitForLog waits for the log to match pattern — lines about a connection's end
-// are written as the server notices it, after the client has moved on — and
-// fails with the whole log if it never does.
-func waitForLog(t *testing.T, log *logBuffer, pattern string) []string {
-	t.Helper()
-	re := regexp.MustCompile(pattern)
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if m := re.FindStringSubmatch(log.String()); m != nil {
-			return m
+// recordMatches reports whether rec has message msg and every field in fields.
+// Values are compared as printed; a *regexp.Regexp matches the printed value instead.
+func recordMatches(rec map[string]any, msg string, fields map[string]any) bool {
+	if rec["msg"] != msg {
+		return false
+	}
+	for key, want := range fields {
+		got, ok := rec[key]
+		if !ok {
+			return false
 		}
+		if re, isRegexp := want.(*regexp.Regexp); isRegexp {
+			if !re.MatchString(fmt.Sprint(got)) {
+				return false
+			}
+		} else if fmt.Sprint(got) != fmt.Sprint(want) {
+			return false
+		}
+	}
+	return true
+}
+
+// recordIndex is the position of the first record matching msg and fields, or -1.
+func recordIndex(recs []map[string]any, msg string, fields map[string]any) int {
+	for i, rec := range recs {
+		if recordMatches(rec, msg, fields) {
+			return i
+		}
+	}
+	return -1
+}
+
+// waitForRecord waits for a record matching msg and fields — records about a
+// connection's end are logged as the server notices, after the client has moved
+// on — and fails with the whole log if none turns up.
+func waitForRecord(t *testing.T, log *logBuffer, msg string, fields map[string]any) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for recordIndex(log.records(t), msg, fields) < 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("log never matched %s; got:\n%s", pattern, log.String())
+			t.Fatalf("no %q record with %v in the log:\n%s", msg, fields, log.String())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-// clientPort is the port conn's client end is bound to, which the server logs it by.
-func clientPort(conn *ssh.Client) string {
-	return strconv.Itoa(conn.LocalAddr().(*net.TCPAddr).Port)
-}
-
 func TestServer_LogsItsStartup(t *testing.T) {
 	addr, _, log := startLoggedServer(t)
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	waitForLog(t, log, `sshushd\[\d+\]: Server listening on 127\.0\.0\.1 port `+port+`\.`)
-	waitForLog(t, log, `Host key: ephemeral, for this run only`)
-	waitForLog(t, log, `(?m)Authentication methods offered: publickey$`)
-	waitForLog(t, log, `Sessions run \S+`)
+	waitForRecord(t, log, "server listening", map[string]any{
+		"addr":         addr,
+		"host_key":     "ephemeral",
+		"auth_methods": "publickey",
+		"shell":        regexp.MustCompile(`\S`),
+	})
 }
 
-func TestServer_LogsASignInAndItsSessionLikeSshd(t *testing.T) {
+func TestServer_LogsASignInAndItsSession(t *testing.T) {
 	addr, signer, log := startLoggedServer(t)
-	_, serverPort, _ := net.SplitHostPort(addr)
 	conn := dialShellServer(t, addr, signer)
-	port := clientPort(conn)
-	from := `test from 127\.0\.0\.1 port ` + port
+	remote := conn.LocalAddr().String()
 
 	if _, _, err := runCommand(t, conn, nil, "exit 3"); err == nil {
 		t.Fatal("exit 3 ended cleanly, want exit status 3")
 	}
 	conn.Close()
 
-	waitForLog(t, log, `Connection from 127\.0\.0\.1 port `+port+` on 127\.0\.0\.1 port `+serverPort)
-	waitForLog(t, log, `Authentication methods offered to `+from+`: publickey`)
-	waitForLog(t, log, `Accepted publickey for `+from+` ssh2: ED25519 `+regexp.QuoteMeta(ssh.FingerprintSHA256(signer.PublicKey())))
-	waitForLog(t, log, `Starting session: command for `+from)
-	waitForLog(t, log, `debug: Session command for `+from+`: exit 3`)
-	waitForLog(t, log, `Session closed for `+from+`: exit status 3`)
-	waitForLog(t, log, `Disconnected from user test 127\.0\.0\.1 port `+port+` \(connected \S+\)`)
+	waitForRecord(t, log, "connection opened", map[string]any{"remote": remote, "local": addr})
+	waitForRecord(t, log, "auth methods offered", map[string]any{"user": "test", "remote": remote, "methods": "publickey"})
+	waitForRecord(t, log, "auth accepted", map[string]any{
+		"method":      "publickey",
+		"user":        "test",
+		"remote":      remote,
+		"key_type":    "ssh-ed25519",
+		"fingerprint": ssh.FingerprintSHA256(signer.PublicKey()),
+	})
+	waitForRecord(t, log, "session started", map[string]any{"kind": "command", "user": "test", "remote": remote})
+	waitForRecord(t, log, "session details", map[string]any{"level": "DEBUG", "remote": remote, "command": "exit 3"})
+	waitForRecord(t, log, "session closed", map[string]any{"user": "test", "remote": remote, "exit_status": 3})
+	waitForRecord(t, log, "connection closed", map[string]any{"user": "test", "remote": remote, "authenticated": true})
 }
 
 func TestServer_LogsARefusedKey(t *testing.T) {
@@ -124,9 +172,13 @@ func TestServer_LogsARefusedKey(t *testing.T) {
 		t.Fatal("an unauthorized key signed in")
 	}
 
-	waitForLog(t, log, `Failed publickey for test from 127\.0\.0\.1 port \d+ ssh2: ED25519 `+
-		regexp.QuoteMeta(ssh.FingerprintSHA256(stranger.PublicKey()))+`; methods offered: publickey`)
-	waitForLog(t, log, `Connection closed by authenticating user test 127\.0\.0\.1 port \d+ \[preauth\]`)
+	waitForRecord(t, log, "auth failed", map[string]any{
+		"method":          "publickey",
+		"user":            "test",
+		"fingerprint":     ssh.FingerprintSHA256(stranger.PublicKey()),
+		"methods_offered": "publickey",
+	})
+	waitForRecord(t, log, "connection closed", map[string]any{"user": "test", "authenticated": false})
 }
 
 func TestServer_LogsPasswordAttempts(t *testing.T) {
@@ -138,33 +190,39 @@ func TestServer_LogsPasswordAttempts(t *testing.T) {
 		conn.Close()
 		t.Fatal("a wrong password signed in")
 	}
-	waitForLog(t, log, `(?m)Failed password for test from 127\.0\.0\.1 port \d+ ssh2; methods offered: publickey,password$`)
+	waitForRecord(t, log, "auth failed", map[string]any{
+		"method":          "password",
+		"user":            "test",
+		"methods_offered": "publickey,password",
+	})
 
 	conn, err := dialWithPassword(addr, "right")
 	if err != nil {
 		t.Fatalf("dial with the right password: %v", err)
 	}
 	conn.Close()
-	waitForLog(t, log, `(?m)Accepted password for test from 127\.0\.0\.1 port \d+ ssh2$`)
+	waitForRecord(t, log, "auth accepted", map[string]any{"method": "password", "user": "test"})
 }
 
 // TestServer_LogsAPasswordLockoutAfterTheFailureThatCausedIt checks the lockout
-// warning follows the failed-password line that tripped it, so "after 5 failed
-// passwords" is read after the fifth.
+// warning follows the failed attempt that tripped it.
 func TestServer_LogsAPasswordLockoutAfterTheFailureThatCausedIt(t *testing.T) {
 	log := &logBuffer{}
-	s := &Server{Log: slog.New(NewLogHandler(log, slog.LevelInfo)), Passwords: &fakePasswords{}}
-	state := &connState{remote: "203.0.113.5 port 40120"}
+	s := &Server{Log: jsonLogger(log), Passwords: &fakePasswords{}}
+	state := &connState{remote: "203.0.113.5:40120"}
 	state.notePasswordCheck("", "203.0.113.5")
 
 	s.logAuth(state, "root", "password", errors.New("permission denied"))
 
-	failed := strings.Index(log.String(), "Failed password for root from 203.0.113.5 port 40120 ssh2; methods offered: publickey,password")
-	warning := strings.Index(log.String(), fmt.Sprintf(
-		"warning: Locking 203.0.113.5 out of password authentication for %v after %d failed passwords",
-		passwordLockout, passwordLockoutFailures))
-	if failed < 0 || warning < 0 || warning < failed {
-		t.Errorf("want the failed password, then the lockout warning; got:\n%s", log.String())
+	recs := log.records(t)
+	failed := recordIndex(recs, "auth failed", map[string]any{"method": "password", "user": "root", "remote": "203.0.113.5:40120"})
+	lockout := recordIndex(recs, "password lockout", map[string]any{
+		"level":    "WARN",
+		"host":     "203.0.113.5",
+		"failures": passwordLockoutFailures,
+	})
+	if failed < 0 || lockout < 0 || lockout < failed {
+		t.Errorf("want the failed attempt, then the lockout warning; got:\n%s", log.String())
 	}
 }
 
@@ -172,17 +230,21 @@ func TestServer_LogsWhatItRefuses(t *testing.T) {
 	addr, signer, log := startLoggedServer(t)
 	conn := dialShellServer(t, addr, signer)
 	defer conn.Close()
-	from := `test from 127\.0\.0\.1 port ` + clientPort(conn)
+	who := func(fields map[string]any) map[string]any {
+		fields["user"] = "test"
+		fields["remote"] = conn.LocalAddr().String()
+		return fields
+	}
 
 	if forwarded, err := conn.Dial("tcp", "127.0.0.1:9"); err == nil {
 		forwarded.Close()
 	}
-	waitForLog(t, log, `Refused port forwarding to 127\.0\.0\.1 port 9 for `+from)
+	waitForRecord(t, log, "port forwarding refused", who(map[string]any{"destination": "127.0.0.1:9"}))
 
 	if listener, err := conn.Listen("tcp", "127.0.0.1:0"); err == nil {
 		listener.Close()
 	}
-	waitForLog(t, log, `Refused remote port forwarding on 127\.0\.0\.1 port 0 for `+from)
+	waitForRecord(t, log, "remote port forwarding refused", who(map[string]any{"bind": "127.0.0.1:0"}))
 
 	sess, err := conn.NewSession()
 	if err != nil {
@@ -190,13 +252,13 @@ func TestServer_LogsWhatItRefuses(t *testing.T) {
 	}
 	defer sess.Close()
 	_ = sess.RequestSubsystem("sftp")
-	waitForLog(t, log, `Refused subsystem request for sftp by user `+from+`: not supported`)
+	waitForRecord(t, log, "subsystem refused", who(map[string]any{"subsystem": "sftp"}))
 
 	if ch, requests, err := conn.OpenChannel("sshush-test@example.com", nil); err == nil {
 		go ssh.DiscardRequests(requests)
 		ch.Close()
 	}
-	waitForLog(t, log, `Refused sshush-test@example\.com channel for `+from)
+	waitForRecord(t, log, "channel refused", who(map[string]any{"type": "sshush-test@example.com"}))
 }
 
 func TestServer_LogsTheTerminalAPtySessionRunsOn(t *testing.T) {
@@ -216,7 +278,11 @@ func TestServer_LogsTheTerminalAPtySessionRunsOn(t *testing.T) {
 	if err := sess.Run("true"); err != nil {
 		t.Fatalf("true on a pty: %v", err)
 	}
-	waitForLog(t, log, `Starting session: command on (ttys\d+|pts/\d+) for test from 127\.0\.0\.1 port `+clientPort(conn))
+	waitForRecord(t, log, "session started", map[string]any{
+		"kind":   "command",
+		"remote": conn.LocalAddr().String(),
+		"tty":    regexp.MustCompile(`^/dev/(ttys\d+|pts/\d+)$`),
+	})
 }
 
 func TestServer_CloseHangsUpOnLiveSessions(t *testing.T) {
@@ -246,7 +312,7 @@ func TestServer_CloseHangsUpOnLiveSessions(t *testing.T) {
 		pid, _ := strconv.Atoi(pids[i+1])
 		waitForExit(t, pid, what)
 	}
-	waitForLog(t, log, `Session closed for test from 127\.0\.0\.1 port \d+: exit status \d+`)
+	waitForRecord(t, log, "session closed", map[string]any{"user": "test", "remote": conn.LocalAddr().String()})
 	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
 		c.Close()
 		t.Error("the server still accepts connections after Close")
@@ -278,22 +344,5 @@ func TestServer_ListenAndServeReturnsNilAfterClose(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("ListenAndServe kept serving after Close")
-	}
-}
-
-func TestKeyTypeLabel(t *testing.T) {
-	cases := map[string]string{
-		"ssh-ed25519":                        "ED25519",
-		"ssh-rsa":                            "RSA",
-		"ecdsa-sha2-nistp256":                "ECDSA",
-		"sk-ssh-ed25519@openssh.com":         "ED25519-SK",
-		"sk-ecdsa-sha2-nistp256@openssh.com": "ECDSA-SK",
-		"ssh-ed25519-cert-v01@openssh.com":   "ED25519-CERT",
-		"something-new":                      "something-new",
-	}
-	for keyType, want := range cases {
-		if got := keyTypeLabel(keyType); got != want {
-			t.Errorf("keyTypeLabel(%q) = %q, want %q", keyType, got, want)
-		}
 	}
 }

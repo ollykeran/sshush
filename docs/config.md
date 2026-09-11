@@ -227,8 +227,8 @@ The config sshush generates (on first run, or with `sshush generate config`) lis
 # and checking a password never unlocks the agent. Unset: false.
 # password_auth = false
 #
-# File the server logs every connection, sign-in attempt and session to, as sshd
-# logs to syslog. Read it with 'sshush server logs'. Unset: this path.
+# File the server logs every connection, sign-in attempt and session to. Read it
+# with 'sshush server logs'. Unset: this path.
 # log_file = "~/.config/sshush/server.log"
 #
 # How much to log. "info" records every connection, sign-in attempt and session;
@@ -335,58 +335,56 @@ Everything else is refused promptly rather than by hanging:
 
 ### Logging
 
-The server keeps a log the way sshd does, one line per event, in a file.
+The server logs what it does to a file, one record per line in Go slog's `key=value` text format, so `grep` and any logfmt tool can pick out fields.
 
 - **Location:** `$XDG_STATE_HOME/sshush/server.log` when `XDG_STATE_HOME` is set, otherwise `~/.config/sshush/server.log` beside the host key. Set `log_file` to put it somewhere else.
-- **Reading it:** `sshush server logs` prints the end of it (`-n` for how many lines, `0` for all), and `sshush server logs -f` follows it as lines are written. `sshush server status` shows where it is.
+- **Reading it:** `sshush server logs` prints the end of it (`-n` for how many lines, `0` for all), and `sshush server logs -f` follows it as records are written. `sshush server status` shows where it is.
 
 A sample:
 
 ```text
-2026-09-11T18:59:51.484+01:00 sshushd[53909]: sshushd 0.0.10 (go1.27.0 darwin/arm64) starting
-2026-09-11T18:59:51.484+01:00 sshushd[53909]: Public keys authorized by /Users/you/.ssh/authorized_keys
-2026-09-11T18:59:51.484+01:00 sshushd[53909]: Passwords checked against the passphrase of the vault at /Users/you/.config/sshush/vault.json
-2026-09-11T18:59:51.485+01:00 sshushd[53909]: Server listening on :: port 2222.
-2026-09-11T18:59:51.485+01:00 sshushd[53909]: Host key: SHA256:FsMw7ywD/B/03MTbBlMkAaU2LNXfkrZALfV6WycRwNI (/Users/you/.config/sshush/server_host_ed25519)
-2026-09-11T18:59:51.485+01:00 sshushd[53909]: Authentication methods offered: publickey,password
-2026-09-11T18:59:51.485+01:00 sshushd[53909]: Sessions run /bin/zsh
-2026-09-11T19:02:10.492+01:00 sshushd[53909]: Connection from 203.0.113.5 port 54821 on 192.0.2.10 port 2222
-2026-09-11T19:02:10.498+01:00 sshushd[53909]: Authentication methods offered to you from 203.0.113.5 port 54821: publickey,password
-2026-09-11T19:02:10.500+01:00 sshushd[53909]: Accepted publickey for you from 203.0.113.5 port 54821 ssh2: ED25519 SHA256:DGihZ4bDgcQgHYXC0j2wyIWgG1MAjKN6lZDj9NNH0T8
-2026-09-11T19:02:10.502+01:00 sshushd[53909]: Starting session: shell on ttys001 for you from 203.0.113.5 port 54821
-2026-09-11T19:02:31.866+01:00 sshushd[53909]: Refused port forwarding to 127.0.0.1 port 5432 for you from 203.0.113.5 port 54821
-2026-09-11T19:14:37.510+01:00 sshushd[53909]: Session closed for you from 203.0.113.5 port 54821: exit status 0
-2026-09-11T19:14:37.510+01:00 sshushd[53909]: Disconnected from user you 203.0.113.5 port 54821 (connected 12m27.018s)
-2026-09-11T19:20:03.533+01:00 sshushd[53909]: Connection from 198.51.100.7 port 40112 on 192.0.2.10 port 2222
-2026-09-11T19:20:03.536+01:00 sshushd[53909]: Authentication methods offered to root from 198.51.100.7 port 40112: publickey,password
-2026-09-11T19:20:04.661+01:00 sshushd[53909]: Failed password for root from 198.51.100.7 port 40112 ssh2; methods offered: publickey,password
-2026-09-11T19:20:04.662+01:00 sshushd[53909]: Connection closed by authenticating user root 198.51.100.7 port 40112 [preauth]
-2026-09-11T19:20:09.120+01:00 sshushd[53909]: Failed password for root from 198.51.100.7 port 40120 ssh2; methods offered: publickey,password
-2026-09-11T19:20:09.121+01:00 sshushd[53909]: warning: Locking 198.51.100.7 out of password authentication for 1m0s after 5 failed passwords
-2026-09-11T20:31:44.970+01:00 sshushd[53909]: Received signal 15; terminating.
+time=2026-09-11T19:55:28.283+01:00 level=INFO msg="server starting" version="sshushd 0.0.10 (go1.27.0 darwin/arm64)" pid=60922 authorized_keys=/Users/you/.ssh/authorized_keys password_vault=/Users/you/.config/sshush/vault.json
+time=2026-09-11T19:55:28.284+01:00 level=INFO msg="server listening" addr=[::]:2222 host_key_path=/Users/you/.config/sshush/server_host_ed25519 host_key=SHA256:jfofgAYUo/bM4gedKe7Uyu89rj3mUOMLsbDYwittjec auth_methods=publickey,password shell=/bin/zsh
+time=2026-09-11T19:57:41.292+01:00 level=INFO msg="connection opened" remote=203.0.113.5:55749 local=192.0.2.10:2222
+time=2026-09-11T19:57:41.297+01:00 level=INFO msg="auth methods offered" user=you remote=203.0.113.5:55749 methods=publickey,password
+time=2026-09-11T19:57:41.299+01:00 level=INFO msg="auth accepted" method=publickey user=you remote=203.0.113.5:55749 key_type=ssh-ed25519 fingerprint=SHA256:7oa7tTS2KNabYCyo9Q1wrSTd+HIcCpibZ+kBLQHIvc4
+time=2026-09-11T19:57:41.301+01:00 level=INFO msg="session started" kind=shell user=you remote=203.0.113.5:55749 tty=/dev/ttys001
+time=2026-09-11T19:58:02.344+01:00 level=INFO msg="port forwarding refused" user=you remote=203.0.113.5:55749 destination=127.0.0.1:5432
+time=2026-09-11T20:10:09.309+01:00 level=INFO msg="session closed" user=you remote=203.0.113.5:55749 exit_status=0
+time=2026-09-11T20:10:09.310+01:00 level=INFO msg="connection closed" remote=203.0.113.5:55749 user=you authenticated=true duration=12m28.018s
+time=2026-09-11T20:14:30.145+01:00 level=INFO msg="connection opened" remote=198.51.100.7:40112 local=192.0.2.10:2222
+time=2026-09-11T20:14:30.153+01:00 level=INFO msg="auth methods offered" user=root remote=198.51.100.7:40112 methods=publickey,password
+time=2026-09-11T20:14:31.272+01:00 level=INFO msg="auth failed" method=password user=root remote=198.51.100.7:40112 methods_offered=publickey,password
+time=2026-09-11T20:14:31.274+01:00 level=INFO msg="connection closed" remote=198.51.100.7:40112 user=root authenticated=false duration=1.128s
+time=2026-09-11T20:14:35.680+01:00 level=INFO msg="auth failed" method=password user=root remote=198.51.100.7:40120 methods_offered=publickey,password
+time=2026-09-11T20:14:35.681+01:00 level=WARN msg="password lockout" host=198.51.100.7 failures=5 duration=1m0s
+time=2026-09-11T21:02:44.740+01:00 level=INFO msg="server stopping" signal=terminated
 ```
 
-At the default `log_level = "info"`, the log records:
+The records at the default `log_level = "info"`, by `msg`:
 
-- **Startup and shutdown.** How keys and passwords are checked, the address the server listens on, the host key's fingerprint, the methods clients are offered and the shell sessions run. When `sshush server stop` ends the server: `Received signal 15; terminating.`
-- **Every connection.** Where it came from and which address it reached, then how it ended:
-  - `Disconnected from user …` after signing in, with how long it lasted
-  - `Connection closed by … [preauth]` before signing in. A bare connect-and-close shows up this way too, including the port check `sshush server status` does.
-- **Every sign-in attempt.** Which methods the client was offered, then each attempt as `Accepted` or `Failed`, by method, user name and address.
-  - Public-key attempts name the key by type and SHA256 fingerprint; compare with `ssh-keygen -lf key.pub`.
-  - A password turned away without being checked says why, e.g. `(address locked out)`.
-  - A lockout is logged as a warning.
-- **Sessions.** A shell or command starting, the terminal it runs on if it has one, and its exit status when it ends.
-- **Refusals.** Port forwarding (with the destination asked for), remote forwarding, `sftp` and other subsystems, and unknown channel types.
+| `msg` | Logged when | Fields |
+|-------|-------------|--------|
+| `server starting`, `server listening` | the server starts | `version`, `pid`, how keys are checked (`authorized_keys` or `agent_socket`), `password_vault` when passwords are on; `addr`, `host_key`, `auth_methods`, `shell` |
+| `server stopping` | `sshush server stop` ends it | `signal` |
+| `connection opened`, `connection closed` | any connection | `remote`, `local`; then `user`, `authenticated`, `duration`, and a `reason` when a handshake failed or ran out of attempts |
+| `auth methods offered` | a client asks what it may use | `user`, `remote`, `methods` |
+| `auth accepted`, `auth failed` | each sign-in attempt | `method`, `user`, `remote`; `key_type` and `fingerprint` for public keys; `reason` when a password was refused without being checked (`address locked out`); `methods_offered` after a failure |
+| `password lockout` (WARN) | an address is locked out of password authentication | `host`, `failures`, `duration` |
+| `session started`, `session closed` | each session | `kind` (`shell` or `command`), `user`, `remote`, `tty` on a terminal; `exit_status` |
+| `port forwarding refused`, `remote port forwarding refused`, `socket forwarding refused`, `subsystem refused`, `channel refused` | anything refused | `user`, `remote`, and what was asked for: `destination`, `bind`, `subsystem` or `type` |
 
-`log_level = "debug"` adds the shell each session runs, the command a session runs, and global requests refused quietly, such as keepalives. The command is left out at `info` because commands can carry secrets.
+A few things worth knowing when reading it:
+- **A bare connect-and-close** logs as `connection closed` with `authenticated=false` and no `user`. That includes the port check `sshush server status` makes.
+- **Fingerprints** are in the form `ssh-keygen -lf key.pub` prints, so you can compare the two.
+- **`user`** is whatever name the client sent. It changes nothing: every session runs as the user running `sshushd`.
 
-The user name in these lines is whatever the client sent. It changes nothing: every session runs as the user running `sshushd`.
+`log_level = "debug"` adds `session details` (the shell a session runs and its `command`) and `global request refused` for requests clients send routinely, such as keepalives. Commands are left out at `info` because they can carry secrets.
 
 A few things protect the log itself:
-- **No forged lines.** Anything a client sends that ends up in a line (a user name, a subsystem name, a forwarding destination) has control characters escaped.
-- **Permissions.** The file is created mode `600`.
-- **Size.** Past 10 MiB it is rotated to `server.log.1`, replacing the previous copy, so the log never takes much more than 20 MiB.
+- **No forged records.** Values are quoted and escaped where they need to be, so anything a client sends — a user name, a subsystem, a forwarding destination — stays inside its own field, on its own line.
+- **Permissions.** The file is created mode `600`, in a mode-`700` directory.
+- **Size.** Past 10 MiB the log is rotated: renamed with a timestamp (`server-2026-09-11T19-55-28.283.log`) and compressed. The three most recent rotated copies are kept, so the log takes about 10 MiB plus those.
 
 ## Vault
 

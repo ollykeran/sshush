@@ -1,8 +1,8 @@
 package server
 
 import (
-	"fmt"
-	"log/slog"
+	"net"
+	"strconv"
 
 	gliderlabs "github.com/gliderlabs/ssh"
 	"golang.org/x/crypto/ssh"
@@ -47,21 +47,20 @@ type remoteForwardData struct {
 // (OpenSSH prints "channel N: open failed: <reason>"). direct-tcpip is what -L, -D
 // and -W open; direct-streamlocal is their Unix socket form.
 func (s *Server) refuseChannel(_ *gliderlabs.Server, _ *ssh.ServerConn, newChan ssh.NewChannel, ctx gliderlabs.Context) {
-	who := ctx.User() + " from " + remoteOf(ctx)
+	who := []any{"user", ctx.User(), "remote", remoteOf(ctx)}
 	switch newChan.ChannelType() {
 	case "direct-tcpip":
-		target := "an unreadable destination"
 		var data directTCPIPData
 		if ssh.Unmarshal(newChan.ExtraData(), &data) == nil {
-			target = fmt.Sprintf("%s port %d", data.DestAddr, data.DestPort)
+			who = append(who, "destination", net.JoinHostPort(data.DestAddr, strconv.FormatUint(uint64(data.DestPort), 10)))
 		}
-		s.logf(slog.LevelInfo, "Refused port forwarding to %s for %s", target, who)
+		s.logger().Info("port forwarding refused", who...)
 		_ = newChan.Reject(ssh.Prohibited, portForwardingRefusal)
 	case "direct-streamlocal@openssh.com":
-		s.logf(slog.LevelInfo, "Refused Unix socket forwarding for %s", who)
+		s.logger().Info("socket forwarding refused", who...)
 		_ = newChan.Reject(ssh.Prohibited, portForwardingRefusal)
 	default:
-		s.logf(slog.LevelInfo, "Refused %s channel for %s", newChan.ChannelType(), who)
+		s.logger().Info("channel refused", append(who, "type", newChan.ChannelType())...)
 		_ = newChan.Reject(ssh.UnknownChannelType, "sshush server does not support "+newChan.ChannelType()+" channels")
 	}
 }
@@ -69,23 +68,22 @@ func (s *Server) refuseChannel(_ *gliderlabs.Server, _ *ssh.ServerConn, newChan 
 // refuseRemoteForward turns down -R. The protocol's reply has no room for a
 // reason, so the log is the only place the refusal is explained.
 func (s *Server) refuseRemoteForward(ctx gliderlabs.Context, _ *gliderlabs.Server, req *ssh.Request) (bool, []byte) {
-	who := ctx.User() + " from " + remoteOf(ctx)
+	who := []any{"user", ctx.User(), "remote", remoteOf(ctx)}
 	if req.Type != "tcpip-forward" {
-		s.logf(slog.LevelInfo, "Refused remote Unix socket forwarding for %s", who)
+		s.logger().Info("remote socket forwarding refused", who...)
 		return false, nil
 	}
-	target := "an unreadable address"
 	var data remoteForwardData
 	if ssh.Unmarshal(req.Payload, &data) == nil {
-		target = fmt.Sprintf("%s port %d", data.BindAddr, data.BindPort)
+		who = append(who, "bind", net.JoinHostPort(data.BindAddr, strconv.FormatUint(uint64(data.BindPort), 10)))
 	}
-	s.logf(slog.LevelInfo, "Refused remote port forwarding on %s for %s", target, who)
+	s.logger().Info("remote port forwarding refused", who...)
 	return false, nil
 }
 
 // refuseGlobalRequest turns down any other global request. Clients send some as a
 // matter of course — keepalives, for one — so these are logged only at debug.
 func (s *Server) refuseGlobalRequest(ctx gliderlabs.Context, _ *gliderlabs.Server, req *ssh.Request) (bool, []byte) {
-	s.logf(slog.LevelDebug, "Refused global request %s from %s", req.Type, remoteOf(ctx))
+	s.logger().Debug("global request refused", "type", req.Type, "remote", remoteOf(ctx))
 	return false, nil
 }

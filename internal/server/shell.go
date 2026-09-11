@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -41,24 +40,25 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 	cmd := sessionCommand(shell, rawCommand)
 	cmd.Env = sessionEnv(os.Environ(), sess.RemoteAddr(), sess.LocalAddr(), shell)
 
-	// Logged as sshd does: that a session started, what kind, and on which
-	// terminal. The command itself is only logged at debug, since commands can
-	// carry things nobody meant to leave in a log.
-	who := sess.User() + " from " + remoteOf(sess.Context())
+	// Logged: that a session started, what kind, and on which terminal. What it
+	// runs is only logged at debug, since commands can carry things nobody meant
+	// to leave in a log.
+	who := []any{"user", sess.User(), "remote", remoteOf(sess.Context())}
 	kind := "shell"
 	if rawCommand != "" {
 		kind = "command"
 	}
 	started := func(tty string) {
-		on := ""
+		attrs := append([]any{"kind", kind}, who...)
 		if tty != "" {
-			on = " on " + strings.TrimPrefix(tty, "/dev/")
+			attrs = append(attrs, "tty", tty)
 		}
-		s.logf(slog.LevelInfo, "Starting session: %s%s for %s", kind, on, who)
-		s.logf(slog.LevelDebug, "Session for %s runs %s", who, shell)
+		s.logger().Info("session started", attrs...)
+		details := append([]any{"shell", shell}, who...)
 		if rawCommand != "" {
-			s.logf(slog.LevelDebug, "Session command for %s: %s", who, rawCommand)
+			details = append(details, "command", rawCommand)
 		}
+		s.logger().Debug("session details", details...)
 	}
 
 	var code int
@@ -69,12 +69,12 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 		code, err = runOnPipes(sess, cmd, started)
 	}
 	if err != nil {
-		s.logf(slog.LevelError, "Session for %s could not start %s: %v", who, shell, err)
+		s.logger().Error("session failed to start", append(who, "shell", shell, "err", err)...)
 		_, _ = io.WriteString(sess.Stderr(), fmt.Sprintf("sshush: start shell: %v\n", err))
 		_ = sess.Exit(1)
 		return
 	}
-	s.logf(slog.LevelInfo, "Session closed for %s: exit status %d", who, code)
+	s.logger().Info("session closed", append(who, "exit_status", code)...)
 	_ = sess.Exit(code)
 }
 
