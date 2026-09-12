@@ -211,10 +211,12 @@ func TestServer_PtySessionStartsAtTheRequestedSize(t *testing.T) {
 	sess, stdin, out := startPtyShell(t, conn, 30, 120)
 	defer sess.Close()
 
-	if _, err := io.WriteString(stdin, "stty size\n"); err != nil {
+	// Typed before the first prompt, so the answer can follow a "$ " on the same
+	// line; match a marker the echoed command cannot, not the start of a line.
+	if _, err := io.WriteString(stdin, "echo size=$(stty size)\n"); err != nil {
 		t.Fatalf("write to shell: %v", err)
 	}
-	out.waitForMatch(t, regexp.MustCompile(`(?m)^30 120\r?$`), 10*time.Second)
+	out.waitForMatch(t, regexp.MustCompile(`(?m)size=30 120\r?$`), 10*time.Second)
 }
 
 // Resizing an established session is covered end to end

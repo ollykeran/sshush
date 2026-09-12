@@ -488,11 +488,16 @@ func TestE2E_ServerPtyShellResizes(t *testing.T) {
 	}
 	defer sshConn.Close()
 
+	// The command is typed before the shell prints its first prompt, so the pty
+	// echoes it straight away and the answer can land after a "$ " on the same
+	// line. Prefix the answer with a marker the echoed command cannot match
+	// rather than anchoring it to the start of a line.
+	const sttySize = "echo size=$(stty size)\n"
 	session, stdin, stdout := openPtyShell(t, sshConn, 30, 120)
-	if _, err := io.WriteString(stdin, "stty size\n"); err != nil {
+	if _, err := io.WriteString(stdin, sttySize); err != nil {
 		t.Fatalf("write to shell: %v", err)
 	}
-	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)^30 120\r?$`))
+	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)size=30 120\r?$`))
 
 	if err := session.WindowChange(40, 100); err != nil {
 		t.Fatalf("window change: %v", err)
@@ -500,13 +505,13 @@ func TestE2E_ServerPtyShellResizes(t *testing.T) {
 	// The resize is a separate channel request, so ask again until it lands.
 	go func() {
 		for {
-			if _, err := io.WriteString(stdin, "stty size\n"); err != nil {
+			if _, err := io.WriteString(stdin, sttySize); err != nil {
 				return
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
 	}()
-	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)^40 100\r?$`))
+	waitForShellOutput(t, stdout, regexp.MustCompile(`(?m)size=40 100\r?$`))
 }
 
 // TestE2E_ServerRunsARemoteCommand checks `ssh host <command>`: the command's
