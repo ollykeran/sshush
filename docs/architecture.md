@@ -7,9 +7,11 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **cmd/sshush** – CLI entry point
 - **cmd/sshushd** – Daemon entry point (runs the agent)
 - **internal/agent** – SSH agent protocol: serving it over a Unix socket, and `Session`, the single client entry point for reaching a running agent
-- **internal/cli** – Cobra commands (start, stop, list, add, remove, reload, create, edit, export, find, tui, completion)
+- **internal/cli** – Cobra commands (start, stop, reload, list, add, remove, lock, unlock, selftest, create, edit, export, find, validate, generate, vault, server, theme, tui, completion, version)
 - **internal/config** – Config load, default creation, shell rc setup
+- **internal/editcomment** – Editing a key comment in `$EDITOR` through a temp file
 - **internal/platform** – Portable defaults for config dir, socket/pid paths, shell rc selection
+- **internal/kdf** – Argon2id key derivation, salts and constant-time compare for the vault
 - **internal/keys** – Key generation, load, save, comment edit, format
 - **internal/openssh** – OpenSSH key parsing
 - **internal/readypipe** – Parent/child readiness handshake used when forking `sshushd`
@@ -17,7 +19,8 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/server** – The TCP SSH server: public-key auth against a file or the agent, optional password auth against the vault's passphrase, and the shell or remote command each session runs, on a pty or over pipes, all logged to a file
 - **internal/sshushd** – Daemon start/stop/reload control
 - **internal/style** – Styled terminal output
-- **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens)
+- **internal/theme** – Colour theme presets, custom hex validation and merging with the default
+- **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens, and Vault when `[agent].type = "vault"`)
 - **internal/utils** – Path expansion, helpers
 - **internal/vault** – The encrypted vault: on-disk store, `VaultAgent`, and the `sshush-op` vocabulary
 - **internal/vaultops** – The vault operations the CLI and TUI both offer, implemented once
@@ -33,7 +36,7 @@ Every client-side conversation with a running agent goes through `agent.Session`
 
 **`internal/agent` owns the transport; `internal/vault` owns the extension vocabulary.** `Session.Extension` takes an extension name as given. The named wrappers — `vault.AddPrivateKeyFile`, `SetAutoload`, `SetComment`, `SessionLoad`, `SessionUnload`, `UnlockWithRecoveryPhrase` — live in `internal/vault/session_ops.go`, next to the payload builders they use.
 
-**`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why `extensionVaultLocked` is duplicated at `internal/agent/backend_kind.go` with a comment saying it must match `vault.ExtensionVaultLocked`, and why `Session.Backend` is the only extension `internal/agent` names for itself.
+**`internal/agent` must not import `internal/vault`.** The dependency runs the other way. That is why the `sshush-op` operation codes (`OpVaultLocked` and the rest) are declared in `internal/agent/op.go` and imported by `internal/vault` to serve each op, and why `Session.Backend` can ask whether a vault is locked without knowing anything about vaults.
 
 **`internal/vaultops` owns the vault operations; the CLI and TUI only render them.** Init, list, add, remove, session-load, autoload, lock and unlock each existed twice — as a cobra `RunE` and as a `tea.Cmd` — and each copy re-derived the same preamble and invented its own wording for the same failure. They now live once in `internal/vaultops`, which takes an `Env` (vault path, socket, and whether the front end can prompt) and returns a typed result. Two properties are worth keeping:
 

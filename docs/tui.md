@@ -78,7 +78,7 @@ Zone IDs: `{pagePrefix}{kind}-{id}` (e.g. ButtonRow `ZonePrefix+label`, agent ro
 
 ## Testing
 
-- **Package `tui`**: Update-injection tests next to screens (`agent_nav_test.go`, `create_test.go`, `edit_test.go`, `export_focus_test.go` / `export_nav_test.go`, `focus_test.go`, `skeleton_footer_test.go`).
+- **Package `tui`**: Update-injection tests next to screens (`agent_nav_test.go`, `create_test.go`, `edit_test.go`, `edit_comment_test.go`, `edit_sync_test.go`, `export_focus_test.go` / `export_nav_test.go`, `file_selector_test.go`, `focus_test.go`, `skeleton_footer_test.go`, `vault_test.go`).
 - **`internal/tui/tuittest`**: harness for external packages that must import `tui` without cycles (`Harness.Send` / `Resize` / `Key`, `WaitForZone`).
 
 Official Charm `teatest` targets Bubbletea v1; this project uses Bubbletea v2, so keep Update-injection until a v2-compatible path exists.
@@ -112,7 +112,7 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 
 **Comment overlay**: pressing `e` on a selected key in the loaded-keys table opens a
 small comment-edit overlay. Saving resolves the key's source file from the agent's
-filepath registry, writes the new comment to the key file (and `.pub` companion if
+filepath registry, falling back to the key files in `[agent].key_paths`, writes the new comment to the key file (and `.pub` companion if
 present), persists it to the vault when the agent is vault-backed, and reloads the
 key in the agent. See `internal/tui/comment_overlay.go`.
 
@@ -127,7 +127,6 @@ key in the agent. See `internal/tui/comment_overlay.go`.
 | Message | Source Cmd | Purpose |
 |---------|------------|---------|
 | editKeyLoadedMsg | load key from file | Key loaded (or error) |
-| editAgentKeysMsg | fetch agent keys | Keys from agent for selection |
 | editSaveMsg | save Cmd | Save result |
 
 ### Export Screen

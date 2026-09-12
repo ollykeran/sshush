@@ -32,6 +32,6 @@ Run `just demo` locally and commit the result, or trigger the `demos-render`
 GitHub Actions workflow (`workflow_dispatch`), which does the same and opens
 a PR. Not run automatically on every push: VHS's GIF output isn't
 byte-for-byte deterministic across runs, so diffing it on every commit would
-be flaky. `demos-smoke` covers that instead — it re-runs every tape on PRs
-touching CLI/TUI/server code and fails if any of them error out, without
+be flaky. `demos-smoke` covers that instead — it re-runs every tape on pushes
+and PRs to `master` touching CLI/TUI/server code and fails if any of them error out, without
 checking the rendered pixels.
