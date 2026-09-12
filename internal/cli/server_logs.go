@@ -25,7 +25,9 @@ func newServerLogsCommand() *cobra.Command {
 		Short: "Show the SSH server's log",
 		Long: "Print the end of the SSH server's log: its startup, every connection and sign-in attempt, sessions, " +
 			"and what it refused, one key=value record per line. The log is [server].log_file, or its default. " +
-			"With --follow, keep printing lines as they are logged until interrupted.",
+			"With --follow, keep printing lines as they are logged until interrupted. " +
+			"For more detail — the command each session runs, and requests refused quietly — set " +
+			"[server].log_level = \"debug\" in config and restart the server.",
 		Args: argsNoneOrHelp,
 		RunE: runServerLogs,
 	}
