@@ -32,19 +32,20 @@ func newVaultCommand() *cobra.Command {
 // config and the resolved socket. AskPassphrase is set, so a locked agent
 // serving this very vault is unlocked in passing rather than refused.
 func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
+	cfg := configFrom(cmd)
 	var vaultPath string
 	if cmd.Flags().Changed("vault-path") {
 		vaultPath, _ = cmd.Flags().GetString("vault-path")
-	} else if env.Config != nil {
-		vaultPath = env.Config.VaultPath
+	} else if cfg != nil {
+		vaultPath = cfg.VaultPath
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return vaultops.Env{}, style.NewOutput().Error("failed to get socket path").AsError()
 	}
 	agentVaultPath := ""
-	if env.Config != nil && env.Config.IsVault() {
-		agentVaultPath = env.Config.VaultPath
+	if cfg != nil && cfg.IsVault() {
+		agentVaultPath = cfg.VaultPath
 	}
 	return vaultops.Env{
 		VaultPath:      vaultPath,
@@ -203,7 +204,8 @@ func newVaultAddCommand() *cobra.Command {
 }
 
 func runVaultAdd(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	if len(args) == 0 {
@@ -220,7 +222,7 @@ func runVaultAdd(cmd *cobra.Command, args []string) error {
 	for _, arg := range args {
 		path := utils.ExpandHomeDirectory(arg)
 		if _, statErr := os.Stat(path); statErr != nil {
-			resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
+			resolved, resolveErr := resolveKeyPathByComment(arg, cfg)
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -252,7 +254,7 @@ func newVaultRemoveCommand() *cobra.Command {
 }
 
 func runVaultRemove(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	if configFrom(cmd) == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	if len(args) == 0 {
@@ -285,7 +287,7 @@ func newVaultLoadCommand() *cobra.Command {
 }
 
 func runVaultLoad(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	if configFrom(cmd) == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	e, err := vaultEnv(cmd)
@@ -325,7 +327,7 @@ func newVaultAutoloadCommand() *cobra.Command {
 }
 
 func runVaultAutoload(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	if configFrom(cmd) == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	on, err := parseAutoloadOnOff(args[0])
@@ -354,7 +356,7 @@ func newUnlockRecoveryCommand() *cobra.Command {
 }
 
 func runUnlockRecovery(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	if configFrom(cmd) == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	e, err := vaultEnv(cmd)
