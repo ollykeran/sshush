@@ -14,6 +14,7 @@ import (
 
 	"github.com/creack/pty"
 	gliderlabs "github.com/gliderlabs/ssh"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -97,14 +98,20 @@ func sessionCommand(shell, rawCommand string) *exec.Cmd {
 // and returns its exit status once it has ended. started is called with the
 // terminal's name once cmd is running.
 func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, winCh <-chan gliderlabs.Window, started func(tty string)) (int, error) {
-	ptyFile, tty, err := pty.Open()
+	opened, tty, err := pty.Open()
 	if err != nil {
+		return 0, err
+	}
+	ptyFile, err := pollable(opened)
+	_ = opened.Close()
+	if err != nil {
+		_ = tty.Close()
 		return 0, err
 	}
 	// Size the pty before the shell starts, not on the first resize event, or it
 	// runs at the wrong size until the client's terminal happens to change. Every
 	// size after this one arrives on winCh.
-	if err := pty.Setsize(ptyFile, winsize(ptyReq.Window)); err != nil {
+	if err := setsize(ptyFile, winsize(ptyReq.Window)); err != nil {
 		_ = tty.Close()
 		_ = ptyFile.Close()
 		return 0, err
@@ -131,7 +138,7 @@ func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, win
 	reaped := make(chan struct{})
 
 	var watchers sync.WaitGroup
-	watchers.Add(2)
+	watchers.Add(3)
 	go func() {
 		defer watchers.Done()
 		for {
@@ -140,7 +147,7 @@ func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, win
 				if !ok {
 					return
 				}
-				_ = pty.Setsize(ptyFile, winsize(win))
+				_ = setsize(ptyFile, winsize(win))
 			case <-reaped:
 				return
 			}
@@ -154,10 +161,25 @@ func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, win
 		hangUpOnDisconnect(sess, cmd, reaped)
 	}()
 
+	// A client that has gone must also release the pty read below. Hanging up the
+	// shell's process group is not enough on its own: a job-control shell such as
+	// dash puts a background job in a group of its own and does not hang it up on
+	// exit, and that job holds the terminal open, so the read would never end and
+	// the shell would never be reaped. The deadline only takes effect because
+	// ptyFile is pollable; see pollable.
+	go func() {
+		defer watchers.Done()
+		select {
+		case <-sess.Context().Done():
+			_ = ptyFile.SetReadDeadline(time.Now())
+		case <-reaped:
+		}
+	}()
+
 	// The client-to-shell copy does not end on its own: sess only reaches EOF once
 	// the session is already closing. Closing the pty below is what releases it —
-	// it cannot be joined, but writing to a closed *os.File is safe, where the
-	// ioctl the resize watcher makes is not. Hence the WaitGroup.
+	// it cannot be joined, but writing to a closed *os.File is safe. The watchers
+	// are joined all the same, so none outlives the session.
 	go func() { _, _ = io.Copy(ptyFile, sess) }()
 
 	// Reading the pty is the session's lifeline: it ends when the shell exits and
@@ -277,6 +299,42 @@ func exitCode(state *os.ProcessState) int {
 		return 128 + int(status.Signal())
 	}
 	return 1
+}
+
+// pollable returns a non-blocking copy of the pty master f, which Go's poller
+// manages, so a read deadline can end a read on it. creack/pty makes every ioctl
+// through Fd, which leaves a descriptor blocking for good (on macOS it is never
+// anything else), and a blocking read ignores deadlines. The copy must not be
+// passed to Fd either, which is why resizing goes through setsize.
+func pollable(f *os.File) (*os.File, error) {
+	fd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate pty: %w", err)
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("pty non-blocking: %w", err)
+	}
+	return os.NewFile(uintptr(fd), f.Name()), nil
+}
+
+// setsize sets the terminal size of the pty master f without calling Fd, which
+// would put f back into blocking mode. On a closed f it returns an error rather
+// than reaching whatever descriptor has since reused the number.
+func setsize(f *os.File, ws *pty.Winsize) error {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ioctlErr error
+	if err := conn.Control(func(fd uintptr) {
+		ioctlErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{
+			Row: ws.Rows, Col: ws.Cols, Xpixel: ws.X, Ypixel: ws.Y,
+		})
+	}); err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 // winsize converts an SSH window request to pty dimensions, substituting a
