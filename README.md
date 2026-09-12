@@ -61,7 +61,7 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 **Config file:** `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml`, or override with `-c` / `SSHUSH_CONFIG`. Reference: [Config](docs/config.md).
 
-**Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before merging this branch into your setup.
+**Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before upgrading.
 
 ## Installation
 
@@ -102,14 +102,14 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 - [Godoc guide](docs/godoc-guide.md) – exported API comments
 - [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API
 
-**Developers:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Internal boundary report](docs/internal-boundary-report.md) (auto-generated)
+**Developers:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Demos](demos/README.md)
 
 ## Build
 
-Go 1.26+, [`just`](https://github.com/casey/just) optional but recommended.
+Go 1.27+, [`just`](https://github.com/casey/just) optional but recommended.
 
 ```sh
 just build
 ```
 
-Outputs `build/linux-amd64/sshush` and `build/linux-amd64/sshushd`. From the repo, run e.g. `./build/linux-amd64/sshush` or install the artifacts the same way you do other static binaries. macOS: `just build darwin`. Release layout and packaging: `just pkg all`, `just build darwin-arm64`, etc. (see [justfile](justfile)).
+Builds `sshush` and `sshushd` for the machine you are on, into `build/<os>-<arch>/` (e.g. `build/darwin-arm64/`). From the repo, run e.g. `./build/darwin-arm64/sshush` or install the artifacts the same way you do other static binaries. Other targets: `just build linux` (linux/amd64), `just build darwin` (darwin/arm64), `just build all`. Packaging: `just pkg all` (see [justfile](justfile)).

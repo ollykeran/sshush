@@ -202,7 +202,7 @@ One behavior is deliberately **not** shared with the CLI: the **Agent** tab's re
 ## Related commands (outside `sshush vault`)
 
 - **`sshush start`**: Unlocks the vault (passphrase prompt) when in vault mode.
-- **`sshush unlock`**: Unlocks a locked agent (passphrase or recovery path depending on setup); see `internal/cli/unlock.go`.
+- **`sshush unlock`**: Unlocks a locked agent with the master passphrase (vault) or the passphrase it was locked with (keys mode); to unlock a vault with the recovery phrase, use `sshush vault unlock-recovery`. See `internal/cli/unlock.go`.
 - **`sshush lock`**: Locks the agent; for vault, wipes the master key from memory.
 - **`sshush add`**: When the agent is a vault, adds keys into the vault (with agent-specific autoload defaults); see `internal/cli/add.go`.
 

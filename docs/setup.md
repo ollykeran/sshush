@@ -34,13 +34,13 @@ On every run, before loading config, sshush runs `SetupConfig()`. It does two th
      - `$XDG_RUNTIME_DIR/sshush.sock` when `XDG_RUNTIME_DIR` is set (common on Linux desktops)
      - otherwise `~/.config/sshush/sshush.sock` (stable on macOS and minimal Linux environments)
    - Writes `[agent].type` = `"keys"` and `[agent].key_paths` = discovered keys from `~/.ssh`
-   - Writes `[theme]` with `name = "default"` and commented custom colour hints
+   - Writes `[theme]` with `name = "default"`, `no_color = false` and commented custom colour hints
    - Appends commented-out `[vault]` and `[server]` sections so you can enable them later. `[server]` lists every server option, each with its default or an example, all commented out: the SSH server gives whoever signs in a shell as you, so it stays off until you uncomment `[server]` and `listen_port` yourself (see [Config: `[server]`](config.md#server))
    - Does not overwrite an existing config
 2. **AddEvalToShell** (when your shell rc file does not already contain `eval $(sshush)`):
    - Chooses the rc file from `$SHELL` when possible (`zsh` → `~/.zshrc`, `bash` → `~/.bashrc`)
    - On macOS, defaults to `~/.zshrc` when `SHELL` is empty or not zsh/bash
-   - On other Unix systems, if neither rc file exists yet, sshush may create `~/.bashrc` and add the line
+   - On other Unix systems, uses `~/.bashrc` if it exists, else `~/.zshrc` if that exists, else creates `~/.bashrc` and adds the line
    - If the rc file already exists, sshush appends the line
 
 ## Shell startup (.zshrc / .bashrc / .bash_profile)

@@ -313,7 +313,7 @@ Connecting lands you in an interactive shell on the host, on a pty:
 ssh -p 2222 host
 ```
 
-The shell is `[server].shell` when that is set, and otherwise `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. A `shell` that cannot be found stops `sshush server` from starting, rather than failing every connection. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+The shell is `[server].shell` when that is set, and otherwise `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. A `shell` that cannot be found stops `sshush server` from starting, rather than failing every connection. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting hangs up the shell's process group, which takes the shell and whatever it runs in the foreground with it. A background job of a shell with job control (`cmd &` in dash) sits in a process group of its own and can outlive the session; bash and zsh hang up their own jobs as they exit.
 
 The session's environment is the daemon's own plus what sshd would set: `SSH_CLIENT`, `SSH_CONNECTION` and, on a pty, `SSH_TTY` describe this connection, and `SHELL` names the shell. `USER`, `LOGNAME` and `HOME` are filled in if the daemon was started without them. Variables the client sends (`SendEnv`) are ignored, and `/etc/environment` is not read: the daemon runs as you, and already inherits the environment your own login set up.
 
@@ -343,7 +343,7 @@ The server logs what it does to a file, one record per line in Go slog's `key=va
 A sample:
 
 ```text
-time=2026-09-11T19:55:28.283+01:00 level=INFO msg="server starting" version="sshushd 0.0.10 (go1.27.0 darwin/arm64)" pid=60922 authorized_keys=/Users/you/.ssh/authorized_keys password_vault=/Users/you/.config/sshush/vault.json
+time=2026-09-11T19:55:28.283+01:00 level=INFO msg="server starting" version="sshushd 0.1.0 (go1.27.0 darwin/arm64)" pid=60922 authorized_keys=/Users/you/.ssh/authorized_keys password_vault=/Users/you/.config/sshush/vault.json
 time=2026-09-11T19:55:28.284+01:00 level=INFO msg="server listening" addr=[::]:2222 host_key_path=/Users/you/.config/sshush/server_host_ed25519 host_key=SHA256:jfofgAYUo/bM4gedKe7Uyu89rj3mUOMLsbDYwittjec auth_methods=publickey,password shell=/bin/zsh
 time=2026-09-11T19:57:41.292+01:00 level=INFO msg="connection opened" remote=203.0.113.5:55749 local=192.0.2.10:2222
 time=2026-09-11T19:57:41.297+01:00 level=INFO msg="auth methods offered" user=you remote=203.0.113.5:55749 methods=publickey,password
@@ -406,7 +406,7 @@ Strength checks are policy-based (length and character classes), not a statistic
 **Daily use:**
 
 1. Start the agent: `sshush start` (you will be prompted for the passphrase to unlock the vault once per daemon session).
-2. Add keys with the normal add command: `sshush add ~/.ssh/id_ed25519` (or `ssh-add - add`). There is no separate "vault add"; the same `sshush add` sends the key to the agent, and when the agent is a vault, it encrypts and stores it in the vault file.
+2. Add keys with `sshush add ~/.ssh/id_ed25519` or `sshush vault add ~/.ssh/id_ed25519`. When the agent is a vault, both send the key to the agent, which encrypts it and stores it in the vault file; `vault add` also refuses an agent that is not a vault, so it fails clearly if vault mode is off. See [Vault](vault.md#vault-add).
 3. Lock when done: `sshush lock`. While locked, the agent reports **no** identities (same as OpenSSH agent when locked). Unlock again with `sshush unlock`; if the vault is already unlocked, `sshush unlock` prints that and does not prompt for a passphrase.
 
 If you start the daemon **without** vault mode, it uses the in-memory keyring and keys are never written to a vault file. To use the vault you must have `[agent].type = "vault"`, `[vault].vault_path` set, have run `vault init` once, and add keys with `sshush add` after unlocking.
@@ -439,7 +439,7 @@ error   = "#F87171"
 warning = "#F2E94E"
 ```
 
-**Preset names:** `default`, `dracula`, `nord`, `solarized-dark`, `catppuccin-mocha`.
+**Preset names:** `default`, `dracula`, `nord`, `solarized-dark`, `catppuccin-latte`, `catppuccin-mocha`.
 
 Set theme from the CLI: `sshush theme show`, `sshush theme list`, `sshush theme set dracula`, or `sshush theme set --accent "#FF0000"`. In the TUI, press **t** to open the theme picker (bottom of screen); use **up/down** to preview, **s** to save to config, **esc** to cancel.
 
