@@ -20,10 +20,11 @@ func newLockCommand() *cobra.Command {
 }
 
 func runLock(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}

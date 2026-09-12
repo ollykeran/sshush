@@ -34,7 +34,8 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 // runStartDaemon resolves config, starts the sshushd binary with SSHUSH_CONFIG, and waits for the socket.
 func runStartDaemon(cmd *cobra.Command) error {
-	if env.Config == nil {
+	loaded := configFrom(cmd)
+	if loaded == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 
@@ -46,7 +47,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("cli: resolve absolute config path: %w", err)
 	}
-	cfg := *env.Config
+	cfg := *loaded
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		absSocket, _ := filepath.Abs(cfg.SocketPath)
 		if !isTTY(os.Stdout) {

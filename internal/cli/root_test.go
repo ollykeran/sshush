@@ -175,6 +175,38 @@ func TestResolveNoColor_env_unset_does_not_activate(t *testing.T) {
 	}
 }
 
+func TestResolveNoColor_config_activates_plain_mode(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+	style.SetPlainMode(false)
+
+	t.Setenv("NO_COLOR", "")
+
+	cmd := newConfiguredCommand(&config.Config{Theme: config.ThemeSection{NoColor: true}})
+	cmd.Flags().Bool("no-color", false, "")
+	resolveNoColor(cmd)
+	if !style.IsPlainMode() {
+		t.Fatal("expected plain mode from theme.no_color in config")
+	}
+}
+
+// An explicit --no-color=false outranks theme.no_color (flag > env > config).
+func TestResolveNoColor_flag_false_outranks_config(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+	style.SetPlainMode(false)
+
+	t.Setenv("NO_COLOR", "")
+
+	cmd := newConfiguredCommand(&config.Config{Theme: config.ThemeSection{NoColor: true}})
+	cmd.Flags().Bool("no-color", false, "")
+	_ = cmd.ParseFlags([]string{"--no-color=false"})
+	resolveNoColor(cmd)
+	if style.IsPlainMode() {
+		t.Fatal("expected --no-color=false to outrank theme.no_color")
+	}
+}
+
 func writeConfig(t *testing.T, path string, c config.Config) {
 	t.Helper()
 	data, err := config.MarshalConfig(c)

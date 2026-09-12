@@ -28,10 +28,11 @@ func newSelftestCommand() *cobra.Command {
 }
 
 func runSelftest(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}

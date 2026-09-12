@@ -37,10 +37,11 @@ func newServerLogsCommand() *cobra.Command {
 }
 
 func runServerLogs(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	path := platform.ServerLogPath(env.Config.ServerLogFile)
+	path := platform.ServerLogPath(cfg.ServerLogFile)
 	lines, _ := cmd.Flags().GetInt("lines")
 	follow, _ := cmd.Flags().GetBool("follow")
 
