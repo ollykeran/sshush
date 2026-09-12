@@ -288,9 +288,11 @@ func TestServer_DisconnectLeavesNoShellBehind(t *testing.T) {
 	sess, stdin, out := startPtyShell(t, conn, 24, 80)
 
 	// Ask for the shell's own pid and a background child's, so this covers the
-	// whole process group and not just the shell. printf keeps the digits out of
-	// the echoed command line, where they would match the pattern spuriously.
-	if _, err := io.WriteString(stdin, "sleep 300 & printf 'pids %d %d\\n' $$ $!\n"); err != nil {
+	// whole process group and not just the shell. set +m keeps the child in that
+	// group: with job control on, a shell gives each job a group of its own. printf
+	// keeps the digits out of the echoed command line, where they would match the
+	// pattern spuriously.
+	if _, err := io.WriteString(stdin, "set +m; sleep 300 & printf 'pids %d %d\\n' $$ $!\n"); err != nil {
 		t.Fatalf("write to shell: %v", err)
 	}
 	pids := out.waitForMatch(t, regexp.MustCompile(`pids (\d+) (\d+)`), 10*time.Second)
@@ -310,18 +312,77 @@ func TestServer_DisconnectLeavesNoShellBehind(t *testing.T) {
 	waitForExit(t, childPid, "background child")
 }
 
+// A job-control shell gives a background job a process group of its own, which
+// the hang-up does not reach, and dash, unlike bash, does not hang its jobs up as
+// it exits. The job keeps the terminal open, which once left the session waiting
+// on the pty forever with the shell never reaped. The shell is pinned to dash,
+// since bash would hang the job up itself and hide the bug. It only ever hung on
+// Linux: on macOS the read ended once the shell had gone, job or no job.
+func TestServer_DisconnectReapsTheShellDespiteABackgroundJob(t *testing.T) {
+	const dash = "/bin/dash"
+	if _, err := os.Stat(dash); err != nil {
+		t.Skipf("needs %s: %v", dash, err)
+	}
+	addr, signer := startShellServer(t, func(s *Server) { s.Shell = dash })
+	conn := dialShellServer(t, addr, signer)
+
+	sess, stdin, out := startPtyShell(t, conn, 24, 80)
+
+	if _, err := io.WriteString(stdin, "sleep 300 & printf 'pids %d %d\\n' $$ $!\n"); err != nil {
+		t.Fatalf("write to shell: %v", err)
+	}
+	pids := out.waitForMatch(t, regexp.MustCompile(`pids (\d+) (\d+)`), 10*time.Second)
+	shellPid, err := strconv.Atoi(pids[1])
+	if err != nil {
+		t.Fatalf("shell pid %q: %v", pids[1], err)
+	}
+	childPid, err := strconv.Atoi(pids[2])
+	if err != nil {
+		t.Fatalf("child pid %q: %v", pids[2], err)
+	}
+	// The job may outlive the session, in a group nothing signalled.
+	t.Cleanup(func() { _ = syscall.Kill(childPid, syscall.SIGKILL) })
+
+	sess.Close()
+	conn.Close()
+
+	waitForExit(t, shellPid, "shell")
+}
+
 // waitForExit polls until pid is gone, which is how "no orphaned shell process"
-// is checked.
+// is checked. A zombie that some other process is responsible for counts as gone:
+// an orphan is reparented to PID 1, and a container's PID 1 (act runs tail) may
+// never reap it. A zombie of this process does not, since that is a shell the
+// server never waited on.
 func waitForExit(t *testing.T, pid int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
+		if err := syscall.Kill(pid, 0); err != nil || zombieOfAnotherProcess(pid) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Errorf("%s (pid %d) still running after the client disconnected", what, pid)
+}
+
+// zombieOfAnotherProcess reports whether pid has exited and is waiting to be
+// reaped by a process other than this one. It reads /proc, so off Linux, where
+// there is none, it reports false.
+func zombieOfAnotherProcess(pid int) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	// The command name, in parentheses, may itself hold spaces or parentheses, so
+	// the state and parent pid are read from after the last ")".
+	stat := string(data)
+	fields := strings.Fields(stat[strings.LastIndex(stat, ")")+1:])
+	if len(fields) < 2 || fields[0] != "Z" {
+		return false
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	return err == nil && ppid != os.Getpid()
 }
 
 // runCommand runs command on a fresh session without a pty, feeding it stdin, and
