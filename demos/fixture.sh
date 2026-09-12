@@ -8,7 +8,10 @@
 # fixture's keys, config, and sockets.
 set -euo pipefail
 
-FIXTURE_DIR="$(mktemp -d -t sshush-demo)"
+# An explicit XXXXXX template, since `mktemp -t name` is BSD-only: GNU mktemp on
+# Linux rejects a template without X's.
+tmp_root="${TMPDIR:-/tmp}"
+FIXTURE_DIR="$(mktemp -d "${tmp_root%/}/sshush-demo.XXXXXX")"
 mkdir -p "$FIXTURE_DIR/.ssh" "$FIXTURE_DIR/.config/sshush"
 chmod 700 "$FIXTURE_DIR/.ssh"
 
