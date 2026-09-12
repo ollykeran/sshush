@@ -14,7 +14,7 @@ Options are grouped into TOML tables:
 |---------|---------|
 | `[agent]` | Socket path, key paths, agent backend type |
 | `[vault]` | Vault file path; required when `[agent].type` is `"vault"`, optional otherwise (for `sshush vault` CLI while the agent uses `key_paths`) |
-| `[server]` | TCP SSH server listen port and related paths |
+| `[server]` | Optional TCP SSH server: off until `listen_port` is set; auth, host key, shell |
 | `[theme]` | Colours (preset or custom hex) and plain output mode |
 
 ### Migration from flat TOML (breaking)
@@ -183,20 +183,82 @@ When `[agent].type` is not `"vault"`, `[vault].vault_path` is optional and used 
 
 ## `[server]`
 
-The TCP SSH server runs in a **separate daemon process** (not inside the agent). Start it with `sshush server` (or `sshush serve`), stop it with `sshush server stop`. It uses the same config file; no second config.
+The TCP SSH server runs in a **separate daemon process** (not inside the agent). Start it with `sshush server` (or `sshush serve`), stop it with `sshush server stop`. It uses the same config file; no second config. It is **off until you enable it** — see [Enabling the server](#enabling-the-server).
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `listen_port` | TCP port (integer); omit or `0` = not enabled | `2222` |
+| `listen_port` | TCP port (integer). Unset or `0` = server off, the default; setting it is what enables the server | `2222` |
 | `authorized_keys` | Path to authorized_keys file; empty = use keys from the agent (and vault when vault mode is on) | `"~/.ssh/authorized_keys"` |
-| `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519`, created on first start | `"~/.ssh/sshush_host_ed25519"` |
+| `host_key` | Path to host private key file; empty = `~/.config/sshush/server_host_ed25519` (under `$XDG_CONFIG_HOME` when set), created on first start | `"~/.ssh/sshush_host_ed25519"` |
+| `shell` | Shell sessions run, as a path or a name on `PATH`; empty = the daemon's `$SHELL`, then `/bin/bash`, then `/bin/sh` | `"/bin/zsh"` |
+| `password_auth` | `true` lets clients sign in with the vault's passphrase as well as a key; needs `[vault].vault_path`. Default `false` | `true` |
+| `log_file` | Where the server logs connections, sign-ins, sessions and refusals; empty = `$XDG_STATE_HOME/sshush/server.log` when that is set, else `~/.config/sshush/server.log` (see [Logging](#logging)) | `"~/logs/sshush-server.log"` |
+| `log_level` | `"info"` logs every connection, sign-in attempt, session and refusal; `"debug"` adds the commands sessions run and requests refused quietly. Default `"info"` | `"debug"` |
+
+Paths support `~` expansion.
+
+### Enabling the server
+
+**The server is off until you turn it on.** Whoever signs in gets a shell as you, so starting it is left as a deliberate edit to your config: nothing runs the server until `[server].listen_port` is set.
+
+The config sshush generates (on first run, or with `sshush generate config`) lists every `[server]` option, all commented out. Above each is a line saying what happens while it stays commented out:
+
+```toml
+# [server]
+# The SSH server is off until you enable it: whoever signs in gets a shell as you,
+# so turning it on should be a deliberate choice. To enable it, uncomment [server]
+# and listen_port, then run 'sshush server'. Every other key is optional, and the
+# comment above it says what happens while it stays commented out.
+#
+# TCP port to listen on. Unset or 0 keeps the server off.
+# listen_port = 2222
+#
+# File of keys allowed to sign in. Unset: any key the running agent holds.
+# authorized_keys = "~/.ssh/authorized_keys"
+#
+# The server's host key, created on first start if missing. Unset: this path.
+# host_key = "~/.config/sshush/server_host_ed25519"
+#
+# Shell sessions run, as a path or a name on PATH. Unset: the server daemon's
+# $SHELL, then /bin/bash, then /bin/sh.
+# shell = "/bin/zsh"
+#
+# Also accept the vault's passphrase as an SSH password. Needs [vault].vault_path,
+# and checking a password never unlocks the agent. Unset: false.
+# password_auth = false
+#
+# File the server logs every connection, sign-in attempt and session to. Read it
+# with 'sshush server logs'. Unset: this path.
+# log_file = "~/.config/sshush/server.log"
+#
+# How much to log. "info" records every connection, sign-in attempt and session;
+# "debug" adds the commands sessions run and requests refused quietly. Unset: "info".
+# log_level = "info"
+```
+
+To enable the server, uncomment `[server]` and `listen_port`, then run `sshush server`:
 
 ```toml
 [server]
 listen_port = 2222
 ```
 
-Paths support `~` expansion. Set `listen_port`, then run `sshush server` to start the server daemon.
+The other options can stay commented out until you want something other than the default.
+
+Run `sshush server` before that and it does not start. It prints a warning naming the lines to change, then exits with status 1. `sshush server status` prints the same warning:
+
+```text
+SSH server is not enabled ([server].listen_port is unset or 0).
+~/.config/sshush/config.toml:13: uncomment [server]
+~/.config/sshush/config.toml:20: uncomment listen_port = 2222
+Then run 'sshush server'.
+```
+
+The lines named are the ones in your file as it stands:
+- a `listen_port` commented out inside a live `[server]` table: uncomment that line
+- `listen_port = 0`: set a port on that line
+- a `[server]` table with no `listen_port`: add one under its header
+- no `[server]` table at all: add one
 
 ### Authorizing keys
 
@@ -208,6 +270,29 @@ With it unset, the server asks the agent on every connection. That has two conse
 - **`sshush reload`, `stop`/`start`, or an agent crash are survivable.** The server has no connection to lose, so a replaced agent is simply the one it asks next time.
 
 `sshush server status` shows which of the two is in use and whether the agent is reachable.
+
+### Password authentication
+
+Set `password_auth = true` to let a client sign in with your vault's master passphrase instead of a key — from a machine that has none of yours loaded:
+
+```toml
+[vault]
+vault_path = "~/.config/sshush/vault.json"
+
+[server]
+listen_port = 2222
+password_auth = true
+```
+
+```bash
+ssh -p 2222 -o PreferredAuthentications=password host
+```
+
+- **It checks the passphrase; it does not unlock anything.** The server reads the vault file, verifies the passphrase the way `sshush unlock` would, and throws the derived key away. The agent is never asked, so a locked agent stays locked — run `sshush unlock` inside the session if you need your keys there.
+- **It needs an initialized vault.** `sshush server` refuses to start with `password_auth` on and no `[vault].vault_path`, or with a vault that has not been through `sshush vault init`. It works with any `[agent].type`, and with no agent running at all.
+- **Guessing is slowed down.** Every wrong password costs the client a second. Five in a row from one address lock that address out of password authentication for a minute — the right passphrase is refused too while it lasts. At most two passphrase checks run at once, since each is a deliberately expensive key derivation. None of this touches public-key authentication.
+
+It is off by default, and public keys keep working either way. Anyone who has the passphrase gets a shell as you, so turn it on only where you would expose that passphrase to the network, and prefer keys wherever you have them. `sshush server status` shows whether it is on.
 
 ### Host key
 
@@ -228,11 +313,78 @@ Connecting lands you in an interactive shell on the host, on a pty:
 ssh -p 2222 host
 ```
 
-The shell is `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. It is not yet configurable. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+The shell is `[server].shell` when that is set, and otherwise `$SHELL` as the server daemon inherited it, falling back to `/bin/bash` and then `/bin/sh`. A `shell` that cannot be found stops `sshush server` from starting, rather than failing every connection. It starts as a login shell, as with sshd, so it reads `~/.profile` (or `~/.bash_profile`, `~/.zprofile`, …) and not only the interactive rc file. `TERM` is taken from the client, terminal resizes are passed through, and the shell's exit code becomes the session's. Disconnecting takes the shell and everything it started with it — the server signals the shell's whole process group.
+
+The session's environment is the daemon's own plus what sshd would set: `SSH_CLIENT`, `SSH_CONNECTION` and, on a pty, `SSH_TTY` describe this connection, and `SHELL` names the shell. `USER`, `LOGNAME` and `HOME` are filled in if the daemon was started without them. Variables the client sends (`SendEnv`) are ignored, and `/etc/environment` is not read: the daemon runs as you, and already inherits the environment your own login set up.
 
 **Every authorized key gets a shell as the user running `sshushd`.** There is no per-key OS identity and no restricted mode: the server is single-user by design, so treat `[server].authorized_keys` (or the keys in your agent) as the full list of people you would hand that account to.
 
-Only interactive terminal sessions are served. A remote command (`ssh host echo hi`), `scp`, `sftp` and port forwarding are all refused, promptly rather than by hanging.
+Connecting with a command runs that instead, handed to the shell as `$SHELL -c <command>` the way sshd does it, so pipes, globs and quoting behave as they would locally:
+
+```bash
+ssh -p 2222 host 'ls | wc -l'
+```
+
+A command gets a pty only when asked for one (`ssh -t`); otherwise its stdout and stderr come back separately and your stdin is relayed to it. Its exit code becomes the session's. The session ends once the command and anything still holding its output have finished — so, as with sshd, a background job left writing to the session keeps it open. Redirect its output (`nohup cmd >/dev/null 2>&1 &`) to leave it running on its own.
+
+Everything else is refused promptly rather than by hanging:
+
+- **Port forwarding** (`-L`, `-D`, `-W`) is refused with a message the client prints: `open failed: administratively prohibited: sshush server does not support port forwarding`. Remote forwards (`-R`) are refused too, though the protocol gives that refusal no room for a reason.
+- **`sftp`**, and so plain `scp`, which runs over it, fails with `subsystem request failed`.
+- **Agent forwarding** (`-A`) is not provided. The protocol lets the request succeed, but no agent is ever forwarded: the session sees whatever `SSH_AUTH_SOCK` the daemon itself started with, if any.
+
+### Logging
+
+The server logs what it does to a file, one record per line in Go slog's `key=value` text format, so `grep` and any logfmt tool can pick out fields.
+
+- **Location:** `$XDG_STATE_HOME/sshush/server.log` when `XDG_STATE_HOME` is set, otherwise `~/.config/sshush/server.log` beside the host key. Set `log_file` to put it somewhere else.
+- **Reading it:** `sshush server logs` prints the end of it (`-n` for how many lines, `0` for all), and `sshush server logs -f` follows it as records are written. `sshush server status` shows where it is.
+
+A sample:
+
+```text
+time=2026-09-11T19:55:28.283+01:00 level=INFO msg="server starting" version="sshushd 0.0.10 (go1.27.0 darwin/arm64)" pid=60922 authorized_keys=/Users/you/.ssh/authorized_keys password_vault=/Users/you/.config/sshush/vault.json
+time=2026-09-11T19:55:28.284+01:00 level=INFO msg="server listening" addr=[::]:2222 host_key_path=/Users/you/.config/sshush/server_host_ed25519 host_key=SHA256:jfofgAYUo/bM4gedKe7Uyu89rj3mUOMLsbDYwittjec auth_methods=publickey,password shell=/bin/zsh
+time=2026-09-11T19:57:41.292+01:00 level=INFO msg="connection opened" remote=203.0.113.5:55749 local=192.0.2.10:2222
+time=2026-09-11T19:57:41.297+01:00 level=INFO msg="auth methods offered" user=you remote=203.0.113.5:55749 methods=publickey,password
+time=2026-09-11T19:57:41.299+01:00 level=INFO msg="auth accepted" method=publickey user=you remote=203.0.113.5:55749 key_type=ssh-ed25519 fingerprint=SHA256:7oa7tTS2KNabYCyo9Q1wrSTd+HIcCpibZ+kBLQHIvc4
+time=2026-09-11T19:57:41.301+01:00 level=INFO msg="session started" kind=shell user=you remote=203.0.113.5:55749 tty=/dev/ttys001
+time=2026-09-11T19:58:02.344+01:00 level=INFO msg="port forwarding refused" user=you remote=203.0.113.5:55749 destination=127.0.0.1:5432
+time=2026-09-11T20:10:09.309+01:00 level=INFO msg="session closed" user=you remote=203.0.113.5:55749 exit_status=0
+time=2026-09-11T20:10:09.310+01:00 level=INFO msg="connection closed" remote=203.0.113.5:55749 user=you authenticated=true duration=12m28.018s
+time=2026-09-11T20:14:30.145+01:00 level=INFO msg="connection opened" remote=198.51.100.7:40112 local=192.0.2.10:2222
+time=2026-09-11T20:14:30.153+01:00 level=INFO msg="auth methods offered" user=root remote=198.51.100.7:40112 methods=publickey,password
+time=2026-09-11T20:14:31.272+01:00 level=INFO msg="auth failed" method=password user=root remote=198.51.100.7:40112 methods_offered=publickey,password
+time=2026-09-11T20:14:31.274+01:00 level=INFO msg="connection closed" remote=198.51.100.7:40112 user=root authenticated=false duration=1.128s
+time=2026-09-11T20:14:35.680+01:00 level=INFO msg="auth failed" method=password user=root remote=198.51.100.7:40120 methods_offered=publickey,password
+time=2026-09-11T20:14:35.681+01:00 level=WARN msg="password lockout" host=198.51.100.7 failures=5 duration=1m0s
+time=2026-09-11T21:02:44.740+01:00 level=INFO msg="server stopping" signal=terminated
+```
+
+The records at the default `log_level = "info"`, by `msg`:
+
+| `msg` | Logged when | Fields |
+|-------|-------------|--------|
+| `server starting`, `server listening` | the server starts | `version`, `pid`, how keys are checked (`authorized_keys` or `agent_socket`), `password_vault` when passwords are on; `addr`, `host_key`, `auth_methods`, `shell` |
+| `server stopping` | `sshush server stop` ends it | `signal` |
+| `connection opened`, `connection closed` | any connection | `remote`, `local`; then `user`, `authenticated`, `duration`, and a `reason` when a handshake failed or ran out of attempts |
+| `auth methods offered` | a client asks what it may use | `user`, `remote`, `methods` |
+| `auth accepted`, `auth failed` | each sign-in attempt | `method`, `user`, `remote`; `key_type` and `fingerprint` for public keys; `reason` when a password was refused without being checked (`address locked out`); `methods_offered` after a failure |
+| `password lockout` (WARN) | an address is locked out of password authentication | `host`, `failures`, `duration` |
+| `session started`, `session closed` | each session | `kind` (`shell` or `command`), `user`, `remote`, `tty` on a terminal; `exit_status` |
+| `port forwarding refused`, `remote port forwarding refused`, `socket forwarding refused`, `subsystem refused`, `channel refused` | anything refused | `user`, `remote`, and what was asked for: `destination`, `bind`, `subsystem` or `type` |
+
+A few things worth knowing when reading it:
+- **A bare connect-and-close** logs as `connection closed` with `authenticated=false` and no `user`. That includes the port check `sshush server status` makes.
+- **Fingerprints** are in the form `ssh-keygen -lf key.pub` prints, so you can compare the two.
+- **`user`** is whatever name the client sent. It changes nothing: every session runs as the user running `sshushd`.
+
+`log_level = "debug"` adds `session details` (the shell a session runs and its `command`) and `global request refused` for requests clients send routinely, such as keepalives. Commands are left out at `info` because they can carry secrets.
+
+A few things protect the log itself:
+- **No forged records.** Values are quoted and escaped where they need to be, so anything a client sends — a user name, a subsystem, a forwarding destination — stays inside its own field, on its own line.
+- **Permissions.** The file is created mode `600`, in a mode-`700` directory.
+- **Size.** Past 10 MiB the log is rotated: renamed with a timestamp (`server-2026-09-11T19-55-28.283.log`) and compressed. The three most recent rotated copies are kept, so the log takes about 10 MiB plus those.
 
 ## Vault
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/ollykeran/sshush/internal/server"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
+	"github.com/ollykeran/sshush/internal/version"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -144,6 +146,35 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	if _, err := server.EnsureHostKey(hostKeyPath); err != nil {
 		return fmt.Errorf("server host key %s: %w", utils.DisplayPath(hostKeyPath), err)
 	}
+	// Same for the shell: a typo here would otherwise fail every connection, with
+	// nothing on the client's side saying why.
+	if cfg.ServerShell != "" {
+		if _, err := server.ResolveShell(cfg.ServerShell); err != nil {
+			return fmt.Errorf("server shell: %w", err)
+		}
+	}
+	var passwords server.PasswordSource
+	var vaultFile string
+	if cfg.ServerPasswordAuth {
+		var err error
+		if vaultFile, err = passwordAuthVault(cfg); err != nil {
+			return err
+		}
+		passwords = &server.VaultPassphraseAuth{VaultPath: vaultFile}
+	}
+	// And the log: a bad path or level found after detaching would leave a server
+	// running with nothing recording what it does.
+	logLevel, err := server.ParseLogLevel(cfg.ServerLogLevel)
+	if err != nil {
+		return fmt.Errorf("[server].%w", err)
+	}
+	logPath := platform.ServerLogPath(cfg.ServerLogFile)
+	if err := prepareServerLog(logPath); err != nil {
+		return fmt.Errorf("server log %s: %w", utils.DisplayPath(logPath), err)
+	}
+	logFile := newServerLogWriter(logPath)
+	defer logFile.Close()
+	logger := slog.New(server.NewLogHandler(logFile, logLevel))
 
 	if err := detachProcess(); err != nil {
 		return err
@@ -155,13 +186,65 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		defer os.Remove(pidFilePath)
 	}
 
+	starting := []any{"version", version.Line("sshushd"), "pid", os.Getpid()}
+	if cfg.ServerAuthorizedKeys != "" {
+		starting = append(starting, "authorized_keys", cfg.ServerAuthorizedKeys)
+	} else {
+		starting = append(starting, "agent_socket", cfg.SocketPath)
+	}
+	if passwords != nil {
+		starting = append(starting, "password_vault", vaultFile)
+	}
+	logger.Info("server starting", starting...)
+
 	srv := &server.Server{
 		ListenAddr:  listenAddr,
 		AuthKeys:    authSource,
 		HostKeyPath: hostKeyPath,
+		Shell:       cfg.ServerShell,
+		Passwords:   passwords,
+		Log:         logger,
 		Ready:       ready.Ready,
 	}
-	return srv.ListenAndServe()
+
+	// SIGTERM is how `sshush server stop` asks the server to go. Catching it, rather
+	// than dying mid-write, is what gives the log its last line and hangs up on live
+	// sessions the way a disconnect would.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	go func() {
+		logger.Info("server stopping", "signal", (<-signals).String())
+		_ = srv.Close()
+	}()
+
+	if err := srv.ListenAndServe(); err != nil {
+		logger.Error("server failed", "err", err)
+		return err
+	}
+	return nil
+}
+
+// passwordAuthVault resolves the vault file [server].password_auth checks
+// passwords against. No vault configured, a missing file, or a vault never
+// initialized is an error before the server starts: each would refuse every
+// password, with nothing saying why.
+func passwordAuthVault(cfg config.Config) (string, error) {
+	if cfg.VaultPath == "" {
+		return "", fmt.Errorf("[server].password_auth needs [vault].vault_path: passwords are checked against the vault's passphrase")
+	}
+	path := vault.ResolveToFile(cfg.VaultPath)
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("[server].password_auth: vault %s: %w", utils.DisplayPath(path), err)
+	}
+	store, err := vault.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("[server].password_auth: %w", err)
+	}
+	if store.GetMetadata() == nil {
+		return "", fmt.Errorf("[server].password_auth: vault %s is not initialized; run 'sshush vault init' first", utils.DisplayPath(path))
+	}
+	return path, nil
 }
 
 // WaitForSocket waits until the socket at socketPath is accepting connections or timeout.

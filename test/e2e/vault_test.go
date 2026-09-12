@@ -131,12 +131,14 @@ func runSSHush(t *testing.T, binDir, configPath, runtimeDir string, stdin io.Rea
 	cmd := exec.Command(sshushPath, fullArgs...)
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "SSHUSH_CONFIG=") || strings.HasPrefix(e, "XDG_RUNTIME_DIR=") {
+		if strings.HasPrefix(e, "SSHUSH_CONFIG=") || strings.HasPrefix(e, "XDG_RUNTIME_DIR=") || strings.HasPrefix(e, "XDG_STATE_HOME=") {
 			continue
 		}
 		env = append(env, e)
 	}
-	cmd.Env = append(env, "SSHUSH_CONFIG="+configPath, "XDG_RUNTIME_DIR="+runtimeDir)
+	// XDG_STATE_HOME puts the server's default log in the test's directory rather
+	// than the developer's own.
+	cmd.Env = append(env, "SSHUSH_CONFIG="+configPath, "XDG_RUNTIME_DIR="+runtimeDir, "XDG_STATE_HOME="+runtimeDir)
 	cmd.Stdin = stdin
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf

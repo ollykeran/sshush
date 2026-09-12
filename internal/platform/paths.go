@@ -15,6 +15,8 @@ const (
 	ConfigFileName = "config.toml"
 	// ServerHostKeyFileName is the SSH server's host key file inside the config directory.
 	ServerHostKeyFileName = "server_host_ed25519"
+	// ServerLogFileName is the SSH server's log file name.
+	ServerLogFileName = "server.log"
 )
 
 // ConfigDir returns the absolute path to the sshush config directory:
@@ -64,4 +66,19 @@ func ServerHostKeyPath(configured string) string {
 		return p
 	}
 	return filepath.Join(ConfigDir(), ServerHostKeyFileName)
+}
+
+// ServerLogPath returns where the SSH server writes its log: the configured path
+// when one is set, otherwise server.log under $XDG_STATE_HOME/sshush — XDG's home
+// for logs — when that is set, and in the config directory beside the host key
+// when it is not. Like the host key, it stays out of the runtime dir, which would
+// lose the log at every reboot.
+func ServerLogPath(configured string) string {
+	if p := strings.TrimSpace(configured); p != "" {
+		return p
+	}
+	if d := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); d != "" {
+		return filepath.Join(d, "sshush", ServerLogFileName)
+	}
+	return filepath.Join(ConfigDir(), ServerLogFileName)
 }
