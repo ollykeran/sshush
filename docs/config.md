@@ -112,7 +112,7 @@ flowchart TD
     cliPreRun[PersistentPreRunE]
     cliResolve[ResolveConfigPath]
     cliLoad[LoadMergedConfig]
-    cliEnv[env.Config set]
+    cliEnv[config stored on cmd.Context]
     cliStart --> cliPreRun --> cliResolve --> cliLoad --> cliEnv
   end
   subgraph daemonFlow [Daemon]

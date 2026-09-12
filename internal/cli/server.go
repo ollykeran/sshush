@@ -37,10 +37,11 @@ func newServerCommand() *cobra.Command {
 }
 
 func runServer(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	loaded := configFrom(cmd)
+	if loaded == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	cfg := *env.Config
+	cfg := *loaded
 	configPath, err := runtime.ResolveConfigPath(cmd)
 	if err != nil {
 		return fmt.Errorf("cli: resolve config path: %w", err)

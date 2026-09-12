@@ -17,12 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// env holds the merged config after file load and CLI overrides.
-// Set in root PersistentPreRunE.
-var env struct {
-	Config *config.Config
-}
-
 var errHelpShown = errors.New("")
 
 func isThemeCmd(cmd *cobra.Command) bool {
@@ -75,11 +69,12 @@ func commandMayStartDaemon(cmd *cobra.Command) bool {
 }
 
 func printAgentModeIndicator(cmd *cobra.Command) {
-	if env.Config == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
+	cfg := configFrom(cmd)
+	if cfg == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
 		return
 	}
-	configMode := env.Config.AgentBackendMode()
-	sock, sockErr := getSocketPath()
+	configMode := cfg.AgentBackendMode()
+	sock, sockErr := getSocketPath(cfg)
 	liveMode, liveOK := "", false
 	// Cold start / reload-before-socket: probing here falsely looks "unreachable".
 	skipProbe := sockErr != nil || sock == "" ||
@@ -120,7 +115,7 @@ func resolveNoColor(cmd *cobra.Command) {
 		style.SetPlainMode(true)
 		return
 	}
-	if env.Config != nil && env.Config.Theme.NoColor {
+	if cfg := configFrom(cmd); cfg != nil && cfg.Theme.NoColor {
 		style.SetPlainMode(true)
 	}
 }
@@ -174,9 +169,9 @@ func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config
 	return cfg, nil
 }
 
-// getSocketPath returns the agent socket path from config or SSH_AUTH_SOCK.
-func getSocketPath() (string, error) {
-	return runtime.ResolveSocketPath(env.Config)
+// getSocketPath returns the agent socket path from cfg or SSH_AUTH_SOCK. cfg may be nil.
+func getSocketPath(cfg *config.Config) (string, error) {
+	return runtime.ResolveSocketPath(cfg)
 }
 
 // NewRootCommand returns the root cobra command for sshush with flags and PersistentPreRunE wired.
@@ -194,7 +189,7 @@ func NewRootCommand() *cobra.Command {
 				os.Exit(0)
 			}
 			if isGenerateConfigCmd(cmd) {
-				env.Config = nil
+				withConfig(cmd, nil)
 				style.SetTheme(theme.DefaultTheme())
 				resolveNoColor(cmd)
 				return nil
@@ -203,7 +198,7 @@ func NewRootCommand() *cobra.Command {
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
 				if isThemeCmd(cmd) {
-					env.Config = nil
+					withConfig(cmd, nil)
 					style.SetTheme(theme.DefaultTheme())
 					resolveNoColor(cmd)
 					return nil
@@ -224,7 +219,9 @@ func NewRootCommand() *cobra.Command {
 				return fmt.Errorf("cli: load merged config: %w", err)
 			}
 
-			env.Config = &cfg
+			// Carried on the command's context rather than a package global, so
+			// command bodies and tests each see their own config.
+			withConfig(cmd, &cfg)
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))
 			resolveNoColor(cmd)
 			printAgentModeIndicator(cmd)

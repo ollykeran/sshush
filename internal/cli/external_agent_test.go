@@ -35,14 +35,12 @@ func cmdWithConfigFlag(path string) *cobra.Command {
 
 func TestExternalMode_StartErrorsWhenUnreachable(t *testing.T) {
 	// runStartDaemon only needs the config file to exist so ResolveConfigPath
-	// succeeds; the behavior itself is driven by env.Config.
+	// succeeds; the behavior itself is driven by the config carried on cmd.
 	configPath := writeConfigFile(t, "[agent]\nsocket_path = \"/tmp/placeholder.sock\"\nkey_paths = []\n")
 	cmd := cmdWithConfigFlag(configPath)
 
 	unreachableSocket := filepath.Join(t.TempDir(), "no-agent-here.sock")
-	orig := env.Config
-	env.Config = &config.Config{SocketPath: unreachableSocket, AgentType: config.AgentTypeExternal}
-	t.Cleanup(func() { env.Config = orig })
+	withConfig(cmd, &config.Config{SocketPath: unreachableSocket, AgentType: config.AgentTypeExternal})
 
 	pidDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", pidDir)
@@ -62,11 +60,8 @@ func TestExternalMode_StartErrorsWhenUnreachable(t *testing.T) {
 }
 
 func TestExternalMode_StopRefuses(t *testing.T) {
-	orig := env.Config
-	env.Config = &config.Config{AgentType: config.AgentTypeExternal}
-	t.Cleanup(func() { env.Config = orig })
-
-	cmd := &cobra.Command{}
+	t.Parallel()
+	cmd := newConfiguredCommand(&config.Config{AgentType: config.AgentTypeExternal})
 	err := runStop(cmd, nil)
 	if err == nil {
 		t.Fatal("expected runStop to refuse in external mode")
@@ -77,7 +72,7 @@ func TestExternalMode_StopRefuses(t *testing.T) {
 }
 
 func TestExternalMode_ReloadErrorsOnRestartNeeded(t *testing.T) {
-	// reload loads config fresh from disk (not env.Config), so the file itself
+	// reload loads config fresh from disk (not the config on cmd), so the file itself
 	// must declare external = true and point at an unreachable socket to force
 	// the needsRestart branch.
 	unreachableSocket := filepath.Join(t.TempDir(), "no-agent-here.sock")
@@ -137,11 +132,8 @@ func TestExternalMode_StartSucceedsViaSSHAuthSock(t *testing.T) {
 		t.Fatalf("SocketPath: got %q, want %q", cfg.SocketPath, socketPath)
 	}
 
-	orig := env.Config
-	env.Config = &cfg
-	t.Cleanup(func() { env.Config = orig })
-
 	cmd := cmdWithConfigFlag(configPath)
+	withConfig(cmd, &cfg)
 	if err := runStartDaemon(cmd); err != nil {
 		t.Fatalf("runStartDaemon: %v", err)
 	}
@@ -151,9 +143,7 @@ func TestExternalMode_StartErrorsWhenNoSocketFoundAtAll(t *testing.T) {
 	configPath := writeConfigFile(t, "[agent]\nsocket_path = \"/tmp/placeholder.sock\"\n")
 	cmd := cmdWithConfigFlag(configPath)
 
-	orig := env.Config
-	env.Config = &config.Config{AgentType: config.AgentTypeExternal} // SocketPath left empty
-	t.Cleanup(func() { env.Config = orig })
+	withConfig(cmd, &config.Config{AgentType: config.AgentTypeExternal}) // SocketPath left empty
 
 	pidDir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", pidDir)

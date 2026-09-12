@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -44,7 +45,7 @@ sshush edit my-key-comment --comment 'updated'`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEdit(args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
+			return runEdit(configFrom(cmd), args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
 		},
 	}
 	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
@@ -58,7 +59,7 @@ sshush edit my-key-comment --comment 'updated'`,
 // resolveEditPath resolves the argument to a private key filepath.
 // It tries: 1) explicit --filepath flag, 2) as a filepath, 3) as a fingerprint in the agent,
 // 4) as a comment in the agent, 5) fallback to config KeyPaths.
-func resolveEditPath(arg, filepathFlag string) (string, error) {
+func resolveEditPath(cfg *config.Config, arg, filepathFlag string) (string, error) {
 	// Explicit override takes highest priority
 	if strings.TrimSpace(filepathFlag) != "" {
 		path := utils.ExpandHomeDirectory(filepathFlag)
@@ -75,7 +76,7 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 	}
 
 	// Try as fingerprint or comment from the agent
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if session := openSessionIfRunning(err, socketPath); session != nil {
 		defer session.Close()
 		agentKeys, listErr := session.List()
@@ -92,7 +93,7 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 						return fp, nil
 					}
 					// Fallback: check config KeyPaths
-					if cfgPath := resolveFromConfig(fp); cfgPath != "" {
+					if cfgPath := resolveFromConfig(cfg, fp); cfgPath != "" {
 						return cfgPath, nil
 					}
 					return "", fmt.Errorf("fingerprint %s found in agent but source file path is unknown; use --filepath to specify", arg)
@@ -110,7 +111,7 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 						return fp, nil
 					}
 					// Fallback: check config KeyPaths
-					if cfgPath := resolveFromConfig(fp); cfgPath != "" {
+					if cfgPath := resolveFromConfig(cfg, fp); cfgPath != "" {
 						return cfgPath, nil
 					}
 					return "", fmt.Errorf("comment %q found in agent but source file path is unknown; use --filepath to specify", arg)
@@ -120,8 +121,8 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 	}
 
 	// Last resort: check config KeyPaths by parsing each file
-	if env.Config != nil {
-		for _, cfgPath := range env.Config.KeyPaths {
+	if cfg != nil {
+		for _, cfgPath := range cfg.KeyPaths {
 			pub, _, _, parseErr := agent.ParseKeyFromPath(cfgPath)
 			if parseErr != nil {
 				continue
@@ -136,11 +137,11 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 }
 
 // resolveFromConfig tries to find a key file in the config KeyPaths by fingerprint.
-func resolveFromConfig(fingerprint string) string {
-	if env.Config == nil {
+func resolveFromConfig(cfg *config.Config, fingerprint string) string {
+	if cfg == nil {
 		return ""
 	}
-	for _, cfgPath := range env.Config.KeyPaths {
+	for _, cfgPath := range cfg.KeyPaths {
 		pub, _, _, err := agent.ParseKeyFromPath(cfgPath)
 		if err != nil {
 			continue
@@ -167,8 +168,8 @@ func openSessionIfRunning(sockErr error, socketPath string) *agent.Session {
 	return session
 }
 
-func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
-	privateKeyPath, err := resolveEditPath(arg, filepathFlag)
+func runEdit(cfg *config.Config, arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
+	privateKeyPath, err := resolveEditPath(cfg, arg, filepathFlag)
 	if err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
@@ -253,7 +254,7 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 	// Reload the key in the agent if it is loaded, then persist the comment in
 	// the vault when the agent uses the vault backend, so the on-disk key file
 	// and the vault stay in sync. One session covers both.
-	socketPath, sockErr := getSocketPath()
+	socketPath, sockErr := getSocketPath(cfg)
 	if session := openSessionIfRunning(sockErr, socketPath); session != nil {
 		defer session.Close()
 		result := editcomment.SyncAgent(session, fingerprint, privateKeyPath, comment)

@@ -22,7 +22,7 @@ func newStopCommand() *cobra.Command {
 }
 
 func runStop(cmd *cobra.Command, _ []string) error {
-	if env.Config != nil && env.Config.IsExternal() {
+	if cfg := configFrom(cmd); cfg != nil && cfg.IsExternal() {
 		return style.NewOutput().
 			Error("[agent].type = \"external\": sshush does not manage this agent and will not stop it").
 			AsError()

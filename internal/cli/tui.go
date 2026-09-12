@@ -25,7 +25,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	zone.NewGlobal()
 	defer zone.Close()
 
-	socketPath, _ := getSocketPath()
+	cfg := configFrom(cmd)
+	socketPath, _ := getSocketPath(cfg)
 	configPath := ""
 	if p, err := runtime.ResolveConfigPath(cmd); err == nil {
 		configPath = p
@@ -35,7 +36,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		th = config.LoadThemeFromPath(configPath)
 	}
 
-	mode, vaultPath := effectiveTUIMode(env.Config)
+	mode, vaultPath := effectiveTUIMode(cfg)
 	m := tui.NewTUI(configPath, socketPath, th, mode, vaultPath)
 	_, err := tea.NewProgram(m).Run()
 	if err != nil {

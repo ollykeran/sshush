@@ -117,7 +117,7 @@ func TestAgentIntegration_EditThenAdd(t *testing.T) {
 		t.Fatalf("runCreate: %v", err)
 	}
 
-	if err := runEdit(keyPath, "", "after-edit", true, false, "", ""); err != nil {
+	if err := runEdit(nil, keyPath, "", "after-edit", true, false, "", ""); err != nil {
 		t.Fatalf("runEdit: %v", err)
 	}
 
