@@ -11,7 +11,11 @@ demo tape="all": (build "dev")
     host_arch="$(go env GOARCH)"
     export PATH="$(pwd)/{{ build_dir }}/${host_os}-${host_arch}:$PATH"
     record() {
-        eval "$(demos/fixture.sh)"
+        # Capture before eval: eval "$(demos/fixture.sh)" takes eval's status, so a
+        # fixture that failed would go unnoticed and vhs would record without it.
+        local fixture
+        fixture="$(demos/fixture.sh)"
+        eval "$fixture"
         vhs "demos/$1.tape"
     }
     case "{{ tape }}" in
