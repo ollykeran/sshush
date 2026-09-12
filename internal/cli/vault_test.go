@@ -5,19 +5,15 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
-	"github.com/spf13/cobra"
 )
 
 func TestUnlockRecovery_RequiresVaultAgent(t *testing.T) {
+	t.Parallel()
 	// startTestAgent is a plain keyring (keys-mode), same shape as a real
 	// foreign ssh-agent: no vault extensions supported.
 	socketPath, _ := startTestAgent(t)
 
-	orig := env.Config
-	env.Config = &config.Config{SocketPath: socketPath}
-	t.Cleanup(func() { env.Config = orig })
-
-	cmd := &cobra.Command{}
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	err := runUnlockRecovery(cmd, nil)
 	if err == nil {
 		t.Fatal("expected runUnlockRecovery to error against a non-vault agent")

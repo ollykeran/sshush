@@ -29,7 +29,8 @@ func newAddCommand() *cobra.Command {
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	paths := args
@@ -37,7 +38,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		cmd.Usage()
 		return style.NewOutput().Error("at least one key path is required").AsError()
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
@@ -58,7 +59,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	for _, arg := range paths {
 		path := utils.ExpandHomeDirectory(arg)
 		if _, err := os.Stat(path); err != nil {
-			resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
+			resolved, resolveErr := resolveKeyPathByComment(arg, cfg)
 			if resolveErr != nil {
 				return resolveErr
 			}

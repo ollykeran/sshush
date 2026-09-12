@@ -23,14 +23,15 @@ func newRemoveCommand() *cobra.Command {
 }
 
 func runRemove(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	if len(args) == 0 {
 		cmd.Usage()
 		return nil
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}

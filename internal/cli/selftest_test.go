@@ -13,6 +13,7 @@ import (
 )
 
 func TestRunSelftest_allChecksPass(t *testing.T) {
+	t.Parallel()
 	socketPath, agentClient := startTestAgent(t)
 
 	dir := t.TempDir()
@@ -24,44 +25,32 @@ func TestRunSelftest_allChecksPass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest: %v", err)
 	}
 }
 
 func TestRunSelftest_socketMissing(t *testing.T) {
-	env.Config = &config.Config{SocketPath: "/tmp/nonexistent_sshush_test.sock"}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	t.Parallel()
+	cmd := newConfiguredCommand(&config.Config{SocketPath: filepath.Join(t.TempDir(), "nonexistent.sock")})
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest with missing socket: %v", err)
 	}
 }
 
 func TestRunSelftest_noKeysLoaded(t *testing.T) {
+	t.Parallel()
 	socketPath, _ := startTestAgent(t)
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest with empty agent: %v", err)
 	}
 }
 
 func TestRunSelftest_multipleKeys(t *testing.T) {
+	t.Parallel()
 	socketPath, agentClient := startTestAgent(t)
 
 	dir := t.TempDir()
@@ -81,12 +70,7 @@ func TestRunSelftest_multipleKeys(t *testing.T) {
 		}
 	}
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest with multiple keys: %v", err)
 	}
@@ -108,13 +92,8 @@ func TestSelftestCommand_rejectsArgs(t *testing.T) {
 }
 
 func TestSelftestCommand_noConfig(t *testing.T) {
-	// Not parallel — modifies env.Config.
-	orig := env.Config
-	env.Config = nil
-	t.Cleanup(func() { env.Config = orig })
-
+	t.Parallel()
 	cmd := &cobra.Command{Use: "selftest"}
-	cmd.SetArgs([]string{})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	err := runSelftest(cmd, nil)
@@ -127,6 +106,7 @@ func TestSelftestCommand_noConfig(t *testing.T) {
 }
 
 func TestRunSelftest_sshAuthSockMatches(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv
 	socketPath, agentClient := startTestAgent(t)
 	t.Setenv("SSH_AUTH_SOCK", socketPath)
 
@@ -139,27 +119,18 @@ func TestRunSelftest_sshAuthSockMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest: %v", err)
 	}
 }
 
 func TestRunSelftest_sshAuthSockMismatch(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv
 	socketPath, _ := startTestAgent(t)
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/different_agent.sock")
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	// Should still succeed — mismatch is a warning, not an error.
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest with mismatched SSH_AUTH_SOCK: %v", err)
@@ -167,15 +138,12 @@ func TestRunSelftest_sshAuthSockMismatch(t *testing.T) {
 }
 
 func TestRunSelftest_sshAuthSockUnset(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv
 	socketPath, _ := startTestAgent(t)
+	t.Setenv("SSH_AUTH_SOCK", "") // restores the original value after the test
 	os.Unsetenv("SSH_AUTH_SOCK")
 
-	env.Config = &config.Config{SocketPath: socketPath}
-	defer func() { env.Config = nil }()
-
-	cmd := &cobra.Command{}
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
 	// Should still succeed — unset is a warning, not an error.
 	if err := runSelftest(cmd, nil); err != nil {
 		t.Fatalf("runSelftest with unset SSH_AUTH_SOCK: %v", err)
