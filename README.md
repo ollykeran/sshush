@@ -37,7 +37,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
-- **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell to authorized keys. See [Config Reference](docs/config.md) `[server]` section.
+- **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
 - **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
 - **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 
@@ -54,7 +54,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 | `sshush validate` | validate and inspect a key file (private or public) |
 | `sshush selftest` | test agent connectivity (env, socket, list, sign) |
 | `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
-| `sshush server` | optional TCP SSH server |
+| `sshush server` / `server status` / `server logs` | optional TCP SSH server, off until enabled in config, and its log |
 | `sshush theme` / `completion` / `version` | theming, shell completion, build info |
 
 For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.

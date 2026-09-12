@@ -25,13 +25,14 @@ func newServerCommand() *cobra.Command {
 		Use:     "server",
 		Aliases: []string{"serve"},
 		Short:   "Start the SSH server daemon",
-		Long:    "Starts the TCP SSH server daemon (separate process) on the port set in [server].listen_port. For agent-backed auth, start the agent first with 'sshush start'.",
+		Long:    "Starts the TCP SSH server daemon (separate process) on the port set in [server].listen_port. The server is off until that is set in config — enabling it is a deliberate edit, and until then this warns and names the config lines to change. For agent-backed auth, start the agent first with 'sshush start'.",
 		Args:    argsNoneOrHelp,
 		RunE:    runServer,
 	}
 	cmd.Flags().StringP("config", "c", "", "path to config file")
 	cmd.AddCommand(newServerStatusCommand())
 	cmd.AddCommand(newServerStopCommand())
+	cmd.AddCommand(newServerLogsCommand())
 	return cmd
 }
 
@@ -40,20 +41,17 @@ func runServer(cmd *cobra.Command, _ []string) error {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	cfg := *env.Config
+	configPath, err := runtime.ResolveConfigPath(cmd)
+	if err != nil {
+		return fmt.Errorf("cli: resolve config path: %w", err)
+	}
 	if cfg.ServerListenPort <= 0 {
-		return style.NewOutput().
-			Error("SSH server is not enabled.").
-			Info("Set [server].listen_port in config (e.g. listen_port = 2222) then run 'sshush server'.").
-			AsError()
+		return serverNotEnabled(configPath).AsError()
 	}
 	// The server asks the agent per connection, so it can start without one: it
 	// authorizes nobody until the agent is up, and needs no restart once it is.
 	// Worth saying out loud, though, since nothing else would explain the refusals.
 	agentDown := cfg.ServerAuthorizedKeys == "" && !sshushd.CheckAlreadyRunning(cfg.SocketPath)
-	configPath, err := runtime.ResolveConfigPath(cmd)
-	if err != nil {
-		return fmt.Errorf("cli: resolve config path: %w", err)
-	}
 	if err := sshushd.StartServerDaemon(configPath, int(cfg.ServerListenPort)); err != nil {
 		if err.Error() == "sshushd: server already running on port "+fmt.Sprint(cfg.ServerListenPort) {
 			style.NewOutput().Success("SSH server is already running on port " + fmt.Sprint(cfg.ServerListenPort)).PrintErr()
@@ -102,10 +100,7 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cli: load merged config: %w", err)
 	}
 	if cfg.ServerListenPort <= 0 {
-		style.NewOutput().
-			Error("SSH server is not enabled ([server].listen_port not set or 0)").
-			Info("Set [server].listen_port in config (e.g. listen_port = 2222) then run 'sshush server'.").
-			Print()
+		serverNotEnabled(configPath).Print()
 		return nil
 	}
 
@@ -147,6 +142,38 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 		out.Add(statusLabel("fingerprint") + style.Text(fingerprint))
 	} else {
 		out.Add(statusLabel("host key") + style.Warn(utils.DisplayPath(hostKeyPath)+" (created on first start)"))
+	}
+
+	if cfg.ServerShell != "" {
+		if path, err := server.ResolveShell(cfg.ServerShell); err == nil {
+			out.Add(statusLabel("shell") + style.Success(utils.DisplayPath(path)+"  ✓"))
+		} else {
+			out.Add(statusLabel("shell") + style.Err(cfg.ServerShell+" not found  ✗"))
+		}
+	}
+
+	switch {
+	case !cfg.ServerPasswordAuth:
+		out.Add(statusLabel("password") + style.Text("off (public keys only)"))
+	case cfg.VaultPath == "":
+		out.Add(statusLabel("password") + style.Err("on, but [vault].vault_path is not set  ✗"))
+	default:
+		out.Add(statusLabel("password") + style.Success("vault passphrase "+utils.DisplayPath(cfg.VaultPath)+"  ✓"))
+	}
+
+	logPath := platform.ServerLogPath(cfg.ServerLogFile)
+	logLevel := ""
+	if level, err := server.ParseLogLevel(cfg.ServerLogLevel); err != nil {
+		out.Add(statusLabel("log") + style.Err("[server]."+err.Error()+"  ✗"))
+	} else {
+		if level < 0 {
+			logLevel = " (debug)"
+		}
+		if _, err := os.Stat(logPath); err == nil {
+			out.Add(statusLabel("log") + style.Success(utils.DisplayPath(logPath)+logLevel+"  ✓"))
+		} else {
+			out.Add(statusLabel("log") + style.Warn(utils.DisplayPath(logPath)+logLevel+" (created on first start)"))
+		}
 	}
 
 	if processRunning {

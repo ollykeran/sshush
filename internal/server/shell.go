@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,29 +27,104 @@ const (
 	shellKillGrace = 2 * time.Second
 )
 
-// handleSession runs an interactive shell on a pty for the duration of the SSH session.
-// Only PTY sessions are served: a client asking for anything else (a remote command,
-// scp, a subsystem) is rejected rather than silently given a shell.
+// handleSession runs what the client asked for — an interactive shell, or a remote
+// command (`ssh host <command>`) — for the duration of the SSH session. It runs on a
+// pty when the client requested one (a terminal login, or `ssh -t host <command>`)
+// and over plain pipes otherwise. Subsystems such as sftp never reach here.
 func (s *Server) handleSession(sess gliderlabs.Session) {
-	ptyReq, winCh, isPty := sess.Pty()
-	if !isPty {
-		_, _ = io.WriteString(sess.Stderr(), "sshush: only interactive PTY sessions are supported\n")
-		_ = sess.Exit(1)
-		return
+	s.activeSessions.Add(1)
+	defer s.activeSessions.Add(-1)
+
+	shell := loginShell(s.shellPath)
+	rawCommand := sess.RawCommand()
+	cmd := sessionCommand(shell, rawCommand)
+	cmd.Env = sessionEnv(os.Environ(), sess.RemoteAddr(), sess.LocalAddr(), shell)
+
+	// Logged: that a session started, what kind, and on which terminal. What it
+	// runs is only logged at debug, since commands can carry things nobody meant
+	// to leave in a log.
+	who := []any{"user", sess.User(), "remote", remoteOf(sess.Context())}
+	kind := "shell"
+	if rawCommand != "" {
+		kind = "command"
+	}
+	started := func(tty string) {
+		attrs := append([]any{"kind", kind}, who...)
+		if tty != "" {
+			attrs = append(attrs, "tty", tty)
+		}
+		s.logger().Info("session started", attrs...)
+		details := append([]any{"shell", shell}, who...)
+		if rawCommand != "" {
+			details = append(details, "command", rawCommand)
+		}
+		s.logger().Debug("session details", details...)
 	}
 
-	cmd := exec.Command(loginShell())
-	cmd.Env = append(os.Environ(), "TERM="+ptyReq.Term)
-
-	// Size the pty before the shell starts, not on the first resize event, or it
-	// runs at the wrong size until the client's terminal happens to change. Every
-	// size after this one arrives on winCh.
-	ptyFile, err := pty.StartWithSize(cmd, winsize(ptyReq.Window))
+	var code int
+	var err error
+	if ptyReq, winCh, isPty := sess.Pty(); isPty {
+		code, err = runOnPty(sess, cmd, ptyReq, winCh, started)
+	} else {
+		code, err = runOnPipes(sess, cmd, started)
+	}
 	if err != nil {
+		s.logger().Error("session failed to start", append(who, "shell", shell, "err", err)...)
 		_, _ = io.WriteString(sess.Stderr(), fmt.Sprintf("sshush: start shell: %v\n", err))
 		_ = sess.Exit(1)
 		return
 	}
+	s.logger().Info("session closed", append(who, "exit_status", code)...)
+	_ = sess.Exit(code)
+}
+
+// sessionCommand builds the process a session runs, as sshd does. With no command
+// it is the shell as a login shell: argv[0] prefixed with "-", which is what tells
+// a shell to read ~/.profile and friends the way a terminal login does. With one it
+// is the shell running it via `shell -c`, rather than the command exec'd as argv, so
+// `ssh host 'ls | wc -l'` gets the pipes, globbing and quoting whoever typed it was
+// counting on.
+func sessionCommand(shell, rawCommand string) *exec.Cmd {
+	if rawCommand == "" {
+		cmd := exec.Command(shell)
+		cmd.Args[0] = "-" + filepath.Base(shell)
+		return cmd
+	}
+	return exec.Command(shell, "-c", rawCommand)
+}
+
+// runOnPty runs cmd on a pty sized from the client's request, relaying resizes,
+// and returns its exit status once it has ended. started is called with the
+// terminal's name once cmd is running.
+func runOnPty(sess gliderlabs.Session, cmd *exec.Cmd, ptyReq gliderlabs.Pty, winCh <-chan gliderlabs.Window, started func(tty string)) (int, error) {
+	ptyFile, tty, err := pty.Open()
+	if err != nil {
+		return 0, err
+	}
+	// Size the pty before the shell starts, not on the first resize event, or it
+	// runs at the wrong size until the client's terminal happens to change. Every
+	// size after this one arrives on winCh.
+	if err := pty.Setsize(ptyFile, winsize(ptyReq.Window)); err != nil {
+		_ = tty.Close()
+		_ = ptyFile.Close()
+		return 0, err
+	}
+
+	// Opening the pty here rather than through pty.StartWithSize is what lets
+	// SSH_TTY name it. The rest is what StartWithSize would do: the shell leads a
+	// new session, with the pty as its controlling terminal.
+	cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term, "SSH_TTY="+tty.Name())
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	err = cmd.Start()
+	// The shell has its own descriptors for the tty now. Holding this one open
+	// would keep the pty read below from ever seeing the shell hang up.
+	_ = tty.Close()
+	if err != nil {
+		_ = ptyFile.Close()
+		return 0, err
+	}
+	started(tty.Name())
 
 	// reaped closes once the shell has been waited on, which is what tells the
 	// two goroutines below that the session is over.
@@ -71,15 +147,11 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 		}
 	}()
 
-	// A client that vanishes must not leave a shell behind. Watching the session
-	// context covers the case where the shell never notices the pty is gone.
+	// Watching the session context covers the case where the shell never notices
+	// the pty is gone.
 	go func() {
 		defer watchers.Done()
-		select {
-		case <-sess.Context().Done():
-			terminateShell(cmd, reaped)
-		case <-reaped:
-		}
+		hangUpOnDisconnect(sess, cmd, reaped)
 	}()
 
 	// The client-to-shell copy does not end on its own: sess only reaches EOF once
@@ -95,8 +167,82 @@ func (s *Server) handleSession(sess gliderlabs.Session) {
 	close(reaped)
 	watchers.Wait()
 	_ = ptyFile.Close()
+	return exitCode(cmd.ProcessState), nil
+}
 
-	_ = sess.Exit(exitCode(cmd.ProcessState))
+// runOnPipes runs cmd with its stdin, stdout and stderr relayed over the session,
+// as a remote command without a pty is, and returns its exit status once it has
+// ended. started is called, with no terminal to name, once cmd is running.
+func runOnPipes(sess gliderlabs.Session, cmd *exec.Cmd, started func(tty string)) (int, error) {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return 0, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return 0, err
+	}
+	// A process group of its own, which a pty would otherwise have given it, so a
+	// disconnect can signal the command and whatever it started together.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	started("")
+
+	reaped := make(chan struct{})
+	var watcher sync.WaitGroup
+	watcher.Add(1)
+	go func() {
+		defer watcher.Done()
+		hangUpOnDisconnect(sess, cmd, reaped)
+	}()
+
+	// Client input is relayed but never waited on: a command that has finished ends
+	// the session whether or not the client closes its stdin, which `ssh host
+	// echo hi` typed at a terminal never does.
+	go func() {
+		_, _ = io.Copy(stdin, sess)
+		_ = stdin.Close()
+	}()
+
+	// Output is what the session waits on instead. It ends once the command and
+	// everything that inherited its output are done, as with sshd. Wait closes the
+	// read ends, so it must not run before the copies finish — unless the client
+	// has gone, when nobody is left to read them and that close is what releases
+	// the copies.
+	outputDone := make(chan struct{})
+	go func() {
+		var copies sync.WaitGroup
+		copies.Add(2)
+		go func() { defer copies.Done(); _, _ = io.Copy(sess, stdout) }()
+		go func() { defer copies.Done(); _, _ = io.Copy(sess.Stderr(), stderr) }()
+		copies.Wait()
+		close(outputDone)
+	}()
+	select {
+	case <-outputDone:
+	case <-sess.Context().Done():
+	}
+
+	_ = cmd.Wait()
+	close(reaped)
+	watcher.Wait()
+	return exitCode(cmd.ProcessState), nil
+}
+
+// hangUpOnDisconnect terminates cmd if the client goes away before cmd has been
+// reaped. A client that vanishes must not leave anything it started behind.
+func hangUpOnDisconnect(sess gliderlabs.Session, cmd *exec.Cmd, reaped <-chan struct{}) {
+	select {
+	case <-sess.Context().Done():
+		terminateShell(cmd, reaped)
+	case <-reaped:
+	}
 }
 
 // terminateShell sends SIGHUP to the shell's process group and, if the shell is
@@ -154,9 +300,20 @@ func dimension(requested, fallback int) uint16 {
 	}
 }
 
-// loginShell picks the shell to run: whatever $SHELL the daemon inherited, then
-// bash, then sh. There is deliberately no config knob for it yet.
-func loginShell() string {
+// ResolveShell finds a configured shell the way a command line would — a path as
+// given, a bare name on PATH — and returns its path. Checking it before any
+// session needs it is what turns a typo into a startup error rather than a
+// failure served to every client.
+func ResolveShell(name string) (string, error) {
+	return exec.LookPath(name)
+}
+
+// loginShell picks the shell to run: the configured one if there is one, then
+// whatever $SHELL the daemon inherited, then bash, then sh.
+func loginShell(configured string) string {
+	if configured != "" {
+		return configured
+	}
 	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
 		return shell
 	}

@@ -252,17 +252,10 @@ func (a *VaultAgent) Unlock(passphrase []byte) error {
 	if a.masterKey != nil {
 		return errAgentNotLocked
 	}
-	meta := a.store.GetMetadata()
-	if meta == nil || len(meta.Salt) == 0 || len(meta.Canary) == 0 {
-		return errWrongPassphrase
+	masterKey, err := masterKeyFromPassphrase(a.store.GetMetadata(), passphrase)
+	if err != nil {
+		return err
 	}
-	masterKey := kdf.DeriveKey(passphrase, meta.Salt)
-	canaryPlain, err := decryptBlob(masterKey, meta.Canary)
-	if err != nil || !kdf.ConstantTimeCompare(canaryPlain, []byte(canaryPlaintext)) {
-		wipe(masterKey)
-		return errWrongPassphrase
-	}
-	wipe(canaryPlain)
 	if a.masterKey != nil {
 		wipe(a.masterKey)
 	}
