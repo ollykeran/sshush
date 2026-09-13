@@ -21,11 +21,23 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go build -o /dev/null ./cmd/sshush
+      - name: build sshush
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-      - run: go build -o /dev/null ./cmd/sshushd
+        run: |
+          for i in 1 2 3; do
+            go build -o /dev/null ./cmd/sshush && exit 0
+            echo "build failed (attempt $i), retrying..."
+          done
+          exit 1
+      - name: build sshushd
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+        run: |
+          for i in 1 2 3; do
+            go build -o /dev/null ./cmd/sshushd && exit 0
+            echo "build failed (attempt $i), retrying..."
+          done
+          exit 1

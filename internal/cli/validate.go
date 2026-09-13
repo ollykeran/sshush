@@ -21,7 +21,7 @@ func newValidateCommand() *cobra.Command {
 		Short:   "Validate and inspect a key file",
 		Example: "sshush validate ~/.ssh/id_ed25519\nsshush validate ~/.ssh/id_ed25519.pub",
 		Long:    "Validate an OpenSSH key file (private or public) and display its properties. When given a public key, looks for the matching private key in the same directory.",
-		Args: nil,
+		Args:    nil,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				cmd.Usage()

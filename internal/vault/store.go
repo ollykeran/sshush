@@ -152,14 +152,18 @@ func (s *VaultStore) SetMetadata(m *VaultMetadata) {
 	s.metadata = m
 }
 
-// ListIdentitiesForAgent returns identities that have autoload true or fingerprint in sessionSet.
+// ListIdentitiesForAgent returns identities that have autoload true (and are not
+// session-hidden via hiddenSet) or whose fingerprint is in sessionSet.
 // Returns public_key and comment only (for List() response).
-func (s *VaultStore) ListIdentitiesForAgent(sessionSet map[string]struct{}) ([]identityRow, error) {
+func (s *VaultStore) ListIdentitiesForAgent(sessionSet, hiddenSet map[string]struct{}) ([]identityRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []identityRow
 	for _, id := range s.identities {
 		if id.Autoload {
+			if _, hidden := hiddenSet[id.Fingerprint]; hidden {
+				continue
+			}
 			out = append(out, identityRow{id.PublicKey, id.Comment})
 			continue
 		}

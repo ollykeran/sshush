@@ -25,9 +25,9 @@ func TestValidHex(t *testing.T) {
 
 func TestHexToRGBA(t *testing.T) {
 	tests := []struct {
-		hex   string
+		hex     string
 		r, g, b uint8
-		ok    bool
+		ok      bool
 	}{
 		{"#000000", 0, 0, 0, true},
 		{"#ffffff", 255, 255, 255, true},

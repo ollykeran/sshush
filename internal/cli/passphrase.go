@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ollykeran/sshush/internal/style"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/ollykeran/sshush/internal/style"
 	"golang.org/x/term"
 )
 

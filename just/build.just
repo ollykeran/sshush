@@ -4,11 +4,22 @@ build arch="": deps
     set -euo pipefail
     build_local() {
       local os="$1" goarch="$2" out_dir="$3"
+      shift 3
       mkdir -p "$out_dir"
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd" ./cmd/sshushd
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush" ./cmd/sshush
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd" ./cmd/sshushd
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush" ./cmd/sshush
     }
     case "{{ arch }}" in
+      dev)
+        # Host build with VCS auto-versioning disabled, so ldflags Version
+        # (default "dev") sticks instead of being overwritten by Go's git
+        # pseudo-version stamping. Use this for local runs/demos where
+        # `sshush selftest`'s release-checksum check should stay a no-op.
+        host_os="$(go env GOOS)"
+        host_arch="$(go env GOARCH)"
+        echo "Building ${host_os}/${host_arch} (host, dev)..."
+        build_local "$host_os" "$host_arch" "{{ build_dir }}/${host_os}-${host_arch}" -buildvcs=false
+        ;;
       linux)
         echo "Building linux/amd64..."
         build_local linux amd64 "{{ build_dir }}/linux-amd64"
@@ -36,12 +47,14 @@ build arch="": deps
         build_local darwin amd64 "{{ build_dir }}/darwin-amd64"
         ;;
       "")
-        echo "Building linux/amd64 (default)..."
-        build_local linux amd64 "{{ build_dir }}/linux-amd64"
+        host_os="$(go env GOOS)"
+        host_arch="$(go env GOARCH)"
+        echo "Building ${host_os}/${host_arch} (host, default)..."
+        build_local "$host_os" "$host_arch" "{{ build_dir }}/${host_os}-${host_arch}"
         ;;
       *)
         echo "Unknown arch: {{ arch }}" >&2
-        echo "Usage: just build [linux|darwin|darwin-arm64|darwin-amd64|darwin-all|all]" >&2
+        echo "Usage: just build [linux|darwin|darwin-arm64|darwin-amd64|darwin-all|all|dev]" >&2
         exit 1
         ;;
     esac

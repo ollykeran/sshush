@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
@@ -15,12 +16,6 @@ import (
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
 )
-
-// env holds the merged config after file load and CLI overrides.
-// Set in root PersistentPreRunE.
-var env struct {
-	Config *config.Config
-}
 
 var errHelpShown = errors.New("")
 
@@ -74,17 +69,23 @@ func commandMayStartDaemon(cmd *cobra.Command) bool {
 }
 
 func printAgentModeIndicator(cmd *cobra.Command) {
-	if env.Config == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
+	cfg := configFrom(cmd)
+	if cfg == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
 		return
 	}
-	configMode := env.Config.AgentBackendMode()
-	sock, sockErr := getSocketPath()
+	configMode := cfg.AgentBackendMode()
+	sock, sockErr := getSocketPath(cfg)
 	liveMode, liveOK := "", false
 	// Cold start / reload-before-socket: probing here falsely looks "unreachable".
 	skipProbe := sockErr != nil || sock == "" ||
 		(commandMayStartDaemon(cmd) && !sshushd.CheckAlreadyRunning(sock))
 	if !skipProbe {
-		liveMode, liveOK = agent.LiveBackendMode(sock)
+		if session, err := agent.Open(sock); err == nil {
+			if backend, err := session.Backend(); err == nil {
+				liveMode, liveOK = backend.Mode, true
+			}
+			_ = session.Close()
+		}
 	}
 	line := style.AgentModeIndicatorLine(configMode, liveMode, liveOK, skipProbe && sockErr == nil && sock != "")
 	fmt.Fprintln(os.Stderr, line)
@@ -114,7 +115,7 @@ func resolveNoColor(cmd *cobra.Command) {
 		style.SetPlainMode(true)
 		return
 	}
-	if env.Config != nil && env.Config.Theme.NoColor {
+	if cfg := configFrom(cmd); cfg != nil && cfg.Theme.NoColor {
 		style.SetPlainMode(true)
 	}
 }
@@ -158,12 +159,19 @@ func LoadMergedConfig(configPath string, overrides LoadOverrides) (config.Config
 			cfg.KeyPaths = append(cfg.KeyPaths, utils.ExpandHomeDirectory(p))
 		}
 	}
+	// External agents (real ssh-agent, 1Password, etc.) often listen on a
+	// path that changes every launch (e.g. ssh-agent's /tmp/ssh-XXXXXX/agent.NNNN),
+	// so [agent].socket_path is optional for type = "external" — fall back to
+	// whatever SSH_AUTH_SOCK currently points at, resolved fresh on every run.
+	if cfg.IsExternal() && cfg.SocketPath == "" {
+		cfg.SocketPath = strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK"))
+	}
 	return cfg, nil
 }
 
-// getSocketPath returns the agent socket path from config or SSH_AUTH_SOCK.
-func getSocketPath() (string, error) {
-	return runtime.ResolveSocketPath(env.Config)
+// getSocketPath returns the agent socket path from cfg or SSH_AUTH_SOCK. cfg may be nil.
+func getSocketPath(cfg *config.Config) (string, error) {
+	return runtime.ResolveSocketPath(cfg)
 }
 
 // NewRootCommand returns the root cobra command for sshush with flags and PersistentPreRunE wired.
@@ -181,7 +189,7 @@ func NewRootCommand() *cobra.Command {
 				os.Exit(0)
 			}
 			if isGenerateConfigCmd(cmd) {
-				env.Config = nil
+				withConfig(cmd, nil)
 				style.SetTheme(theme.DefaultTheme())
 				resolveNoColor(cmd)
 				return nil
@@ -190,7 +198,7 @@ func NewRootCommand() *cobra.Command {
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
 				if isThemeCmd(cmd) {
-					env.Config = nil
+					withConfig(cmd, nil)
 					style.SetTheme(theme.DefaultTheme())
 					resolveNoColor(cmd)
 					return nil
@@ -206,12 +214,14 @@ func NewRootCommand() *cobra.Command {
 				}
 			}
 
-		cfg, err := LoadMergedConfig(configPath, overrides)
-		if err != nil {
-			return fmt.Errorf("cli: load merged config: %w", err)
-		}
+			cfg, err := LoadMergedConfig(configPath, overrides)
+			if err != nil {
+				return fmt.Errorf("cli: load merged config: %w", err)
+			}
 
-			env.Config = &cfg
+			// Carried on the command's context rather than a package global, so
+			// command bodies and tests each see their own config.
+			withConfig(cmd, &cfg)
 			style.SetTheme(config.ResolveThemeFromConfig(cfg))
 			resolveNoColor(cmd)
 			printAgentModeIndicator(cmd)

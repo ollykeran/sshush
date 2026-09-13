@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone"
+	"github.com/ollykeran/sshush/internal/kdf"
 	"github.com/ollykeran/sshush/internal/theme"
 )
 
@@ -18,6 +19,7 @@ func (m footerTestModel) View() tea.View                      { return tea.NewVi
 
 func TestMain(m *testing.M) {
 	zone.NewGlobal()
+	kdf.SetInsecureFastParamsForTesting()
 	os.Exit(m.Run())
 }
 
@@ -93,14 +95,16 @@ func TestAgentScreenVaultLockedStatus(t *testing.T) {
 
 	updated, cmd := screen.Update(vaultStatusMsg{mode: "vault", reachable: true, locked: true})
 	sc := updated.(*AgentScreen)
+	if cmd != nil {
+		if m := cmd(); m != nil {
+			sk.Update(m)
+		}
+	}
 	if !sc.vaultLocked || !sc.vaultKnown {
 		t.Fatalf("vaultLocked=%v vaultKnown=%v, want true/true", sc.vaultLocked, sc.vaultKnown)
 	}
 	if sc.status != "vault locked - press u to unlock" || !sc.statusErr {
 		t.Errorf("status=%q err=%v, want locked warning", sc.status, sc.statusErr)
-	}
-	if cmd != nil {
-		t.Errorf("unexpected cmd: %v", cmd)
 	}
 	if !sc.sk.vaultLocked || !sc.sk.vaultKnown || sc.sk.vaultMode != "vault" {
 		t.Errorf("skeleton vault state not synced: %+v", sc.sk)
@@ -161,8 +165,13 @@ func TestAgentScreenVaultPollGeneration(t *testing.T) {
 	sc = updated.(*AgentScreen)
 
 	// Daemon stop clears vault state and bumps the generation.
-	updated, _ = sc.Update(agentDaemonStateMsg{running: false})
+	updated, cmd = sc.Update(agentDaemonStateMsg{running: false})
 	sc = updated.(*AgentScreen)
+	if cmd != nil {
+		if m := cmd(); m != nil {
+			sk.Update(m)
+		}
+	}
 	if sc.vaultKnown || sc.vaultLocked {
 		t.Errorf("after stop vaultKnown=%v vaultLocked=%v, want false/false", sc.vaultKnown, sc.vaultLocked)
 	}

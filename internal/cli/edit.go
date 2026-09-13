@@ -4,22 +4,19 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
-	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
-	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 	ssh "golang.org/x/crypto/ssh"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newEditCommand() *cobra.Command {
@@ -33,9 +30,10 @@ func newEditCommand() *cobra.Command {
 		Use:   "edit <private-key-filepath | fingerprint | comment>",
 		Short: "Edit comment on a private key",
 		Long: "Edit an SSH private key comment, overwrite the key file or copy to a new file. " +
-			"The argument can be a filepath, a SHA256 fingerprint, or a comment to look up from the running agent.",
-		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'
-sshush edit ~/.ssh/id_rsa
+			"The argument can be a filepath, a SHA256 fingerprint, or a comment to look up from the running agent. " +
+			"Pass --comment for a quick one-line edit; omit it to open $EDITOR instead.",
+		Example: `sshush edit ~/.ssh/id_ed25519 --comment 'new-comment'  # fast: no editor
+sshush edit ~/.ssh/id_rsa                              # opens $EDITOR
 sshush edit SHA256:abc... --comment 'renamed'
 sshush edit my-key-comment --comment 'updated'`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -47,7 +45,7 @@ sshush edit my-key-comment --comment 'updated'`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEdit(args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
+			return runEdit(configFrom(cmd), args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
 		},
 	}
 	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
@@ -61,7 +59,7 @@ sshush edit my-key-comment --comment 'updated'`,
 // resolveEditPath resolves the argument to a private key filepath.
 // It tries: 1) explicit --filepath flag, 2) as a filepath, 3) as a fingerprint in the agent,
 // 4) as a comment in the agent, 5) fallback to config KeyPaths.
-func resolveEditPath(arg, filepathFlag string) (string, error) {
+func resolveEditPath(cfg *config.Config, arg, filepathFlag string) (string, error) {
 	// Explicit override takes highest priority
 	if strings.TrimSpace(filepathFlag) != "" {
 		path := utils.ExpandHomeDirectory(filepathFlag)
@@ -78,9 +76,10 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 	}
 
 	// Try as fingerprint or comment from the agent
-	socketPath, err := getSocketPath()
-	if err == nil && sshushd.CheckAlreadyRunning(socketPath) {
-		agentKeys, listErr := agent.ListKeysFromSocket(socketPath)
+	socketPath, err := getSocketPath(cfg)
+	if session := openSessionIfRunning(err, socketPath); session != nil {
+		defer session.Close()
+		agentKeys, listErr := session.List()
 		if listErr == nil {
 			// Try fingerprint match
 			for _, k := range agentKeys {
@@ -94,7 +93,7 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 						return fp, nil
 					}
 					// Fallback: check config KeyPaths
-					if cfgPath := resolveFromConfig(fp); cfgPath != "" {
+					if cfgPath := resolveFromConfig(cfg, fp); cfgPath != "" {
 						return cfgPath, nil
 					}
 					return "", fmt.Errorf("fingerprint %s found in agent but source file path is unknown; use --filepath to specify", arg)
@@ -112,7 +111,7 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 						return fp, nil
 					}
 					// Fallback: check config KeyPaths
-					if cfgPath := resolveFromConfig(fp); cfgPath != "" {
+					if cfgPath := resolveFromConfig(cfg, fp); cfgPath != "" {
 						return cfgPath, nil
 					}
 					return "", fmt.Errorf("comment %q found in agent but source file path is unknown; use --filepath to specify", arg)
@@ -122,8 +121,8 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 	}
 
 	// Last resort: check config KeyPaths by parsing each file
-	if env.Config != nil {
-		for _, cfgPath := range env.Config.KeyPaths {
+	if cfg != nil {
+		for _, cfgPath := range cfg.KeyPaths {
 			pub, _, _, parseErr := agent.ParseKeyFromPath(cfgPath)
 			if parseErr != nil {
 				continue
@@ -138,11 +137,11 @@ func resolveEditPath(arg, filepathFlag string) (string, error) {
 }
 
 // resolveFromConfig tries to find a key file in the config KeyPaths by fingerprint.
-func resolveFromConfig(fingerprint string) string {
-	if env.Config == nil {
+func resolveFromConfig(cfg *config.Config, fingerprint string) string {
+	if cfg == nil {
 		return ""
 	}
-	for _, cfgPath := range env.Config.KeyPaths {
+	for _, cfgPath := range cfg.KeyPaths {
 		pub, _, _, err := agent.ParseKeyFromPath(cfgPath)
 		if err != nil {
 			continue
@@ -155,84 +154,22 @@ func resolveFromConfig(fingerprint string) string {
 	return ""
 }
 
-// isKeyLoadedInAgent checks if a key with the given fingerprint is loaded in the running agent.
-func isKeyLoadedInAgent(socketPath, fingerprint string) bool {
-	if !sshushd.CheckAlreadyRunning(socketPath) {
-		return false
-	}
-	agentKeys, err := agent.ListKeysFromSocket(socketPath)
-	if err != nil {
-		return false
-	}
-	for _, k := range agentKeys {
-		pub, err := ssh.ParsePublicKey(k.Blob)
-		if err != nil {
-			continue
-		}
-		if ssh.FingerprintSHA256(pub) == fingerprint {
-			return true
-		}
-	}
-	return false
-}
-
-// reloadKeyInAgent removes the old key and re-adds it after an edit.
-// For vault mode, uses add-key-opts; for standard mode, removes and re-adds.
-func reloadKeyInAgent(socketPath, privateKeyPath, newComment string) error {
-	if !sshushd.CheckAlreadyRunning(socketPath) {
+// openSessionIfRunning opens a Session, returning nil when the socket path is
+// unusable or the agent is not reachable. Callers here treat an absent agent as
+// "nothing to do" rather than as a failure.
+func openSessionIfRunning(sockErr error, socketPath string) *agent.Session {
+	if sockErr != nil {
 		return nil
 	}
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return nil
 	}
-
-	// Find and remove the old key
-	agentKeys, err := agent.ListKeysFromSocket(socketPath)
-	if err != nil {
-		return fmt.Errorf("list keys: %w", err)
-	}
-	conn, dialErr := net.Dial("unix", socketPath)
-	if dialErr != nil {
-		return fmt.Errorf("connect to agent: %w", dialErr)
-	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
-
-	for _, k := range agentKeys {
-		pub, parseErr := ssh.ParsePublicKey(k.Blob)
-		if parseErr != nil {
-			continue
-		}
-		fp := ssh.FingerprintSHA256(pub)
-		existingFP := ""
-		if _, statErr := os.Stat(privateKeyPath); statErr == nil {
-			pubKey, _, _, err := agent.ParseKeyFromPath(privateKeyPath)
-			if err == nil {
-				existingFP = ssh.FingerprintSHA256(pubKey)
-			}
-		}
-		if existingFP != "" && fp == existingFP {
-			_ = client.Remove(pub)
-			break
-		}
-	}
-
-	// Re-add the key with updated comment
-	if mode == "vault" {
-		if err := vault.AddPrivateKeyFileToSocket(socketPath, privateKeyPath, true); err != nil {
-			return fmt.Errorf("reload key in vault: %w", err)
-		}
-	} else {
-		if err := agent.AddKeyToSocketFromPath(socketPath, privateKeyPath); err != nil {
-			return fmt.Errorf("reload key in agent: %w", err)
-		}
-	}
-	return nil
+	return session
 }
 
-func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
-	privateKeyPath, err := resolveEditPath(arg, filepathFlag)
+func runEdit(cfg *config.Config, arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag bool, outputFlag, filepathFlag string) error {
+	privateKeyPath, err := resolveEditPath(cfg, arg, filepathFlag)
 	if err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
@@ -314,26 +251,22 @@ func runEdit(arg, editorFlag, commentFlag string, commentFlagSet bool, copyFlag 
 		out.Info("source: " + utils.DisplayPath(privateKeyPath))
 	}
 
-	// Reload key in agent if it's loaded
-	socketPath, sockErr := getSocketPath()
-	if sockErr == nil && isKeyLoadedInAgent(socketPath, fingerprint) {
-		if reloadErr := reloadKeyInAgent(socketPath, privateKeyPath, comment); reloadErr != nil {
-			out.Warn("key updated on disk but agent reload failed: " + reloadErr.Error())
-		} else {
+	// Reload the key in the agent if it is loaded, then persist the comment in
+	// the vault when the agent uses the vault backend, so the on-disk key file
+	// and the vault stay in sync. One session covers both.
+	socketPath, sockErr := getSocketPath(cfg)
+	if session := openSessionIfRunning(sockErr, socketPath); session != nil {
+		defer session.Close()
+		result := editcomment.SyncAgent(session, fingerprint, privateKeyPath, comment)
+		if result.ReloadErr != nil {
+			out.Warn("key updated on disk but agent reload failed: " + result.ReloadErr.Error())
+		} else if result.Reloaded {
 			out.Success("reloaded key in agent")
 		}
-	}
-
-	// Persist the comment in the vault when the agent uses the vault backend, so the
-	// on-disk key file and the config stay in sync. Only existing identities are updated.
-	if sockErr == nil {
-		if mode, live := agent.LiveBackendMode(socketPath); live && mode == "vault" {
-			payload := vault.BuildSetCommentPayload(fingerprint, comment)
-			if _, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultSetComment, payload); extErr != nil {
-				out.Warn("key file updated on disk but vault comment not updated: " + extErr.Error())
-			} else {
-				out.Success("updated comment in vault")
-			}
+		if result.VaultErr != nil {
+			out.Warn("key file updated on disk but vault comment not updated: " + result.VaultErr.Error())
+		} else if result.VaultSynced {
+			out.Success("updated comment in vault")
 		}
 	}
 

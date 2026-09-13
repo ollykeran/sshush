@@ -2,7 +2,7 @@
 
 The sshush **vault** is an optional mode where SSH private keys live in a single JSON file on disk. Material is **encrypted at rest** with a **master key** derived from your passphrase. The running agent holds the master key only while **unlocked**; locking wipes it from memory. The `sshush vault` command group creates the vault file and manages identities (list, add, remove, autoload, session load, recovery unlock).
 
-This page matches the implementation in `internal/vault/` and `internal/cli/vault.go`. For config keys and high-level setup, see [Config Reference](config.md) (sections `[agent]`, `[vault]`, and **Vault**). If you are upgrading from a flat `config.toml`, read [Migration from flat TOML](config.md#migration-from-flat-toml-breaking) first.
+This page matches the implementation in `internal/vault/` (the store and the agent), `internal/vaultops/` (the operations themselves) and `internal/cli/vault.go` (the command surface). For config keys and high-level setup, see [Config Reference](config.md) (sections `[agent]`, `[vault]`, and **Vault**). If you are upgrading from a flat `config.toml`, read [Migration from flat TOML](config.md#migration-from-flat-toml-breaking) first.
 
 ## What the vault does
 
@@ -67,7 +67,8 @@ The vault agent speaks the standard SSH agent protocol over `SSH_AUTH_SOCK`, ser
 - **Remove of an unknown key**: `ssh-add -d` for a key the vault does not hold fails, like OpenSSH's SSH_AGENT_FAILURE.
 - **rsa-sha2 signing**: RSA identities sign with `rsa-sha2-256` / `rsa-sha2-512` when the client requests them (what `ssh` needs for modern RSA host/client auth). Non-RSA keys and unknown flag values are rejected.
 - **Add constraints**: `ssh-add -t` (lifetime) is honored — the identity expires and is dropped lazily on the next List/Sign. `ssh-add -c` (confirm), constraint extensions, and certificates are **rejected** rather than silently ignored, because the daemon has no confirm UI and cannot store cert identities.
-- **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `vault-locked`, `unlock-recovery`, `add-key-opts`, `vault-session-load`, `vault-set-autoload`.
+- **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `sshush-op`.
+- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
 
 ### Lock: wipe vs OpenSSH soft-lock
 
@@ -85,7 +86,7 @@ Background: OpenSSH `PROTOCOL.agent` and RFC 9987; where they diverge (notably e
 ## Configuration prerequisites
 
 - **`sshush vault init`**: Set `[vault].vault_path` in config or pass `--vault-path`. Does not require the agent.
-- **Most other `sshush vault` subcommands**: Need config loaded (so `vault_path` resolves), and usually a **running** vault agent (`sshush start` with `[agent].vault = true`).
+- **Most other `sshush vault` subcommands**: Need config loaded (so `vault_path` resolves), and usually a **running** vault agent (`sshush start` with `[agent].type = "vault"`).
 - **`sshush vault list`**: Reads the vault file directly; if the running agent uses the same vault and is locked, the CLI may prompt to unlock so the **LOADED** column can be computed.
 
 Use `-c` / `--config` and `-s` / `--socket` as documented in global flags when needed.
@@ -132,7 +133,7 @@ sshush vault add <key_paths...> [--no-autoload]
 |------|---------|
 | `--no-autoload` | Store without autoload (visible until daemon restart only, unless you `vault load` later) |
 
-Requires `[agent].vault = true`, initialized vault, and `sshush start`. Default is autoload **on** (keys return after restart). In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
+Requires `[agent].type = "vault"`, initialized vault, and `sshush start`. Default is autoload **on** (keys return after restart). In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
 
 ### `vault remove`
 
@@ -147,6 +148,8 @@ sshush vault remove <fingerprint|comment|key_path...> [--vault-path ...]
 ```
 
 Requires a running, **unlocked** vault agent. Can remove keys that are not currently listed (e.g. after restart with autoload off).
+
+This is a **permanent** deletion from the encrypted store — distinct from the session-unload operation (see below), which only hides an identity from the current agent session.
 
 ### `vault load`
 
@@ -183,10 +186,23 @@ No subcommand-specific flags beyond global `-c` / `-s`.
 
 ---
 
+## TUI
+
+`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it runs every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. It is not a second implementation: both front ends call `internal/vaultops`, so a fix to a verb reaches the CLI and the tab at once. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
+
+Three surface differences are deliberate, and each is a property of the front end rather than of the operation:
+
+- The CLI resolves a selector by fingerprint, exact comment **or** key file path; the tab resolves by fingerprint, because it selects a table row and already holds one.
+- The CLI unlocks a locked agent in passing, prompting for the passphrase; the tab cannot, because a `tea.Cmd` cannot block for input. It reports the lock and offers its own unlock modal.
+- `--no-recovery` and `--no-autoload` have tab equivalents on the shifted key: `I` initialises with no recovery phrase where `i` generates one, and `A` adds with autoload off where `a` adds with it. `--recovery-file` has none — the tab writes `recovery.txt` beside the vault and shows the phrase once.
+- The CLI copies a freshly generated recovery phrase to the clipboard; the tab does not, and shows it instead.
+
+One behavior is deliberately **not** shared with the CLI: the **Agent** tab's remove action (`d` on a loaded key) does not call `vault remove`. For a vault-backed agent it instead calls the session-unload operation, which hides the identity from the current agent session — the Vault tab's LOADED column flips to "no" — without touching its persisted `autoload` flag or deleting it from the vault. Session-unload is the reverse of session-load: the payload is a UTF-8 SHA256 fingerprint, carried by `sshush-op` and dispatched to `VaultAgent.sessionUnload`. Permanent deletion is only available from the Vault tab's own remove action and `sshush vault remove`, both of which call the plain ssh-agent `Remove` RPC described above.
+
 ## Related commands (outside `sshush vault`)
 
 - **`sshush start`**: Unlocks the vault (passphrase prompt) when in vault mode.
-- **`sshush unlock`**: Unlocks a locked agent (passphrase or recovery path depending on setup); see `internal/cli/unlock.go`.
+- **`sshush unlock`**: Unlocks a locked agent with the master passphrase (vault) or the passphrase it was locked with (keys mode); to unlock a vault with the recovery phrase, use `sshush vault unlock-recovery`. See `internal/cli/unlock.go`.
 - **`sshush lock`**: Locks the agent; for vault, wipes the master key from memory.
 - **`sshush add`**: When the agent is a vault, adds keys into the vault (with agent-specific autoload defaults); see `internal/cli/add.go`.
 

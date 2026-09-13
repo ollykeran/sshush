@@ -7,10 +7,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -68,6 +71,93 @@ func TestRenderDefaultConfigBytes_loads(t *testing.T) {
 	}
 	if cfg.Theme.Name != "default" {
 		t.Errorf("Theme.Name: got %q", cfg.Theme.Name)
+	}
+}
+
+// serverOptionKeys lists every [server] key the config file understands, read off
+// serverSection's toml tags, so an option added there without a line in the
+// default config fails the tests below.
+func serverOptionKeys() []string {
+	typ := reflect.TypeOf(serverSection{})
+	keys := make([]string, 0, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		keys = append(keys, typ.Field(i).Tag.Get("toml"))
+	}
+	return keys
+}
+
+// loadRenderedConfig writes data to a file and loads it as a config.
+func loadRenderedConfig(t *testing.T, data []byte) Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v\n%s", err, string(data))
+	}
+	return cfg
+}
+
+// TestRenderDefaultConfigBytes_listsEveryServerOptionCommentedOut checks the
+// default config documents every [server] option while enabling none of them:
+// running the server has to be a deliberate edit.
+func TestRenderDefaultConfigBytes_listsEveryServerOptionCommentedOut(t *testing.T) {
+	t.Parallel()
+	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, theme.DefaultTheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range serverOptionKeys() {
+		if !regexp.MustCompile(`(?m)^# ` + regexp.QuoteMeta(key) + ` = `).Match(data) {
+			t.Errorf("default config has no commented-out %q line", key+" = ")
+		}
+	}
+	if !regexp.MustCompile(`(?m)^# \[server\]$`).Match(data) {
+		t.Error("default config has no commented-out [server] header")
+	}
+
+	cfg := loadRenderedConfig(t, data)
+	if cfg.ServerListenPort != 0 || cfg.ServerAuthorizedKeys != "" || cfg.ServerHostKey != "" ||
+		cfg.ServerShell != "" || cfg.ServerPasswordAuth {
+		t.Errorf("default config sets server options: %+v", cfg)
+	}
+}
+
+// TestRenderDefaultConfigBytes_serverOptionsLoadOnceUncommented checks the
+// commented-out values are valid as written — the right TOML types, and the
+// defaults they claim to be.
+func TestRenderDefaultConfigBytes_serverOptionsLoadOnceUncommented(t *testing.T) {
+	t.Parallel()
+	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, theme.DefaultTheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := make([]string, 0, len(serverOptionKeys()))
+	for _, key := range serverOptionKeys() {
+		quoted = append(quoted, regexp.QuoteMeta(key))
+	}
+	uncomment := regexp.MustCompile(`^# (\[server\]|(?:` + strings.Join(quoted, "|") + `) = .*)$`)
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if m := uncomment.FindStringSubmatch(line); m != nil {
+			lines[i] = m[1]
+		}
+	}
+
+	cfg := loadRenderedConfig(t, []byte(strings.Join(lines, "\n")))
+	if cfg.ServerListenPort != 2222 {
+		t.Errorf("ServerListenPort: got %d, want 2222", cfg.ServerListenPort)
+	}
+	if want := platform.ServerHostKeyPath(""); cfg.ServerHostKey != want {
+		t.Errorf("ServerHostKey: got %q, want the real default %q", cfg.ServerHostKey, want)
+	}
+	if cfg.ServerAuthorizedKeys == "" || cfg.ServerShell == "" {
+		t.Errorf("authorized_keys/shell examples did not load: %q, %q", cfg.ServerAuthorizedKeys, cfg.ServerShell)
+	}
+	if cfg.ServerPasswordAuth {
+		t.Error("password_auth should be shown at its default, false")
 	}
 }
 

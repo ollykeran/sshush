@@ -30,12 +30,12 @@ func TestStartServerDaemon_alreadyRunningPort(t *testing.T) {
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
-	body := "[agent]\nsocket_path = \"\"\nvault = false\nkey_paths = [\"\"]\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
+	body := "[agent]\nsocket_path = \"\"\ntype = \"keys\"\nkey_paths = [\"\"]\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Fix config so LoadConfig would succeed (socket_path and key_paths required)
-	body = "[agent]\nsocket_path = \"" + dir + "/sock\"\nvault = false\nkey_paths = []\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
+	body = "[agent]\nsocket_path = \"" + dir + "/sock\"\ntype = \"keys\"\nkey_paths = []\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestStartServerDaemon_pidFileRunning(t *testing.T) {
 	}
 
 	configPath := filepath.Join(dir, "config.toml")
-	body := "[agent]\nsocket_path = \"" + dir + "/sock\"\nvault = false\nkey_paths = []\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
+	body := "[agent]\nsocket_path = \"" + dir + "/sock\"\ntype = \"keys\"\nkey_paths = []\n\n[server]\nlisten_port = " + strconv.Itoa(port) + "\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

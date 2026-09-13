@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
-	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
@@ -64,10 +62,10 @@ type vaultPollMsg struct {
 }
 
 const (
-	agentFocusButtons = iota
-	agentFocusTable
+	agentFocusTable = iota
 	agentFocusFound
 	agentFocusPassphrase
+	agentFocusButtons // header daemon controls
 )
 
 // Indices into AgentScreen.buttons.Labels.
@@ -149,6 +147,11 @@ func (s *AgentScreen) HasModal() bool {
 	return s.fileSelector.Visible() || s.showPass || s.commentOverlay.active
 }
 
+func (s *AgentScreen) HasActiveTextInput() bool {
+	// Passphrase uses HasModal; no other free-text fields on this screen.
+	return false
+}
+
 func (s *AgentScreen) Init() tea.Cmd {
 	return tea.Batch(
 		fetchAgentKeysCmd(s.socketPath, false),
@@ -207,10 +210,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.vaultKnown = false
 		s.vaultLocked = false
 		s.vaultPollGen++
-		if s.sk != nil {
-			s.sk.UpdateVaultState("", false, false)
+		return s, func() tea.Msg {
+			return VaultStateMsg{Mode: "", Locked: false, Known: false}
 		}
-		return s, nil
 
 	case ButtonFlashDoneMsg:
 		s.buttons.ClearPress()
@@ -322,10 +324,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.vaultKnown = false
 			s.vaultLocked = false
 		}
-		if s.sk != nil {
-			s.sk.UpdateVaultState(s.vaultMode, s.vaultLocked, s.vaultKnown)
+		return s, func() tea.Msg {
+			return VaultStateMsg{Mode: s.vaultMode, Locked: s.vaultLocked, Known: s.vaultKnown}
 		}
-		return s, nil
 
 	case vaultPollMsg:
 		if msg.gen != s.vaultPollGen || !s.daemonRunning {
@@ -361,7 +362,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		if s.commentOverlay.active {
-			return s, s.commentOverlay.Update(msg, s.socketPath)
+			return s, s.commentOverlay.Update(msg, s.socketPath, s.configPath)
 		}
 		if s.showPass {
 			return s.handlePassInput(msg)
@@ -574,12 +575,20 @@ func (s *AgentScreen) startLock() tea.Cmd {
 	return s.startPassphrase("lock")
 }
 
+// removeSelectedKey removes the selected key from the running agent. For a vault-backed
+// agent this only hides the key from the current session (LOADED becomes "no" in the
+// Vault tab); it does not delete the identity from the vault. Permanent deletion is only
+// available from the Vault tab's own remove action. Keys-mode agents have no persistent
+// storage to preserve, so removal there is the plain ssh-agent forget.
 func (s *AgentScreen) removeSelectedKey() (tea.Model, tea.Cmd) {
 	row := s.keyTable.SelectedRow()
 	if row == nil {
 		return s, nil
 	}
 	fp := row[1]
+	if s.vaultMode == "vault" {
+		return s, sessionUnloadVaultKeyCmd(s.socketPath, fp)
+	}
 	return s, removeKeyFromAgentCmd(s.socketPath, fp)
 }
 
@@ -652,14 +661,7 @@ func (s *AgentScreen) foundKeysMaxIndex(visible []utils.KeyPath) int {
 }
 
 func sectionBoxWidth(width int) int {
-	boxW := width * 3 / 4
-	if boxW > sectionBoxMaxWidth {
-		boxW = sectionBoxMaxWidth
-	}
-	if boxW < sectionBoxMinWidth {
-		boxW = sectionBoxMinWidth
-	}
-	return boxW
+	return SectionWidth(width)
 }
 
 func (s *AgentScreen) visibleFoundKeys() []utils.KeyPath {
@@ -736,20 +738,6 @@ func (s *AgentScreen) View() tea.View {
 	return tea.NewView(content)
 }
 
-func (s *AgentScreen) BannerColor() color.Color {
-	t := s.sk.Theme()
-	if s.statusErr {
-		c, _ := theme.HexToRGBA(t.Error)
-		return c
-	}
-	if s.daemonRunning {
-		c, _ := theme.HexToRGBA(t.Focus)
-		return c
-	}
-	c, _ := theme.HexToRGBA(t.Accent)
-	return c
-}
-
 func (s *AgentScreen) StatusText() string {
 	st := s.sk.Styles()
 	statusStyle := st.AccentStyle
@@ -761,30 +749,6 @@ func (s *AgentScreen) StatusText() string {
 
 func (s *AgentScreen) StatusTextRaw() (string, bool) {
 	return s.status, s.statusErr
-}
-
-func (s *AgentScreen) ControlButtonsView(focused bool) string {
-	st := s.sk.Styles()
-	var parts []string
-	for i, label := range s.buttons.Labels {
-		var style lipgloss.Style
-		switch {
-		case s.buttons.Pressed == i:
-			style = st.HeaderTabActiveFocused
-		case s.buttons.Active == i && focused:
-			style = st.HeaderTabActiveFocused
-		case s.buttons.Active == i:
-			style = st.HeaderTabActiveUnfocused
-		default:
-			style = st.HeaderTabInactive
-		}
-		rendered := style.Render(label)
-		if s.buttons.ZonePrefix != "" {
-			rendered = zone.Mark(s.buttons.ZonePrefix+label, rendered)
-		}
-		parts = append(parts, rendered)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
 // ControlButtonsInlineView returns buttons as styled text without per-button borders,
@@ -897,7 +861,12 @@ func fetchAgentKeysCmd(socketPath string, refresh bool) tea.Cmd {
 		if socketPath == "" {
 			return agentKeysMsg{err: fmt.Errorf("no socket path configured")}
 		}
-		keys, err := agent.ListKeysFromSocket(socketPath)
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentKeysMsg{err: fmt.Errorf("agent not running")}
+		}
+		defer session.Close()
+		keys, err := session.List()
 		if err != nil {
 			return agentKeysMsg{err: fmt.Errorf("agent not running")}
 		}
@@ -948,7 +917,12 @@ func reloadDaemonCmd(configPath, socketPath string) tea.Cmd {
 
 func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 	return func() tea.Msg {
-		removed, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, fingerprint)
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "agent not running", isErr: true}
+		}
+		defer session.Close()
+		removed, err := session.RemoveByFingerprint(fingerprint)
 		if err != nil {
 			return agentStatusMsg{text: "agent not running", isErr: true}
 		}
@@ -959,10 +933,40 @@ func removeKeyFromAgentCmd(socketPath, fingerprint string) tea.Cmd {
 	}
 }
 
+// sessionUnloadVaultKeyCmd hides a vault identity from the current agent session
+// (LOADED -> no) without deleting it from the vault or changing its persisted
+// autoload flag. Used by the Agent tab's remove key, since a vault-backed agent's
+// plain ssh-agent Remove permanently deletes the identity (that behavior is reserved
+// for the Vault tab's own remove action, matching sshush vault remove).
+func sessionUnloadVaultKeyCmd(socketPath, fingerprint string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "unload failed: " + err.Error(), isErr: true}
+		}
+		defer session.Close()
+		if err := vault.SessionUnload(session, fingerprint); err != nil {
+			return agentStatusMsg{text: "unload failed: " + err.Error(), isErr: true}
+		}
+		return agentStatusMsg{text: "key unloaded from session"}
+	}
+}
+
 func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 	return func() tea.Msg {
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
+		}
+		defer session.Close()
 		// Default autoload on for vault (same as CLI without --no-autoload).
-		if err := vault.AddPrivateKeyFileToSocket(socketPath, path, true); err != nil {
+		backend, backendErr := session.Backend()
+		if backendErr == nil && backend.Mode == "vault" {
+			err = vault.AddPrivateKeyFile(session, path, true)
+		} else {
+			err = session.AddKeyFromPath(path)
+		}
+		if err != nil {
 			return agentStatusMsg{text: "add failed: " + err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "key added: " + utils.DisplayPath(path)}
@@ -971,7 +975,12 @@ func addKeyToAgentCmd(socketPath, path string) tea.Cmd {
 
 func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		return agentLockResultMsg{err: agent.LockSocket(socketPath, []byte(passphrase))}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentLockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentLockResultMsg{err: session.Lock([]byte(passphrase))}
 	}
 }
 
@@ -979,31 +988,39 @@ func lockAgentCmd(socketPath, passphrase string) tea.Cmd {
 // daemon wipes the in-memory master key.
 func lockVaultCmd(socketPath string) tea.Cmd {
 	return func() tea.Msg {
-		return agentLockResultMsg{err: agent.LockSocket(socketPath, nil)}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentLockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentLockResultMsg{err: session.Lock(nil)}
 	}
 }
 
 func unlockAgentCmd(socketPath, passphrase string) tea.Cmd {
 	return func() tea.Msg {
-		return agentUnlockResultMsg{err: agent.UnlockSocket(socketPath, []byte(passphrase))}
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			return agentUnlockResultMsg{err: err}
+		}
+		defer session.Close()
+		return agentUnlockResultMsg{err: session.Unlock([]byte(passphrase))}
 	}
 }
 
 // checkVaultState queries the running agent for its backend mode and, for vault agents,
 // whether the vault is locked.
 func checkVaultState(socketPath string) vaultStatusMsg {
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return vaultStatusMsg{}
 	}
-	if mode != "vault" {
-		return vaultStatusMsg{mode: mode, reachable: true}
+	defer session.Close()
+	backend, err := session.Backend()
+	if err != nil {
+		return vaultStatusMsg{}
 	}
-	resp, err := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-	if err != nil || len(resp) != 1 {
-		return vaultStatusMsg{mode: mode}
-	}
-	return vaultStatusMsg{mode: mode, reachable: true, locked: resp[0] == 1}
+	return vaultStatusMsg{mode: backend.Mode, reachable: true, locked: backend.VaultLocked}
 }
 
 func checkVaultStateCmd(socketPath string) tea.Cmd {

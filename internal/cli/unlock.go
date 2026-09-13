@@ -2,14 +2,10 @@ package cli
 
 import (
 	"errors"
-	"net"
-	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newUnlockCommand() *cobra.Command {
@@ -24,62 +20,53 @@ func newUnlockCommand() *cobra.Command {
 }
 
 func runUnlock(cmd *cobra.Command, _ []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	mode, live := agent.LiveBackendMode(socketPath)
-	if !live {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
 	}
-	switch mode {
+	defer session.Close()
+	backend, err := session.Backend()
+	if err != nil {
+		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
+	}
+	switch backend.Mode {
 	case "vault":
-		return runUnlockVault(socketPath)
+		return runUnlockVault(session, backend)
 	case "keys":
-		return runUnlockKeys(socketPath)
+		return runUnlockKeys(session)
 	default:
 		return style.NewOutput().Error("unexpected agent backend").AsError()
 	}
 }
 
-func runUnlockVault(socketPath string) error {
-	resp, extErr := agent.CallExtension(socketPath, vault.ExtensionVaultLocked, nil)
-	if extErr != nil {
-		if errors.Is(extErr, sshagent.ErrExtensionUnsupported) {
-			return style.NewOutput().
-				Error("this agent does not support vault status; use [agent].vault = true with [vault].vault_path and run 'sshush start'.").
-				AsError()
-		}
-		return style.NewOutput().Error("vault status: " + extErr.Error()).AsError()
-	}
-	if len(resp) == 1 && resp[0] == 0 {
+func runUnlockVault(session *agent.Session, backend agent.Backend) error {
+	if !backend.VaultLocked {
 		style.NewOutput().Info("Vault is already unlocked.").PrintErr()
 		return nil
 	}
-	if len(resp) != 1 || resp[0] != 1 {
-		return style.NewOutput().Error("unexpected vault-locked response from agent").AsError()
-	}
-
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
-	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
 	passphrase, err := readPassphrase("Passphrase: ")
 	if err != nil {
 		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 	}
 	defer ClearBytes(passphrase)
-	if err := client.Unlock(passphrase); err != nil {
-		msg := err.Error()
-		if msg == "agent: failure" {
-			msg = "unlock failed: wrong passphrase, or the running agent is not a vault (run 'sshush start' after setting [vault].vault_path in config)"
-		} else {
-			msg = "unlock failed: " + msg
+	if err := session.Unlock(passphrase); err != nil {
+		var msg string
+		switch {
+		case errors.Is(err, agent.ErrWrongPassphrase):
+			msg = "unlock failed: wrong passphrase"
+		case errors.Is(err, agent.ErrNotLocked):
+			style.NewOutput().Info("Vault is already unlocked.").PrintErr()
+			return nil
+		default:
+			msg = "unlock failed: " + err.Error()
 		}
 		return style.NewOutput().Error(msg).AsError()
 	}
@@ -87,28 +74,21 @@ func runUnlockVault(socketPath string) error {
 	return nil
 }
 
-func runUnlockKeys(socketPath string) error {
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return style.NewOutput().Error("cannot connect to agent: " + err.Error()).AsError()
-	}
-	defer conn.Close()
-	client := sshagent.NewClient(conn)
+func runUnlockKeys(session *agent.Session) error {
 	passphrase, err := readPassphrase("Passphrase: ")
 	if err != nil {
 		return style.NewOutput().Error("read passphrase: " + err.Error()).AsError()
 	}
 	defer ClearBytes(passphrase)
-	if err := client.Unlock(passphrase); err != nil {
-		msg := err.Error()
-		if msg == "agent: not locked" {
+	if err := session.Unlock(passphrase); err != nil {
+		switch {
+		case errors.Is(err, agent.ErrNotLocked):
 			style.NewOutput().Info("Agent is already unlocked.").PrintErr()
 			return nil
-		}
-		if strings.Contains(msg, "incorrect passphrase") {
+		case errors.Is(err, agent.ErrWrongPassphrase):
 			return style.NewOutput().Error("unlock failed: wrong passphrase").AsError()
 		}
-		return style.NewOutput().Error("unlock failed: " + msg).AsError()
+		return style.NewOutput().Error("unlock failed: " + err.Error()).AsError()
 	}
 	style.NewOutput().Success("Agent unlocked.").PrintErr()
 	return nil

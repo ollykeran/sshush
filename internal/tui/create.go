@@ -50,7 +50,7 @@ type CreateScreen struct {
 	lastKeyType string
 	fileEdited  bool
 	confirmSave bool
-	focus       int
+	ring        FocusRing
 	width       int
 	height      int
 
@@ -85,7 +85,7 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 	saveBtn := NewButtonRow("Save")
 	saveBtn.ZonePrefix = prefix + "save-"
 
-	return &CreateScreen{
+	s := &CreateScreen{
 		sk:          sk,
 		typeRow:     typeRow,
 		optionRow:   optionRow,
@@ -95,9 +95,15 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 		saveBtn:     saveBtn,
 		zonePrefix:  prefix,
 		lastKeyType: "ed25519",
-		focus:       createFocusType,
+		ring:        NewFocusRing(6), // type, options, comment, dir, filename, save
 	}
+	s.ring.SetSkip(func(i int) bool {
+		return i == createFocusOptions && s.currentKeyType() == "ed25519"
+	})
+	return s
 }
+
+func (s *CreateScreen) HasModal() bool { return false }
 
 func (s *CreateScreen) HasActiveTextInput() bool {
 	return s.commentIn.Focused() || s.dirInput.Focused() || s.filenameIn.Focused()
@@ -137,13 +143,13 @@ func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.KeyPressMsg:
-		if s.focus == createFocusComment && s.commentIn.Focused() {
+		if s.ring.Index() == createFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
 		}
-		if s.focus == createFocusDir && s.dirInput.Focused() {
+		if s.ring.Index() == createFocusDir && s.dirInput.Focused() {
 			return s.handleDirInput(msg)
 		}
-		if s.focus == createFocusFilename && s.filenameIn.Focused() {
+		if s.ring.Index() == createFocusFilename && s.filenameIn.Focused() {
 			return s.handleFilenameInput(msg)
 		}
 		return s.handleKeys(msg)
@@ -154,7 +160,7 @@ func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if btn := s.typeRow.HandleMouse(x, y); btn >= 0 {
 		s.blurInputs()
-		s.focus = createFocusType
+		s.ring.SetIndex(createFocusType)
 		s.typeRow.Active = btn
 		s.syncKeyTypeChange()
 		s.updateButtonFocus()
@@ -163,7 +169,7 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	if s.currentKeyType() != "ed25519" {
 		if btn := s.optionRow.HandleMouse(x, y); btn >= 0 {
 			s.blurInputs()
-			s.focus = createFocusOptions
+			s.ring.SetIndex(createFocusOptions)
 			s.optionRow.Active = btn
 			s.updateButtonFocus()
 			return s, nil
@@ -171,7 +177,7 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	}
 	if inZoneBounds(s.zonePrefix+"comment", x, y) {
 		s.blurInputs()
-		s.focus = createFocusComment
+		s.ring.SetIndex(createFocusComment)
 		s.updateButtonFocus()
 		cmd := s.commentIn.Focus()
 		if pos := sectionBoxCursorPos(s.zonePrefix+"comment", x, y); pos >= 0 {
@@ -181,7 +187,7 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	}
 	if inZoneBounds(s.zonePrefix+"dir", x, y) {
 		s.blurInputs()
-		s.focus = createFocusDir
+		s.ring.SetIndex(createFocusDir)
 		s.updateButtonFocus()
 		cmd := s.dirInput.Focus()
 		if pos := sectionBoxCursorPos(s.zonePrefix+"dir", x, y); pos >= 0 {
@@ -191,7 +197,7 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	}
 	if inZoneBounds(s.zonePrefix+"filename", x, y) {
 		s.blurInputs()
-		s.focus = createFocusFilename
+		s.ring.SetIndex(createFocusFilename)
 		s.updateButtonFocus()
 		cmd := s.filenameIn.Focus()
 		if pos := sectionBoxCursorPos(s.zonePrefix+"filename", x, y); pos >= 0 {
@@ -201,7 +207,7 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 	}
 	if btn := s.saveBtn.HandleMouse(x, y); btn >= 0 {
 		s.blurInputs()
-		s.focus = createFocusSave
+		s.ring.SetIndex(createFocusSave)
 		s.updateButtonFocus()
 		return s.doSave()
 	}
@@ -209,21 +215,22 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 }
 
 func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if !(msg.String() == "enter" && s.focus == createFocusSave) {
+	focus := s.ring.Index()
+	if !(msg.String() == "enter" && focus == createFocusSave) {
 		s.confirmSave = false
 	}
 
-	switch msg.String() {
-	case "q", "esc":
+	switch {
+	case KeyMatches(msg, KeyQuit):
 		return s, tea.Quit
 
-	case "down", "j":
+	case KeyMatches(msg, KeyDown):
 		return s.focusNext()
-	case "up", "k":
+	case KeyMatches(msg, KeyUp):
 		return s.focusPrev()
 
-	case "left", "h":
-		switch s.focus {
+	case KeyMatches(msg, KeyLeft):
+		switch focus {
 		case createFocusType:
 			s.typeRow.Left()
 			s.syncKeyTypeChange()
@@ -232,8 +239,8 @@ func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 
-	case "right", "l":
-		switch s.focus {
+	case KeyMatches(msg, KeyRight):
+		switch focus {
 		case createFocusType:
 			s.typeRow.Right()
 			s.syncKeyTypeChange()
@@ -242,8 +249,8 @@ func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return s, nil
 
-	case "enter":
-		switch s.focus {
+	case KeyMatches(msg, KeyEnter):
+		switch focus {
 		case createFocusComment:
 			return s, s.commentIn.Focus()
 		case createFocusDir:
@@ -312,36 +319,22 @@ func (s *CreateScreen) handleFilenameInput(msg tea.KeyPressMsg) (tea.Model, tea.
 
 func (s *CreateScreen) focusNext() (tea.Model, tea.Cmd) {
 	s.blurInputs()
-	if s.currentKeyType() == "ed25519" && s.focus == createFocusType {
-		s.focus = createFocusComment
-		return s, s.focusInput()
-	}
-	if s.focus < createFocusSave {
-		s.focus++
-	} else {
-		s.focus = createFocusType
-	}
+	s.ring.Next()
 	s.updateButtonFocus()
 	return s, s.focusInput()
 }
 
 func (s *CreateScreen) focusPrev() (tea.Model, tea.Cmd) {
 	s.blurInputs()
-	if s.currentKeyType() == "ed25519" && s.focus == createFocusComment {
-		s.focus = createFocusType
-		s.updateButtonFocus()
-		return s, nil
+	if s.ring.Prev() {
+		return s, navToTabBarCmd()
 	}
-	if s.focus > createFocusType {
-		s.focus--
-		s.updateButtonFocus()
-		return s, s.focusInput()
-	}
-	return s, navToTabBarCmd()
+	s.updateButtonFocus()
+	return s, s.focusInput()
 }
 
 func (s *CreateScreen) focusInput() tea.Cmd {
-	switch s.focus {
+	switch s.ring.Index() {
 	case createFocusComment:
 		return s.commentIn.Focus()
 	case createFocusDir:
@@ -359,9 +352,10 @@ func (s *CreateScreen) blurInputs() {
 }
 
 func (s *CreateScreen) updateButtonFocus() {
-	s.typeRow.Focused = s.focus == createFocusType
-	s.optionRow.Focused = s.focus == createFocusOptions
-	s.saveBtn.Focused = s.focus == createFocusSave
+	focus := s.ring.Index()
+	s.typeRow.Focused = focus == createFocusType
+	s.optionRow.Focused = focus == createFocusOptions
+	s.saveBtn.Focused = focus == createFocusSave
 }
 
 func (s *CreateScreen) currentKeyType() string {
@@ -485,7 +479,7 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 
 	st := s.sk.Styles()
 	focused := func(region int) bool {
-		return active && s.focus == region
+		return active && s.ring.Index() == region
 	}
 
 	sections = append(sections, st.SectionBox("Type", s.typeRow.View(st), w, focused(createFocusType)))
