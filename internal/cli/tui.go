@@ -25,7 +25,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	zone.NewGlobal()
 	defer zone.Close()
 
-	socketPath, _ := getSocketPath()
+	cfg := configFrom(cmd)
+	socketPath, _ := getSocketPath(cfg)
 	configPath := ""
 	if p, err := runtime.ResolveConfigPath(cmd); err == nil {
 		configPath = p
@@ -35,14 +36,21 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		th = config.LoadThemeFromPath(configPath)
 	}
 
-	mode := "keys"
-	if env.Config != nil {
-		mode = env.Config.AgentBackendMode()
-	}
-	m := tui.NewTUI(configPath, socketPath, th, mode)
+	mode, vaultPath := effectiveTUIMode(cfg)
+	m := tui.NewTUI(configPath, socketPath, th, mode, vaultPath)
 	_, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return fmt.Errorf("cli: run tui: %w", err)
 	}
 	return nil
+}
+
+// effectiveTUIMode returns the agent backend mode and vault path the TUI should use.
+// [agent].type is a single enum, so AgentBackendMode/VaultPathForAgent already return
+// "keys"/"" for both "keys" and "external" — this just guards the nil-config case.
+func effectiveTUIMode(cfg *config.Config) (mode, vaultPath string) {
+	if cfg == nil {
+		return "keys", ""
+	}
+	return cfg.AgentBackendMode(), cfg.VaultPathForAgent()
 }

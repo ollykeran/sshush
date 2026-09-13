@@ -180,12 +180,7 @@ func TestExtension_Query(t *testing.T) {
 
 	want := []string{
 		ExtensionQuery,
-		ExtensionVaultLocked,
-		ExtensionUnlockRecovery,
-		ExtensionAddKeyOpts,
-		ExtensionVaultSessionLoad,
-		ExtensionVaultSetAutoload,
-		ExtensionVaultSetComment,
+		agent.ExtensionOp,
 	}
 	if len(names) != len(want) {
 		t.Fatalf("query names: want %v, got %v", want, names)

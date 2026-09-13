@@ -17,13 +17,13 @@ Many internal packages already have good doc comments:
 - `internal/runtime/runtime.go`: ResolveConfigPath, ResolveDaemonConfigPath, PidFilePath, ResolveSocketPath
 - `internal/cli/root.go`: LoadMergedConfig, LoadOverrides
 
-Gaps: package-level comments, some exported types, `internal/agent`, `internal/keys`, `internal/tui`.
+Gaps: `internal/kdf`, `internal/server`, `internal/theme` and `internal/vault` have no package comment, and some exported types still lack doc comments.
 
 ## Implementation Steps
 
 1. **Add package docs**: Create `doc.go` in each internal package with a 1–3 line package comment.
 2. **Fill gaps**: Add doc comments for exported functions/types missing them.
-3. **View locally**: Run `go doc -all` or `godoc -http=:6060` (if installed) to browse.
+3. **View locally**: Run `go doc -all <package>`, or `just doc` (`go doc -http`) to browse in a browser.
 4. **CI**: `golangci-lint` with `exhaustive` or `godot` can enforce comment style.
 
 ## Example doc.go

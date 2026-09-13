@@ -144,4 +144,3 @@ func TestPidFilePath_FallbackWithoutXDG(t *testing.T) {
 		})
 	})
 }
-

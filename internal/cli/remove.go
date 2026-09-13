@@ -23,18 +23,24 @@ func newRemoveCommand() *cobra.Command {
 }
 
 func runRemove(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	if len(args) == 0 {
 		cmd.Usage()
 		return nil
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}
-	before, err := agent.ListKeysFromSocket(socketPath)
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		return fmt.Errorf("cli: list keys from socket: %w", err)
+	}
+	defer session.Close()
+	before, err := session.List()
 	if err != nil {
 		return fmt.Errorf("cli: list keys from socket: %w", err)
 	}
@@ -61,12 +67,12 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 	for _, key := range before {
 		if wantFP[ssh.FingerprintSHA256(key)] {
-			if _, err := agent.RemoveKeyFromSocketByFingerprint(socketPath, ssh.FingerprintSHA256(key)); err != nil {
+			if _, err := session.RemoveByFingerprint(ssh.FingerprintSHA256(key)); err != nil {
 				return style.NewOutput().Error(fmt.Sprintf("remove %s: %v", key.Comment, err)).AsError()
 			}
 		}
 	}
-	after, _ := agent.ListKeysFromSocket(socketPath)
+	after, _ := session.List()
 	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }

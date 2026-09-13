@@ -27,21 +27,12 @@ func unixSocketTempDir(t *testing.T) string {
 	return dir
 }
 
-// startServerKeyring starts ListenAndServe with an in-memory keyring,
-// adds one key with the given comment, and returns a connected client.
-func startServerKeyring(t *testing.T, keyComment string) (socketPath string, client sshagent.Agent) {
+// startServerAgent starts ListenAndServe with ext and returns the socket path
+// once the agent is accepting connections.
+func startServerAgent(t *testing.T, ext sshagent.ExtendedAgent) string {
 	t.Helper()
 	dir := unixSocketTempDir(t)
-	socketPath = filepath.Join(dir, "agent.sock")
-	keyring := sshagent.NewKeyring()
-	ext := keyring.(sshagent.ExtendedAgent)
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ext.Add(sshagent.AddedKey{PrivateKey: priv, Comment: keyComment}); err != nil {
-		t.Fatal(err)
-	}
+	socketPath := filepath.Join(dir, "agent.sock")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
@@ -49,18 +40,40 @@ func startServerKeyring(t *testing.T, keyComment string) (socketPath string, cli
 		time.Sleep(50 * time.Millisecond)
 		os.Remove(socketPath)
 	})
-	go func() {
-		_ = ListenAndServe(ctx, socketPath, ext)
-	}()
 
-	var conn net.Conn
-	for i := 0; i < 50; i++ {
-		conn, err = net.Dial("unix", socketPath)
-		if err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
+	ready := make(chan struct{})
+	go func() {
+		_ = ListenAndServe(ctx, socketPath, ext, WithReady(func() { close(ready) }))
+	}()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent did not become ready")
 	}
+	return socketPath
+}
+
+// keyringWithKey returns an in-memory keyring holding one ed25519 key with the
+// given comment.
+func keyringWithKey(t *testing.T, keyComment string) sshagent.ExtendedAgent {
+	t.Helper()
+	ext := sshagent.NewKeyring().(sshagent.ExtendedAgent)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ext.Add(sshagent.AddedKey{PrivateKey: priv, Comment: keyComment}); err != nil {
+		t.Fatal(err)
+	}
+	return ext
+}
+
+// startServerKeyring starts ListenAndServe with an in-memory keyring,
+// adds one key with the given comment, and returns a connected client.
+func startServerKeyring(t *testing.T, keyComment string) (socketPath string, client sshagent.Agent) {
+	t.Helper()
+	socketPath = startServerAgent(t, keyringWithKey(t, keyComment))
+	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("dial socket: %v", err)
 	}

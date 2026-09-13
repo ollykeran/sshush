@@ -14,7 +14,13 @@ Stock agent is minimal: good for some workflows, easy to make invisible. sshush 
 
 ## Demo
 
-[Asciinema recording](https://asciinema.org/a/917054) (click through for the player)
+**CLI:** `eval $(sshush)`, then list/add/selftest
+
+![CLI demo](demos/cli-basics.gif)
+
+**TUI:** `sshush tui`
+
+![TUI demo](demos/tui-basics.gif)
 
 ## Quick Start
 
@@ -31,7 +37,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
-- **SSH server**: Optional TCP SSH server (`sshush server`). See [Config Reference](docs/config.md) `[server]` section.
+- **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
 - **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
 - **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 
@@ -48,14 +54,14 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 | `sshush validate` | validate and inspect a key file (private or public) |
 | `sshush selftest` | test agent connectivity (env, socket, list, sign) |
 | `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
-| `sshush server` | optional TCP SSH server |
+| `sshush server` / `server status` / `server logs` | optional TCP SSH server, off until enabled in config, and its log |
 | `sshush theme` / `completion` / `version` | theming, shell completion, build info |
 
 For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 **Config file:** `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml`, or override with `-c` / `SSHUSH_CONFIG`. Reference: [Config](docs/config.md).
 
-**Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before merging this branch into your setup.
+**Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before upgrading.
 
 ## Installation
 
@@ -96,14 +102,14 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 - [Godoc guide](docs/godoc-guide.md) – exported API comments
 - [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API
 
-**Developers:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Internal boundary report](docs/internal-boundary-report.md) (auto-generated)
+**Developers:** [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Demos](demos/README.md)
 
 ## Build
 
-Go 1.26+, [`just`](https://github.com/casey/just) optional but recommended.
+Go 1.27+, [`just`](https://github.com/casey/just) optional but recommended.
 
 ```sh
 just build
 ```
 
-Outputs `build/linux-amd64/sshush` and `build/linux-amd64/sshushd`. From the repo, run e.g. `./build/linux-amd64/sshush` or install the artifacts the same way you do other static binaries. macOS: `just build darwin`. Release layout and packaging: `just pkg all`, `just build darwin-arm64`, etc. (see [justfile](justfile)).
+Builds `sshush` and `sshushd` for the machine you are on, into `build/<os>-<arch>/` (e.g. `build/darwin-arm64/`). From the repo, run e.g. `./build/darwin-arm64/sshush` or install the artifacts the same way you do other static binaries. Other targets: `just build linux` (linux/amd64), `just build darwin` (darwin/arm64), `just build all`. Packaging: `just pkg all` (see [justfile](justfile)).

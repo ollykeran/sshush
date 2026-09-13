@@ -2,10 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
@@ -13,7 +13,6 @@ import (
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
-	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
 func newStartCommand() *cobra.Command {
@@ -35,7 +34,8 @@ func runStart(cmd *cobra.Command, _ []string) error {
 
 // runStartDaemon resolves config, starts the sshushd binary with SSHUSH_CONFIG, and waits for the socket.
 func runStartDaemon(cmd *cobra.Command) error {
-	if env.Config == nil {
+	loaded := configFrom(cmd)
+	if loaded == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 
@@ -47,7 +47,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("cli: resolve absolute config path: %w", err)
 	}
-	cfg := *env.Config
+	cfg := *loaded
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		absSocket, _ := filepath.Abs(cfg.SocketPath)
 		if !isTTY(os.Stdout) {
@@ -55,15 +55,27 @@ func runStartDaemon(cmd *cobra.Command) error {
 		}
 		out := style.NewOutput().
 			Success("* sshushd running at " + utils.DisplayPath(absSocket))
-		conn, err := net.Dial("unix", cfg.SocketPath)
+		session, err := agent.Open(cfg.SocketPath)
 		if err == nil {
-			defer conn.Close()
-			client := sshagent.NewClient(conn)
+			defer session.Close()
 			out.Spacer()
-			_ = AppendKeysTo(client, out, cfg.SocketPath, cfg.VaultPathForAgent())
+			_ = AppendKeysTo(session, out)
 		}
 		out.PrintErr()
 		return nil
+	}
+
+	if cfg.IsExternal() {
+		if cfg.SocketPath == "" {
+			return style.NewOutput().
+				Error("[agent].type = \"external\" but no socket found").
+				Info("Set [agent].socket_path, or export SSH_AUTH_SOCK before running sshush, then try again.").
+				AsError()
+		}
+		return style.NewOutput().
+			Error("no agent reachable at " + utils.DisplayPath(cfg.SocketPath)).
+			Info("[agent].type = \"external\": sshush will not start a daemon here; start your external agent (ssh-agent, 1Password, etc.) and point socket_path/SSH_AUTH_SOCK at it.").
+			AsError()
 	}
 
 	out := style.NewOutput()
@@ -124,10 +136,9 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 	}
 	out.Success("* sshushd started with socket: " + utils.DisplayPath(absSocket))
 
-	conn, err := net.Dial("unix", socketPath)
+	session, err := agent.Open(socketPath)
 	if err == nil {
-		defer conn.Close()
-		client := sshagent.NewClient(conn)
+		defer session.Close()
 		if vp := cfg.VaultPathForAgent(); vp != "" {
 			resolvedVault := vault.ResolveToFile(vp)
 			store, openErr := vault.Open(resolvedVault)
@@ -143,7 +154,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 					out.Spacer()
 					out.Error("unlock skipped: " + err.Error())
 				} else {
-					if err := client.Unlock(passphrase); err != nil {
+					if err := session.Unlock(passphrase); err != nil {
 						out.Spacer()
 						out.Error("unlock failed: " + err.Error())
 					}
@@ -152,7 +163,7 @@ func startSuccess(out *style.Output, cfg *config.Config) error {
 			}
 		}
 		out.Spacer()
-		_ = AppendKeysTo(client, out, socketPath, cfg.VaultPathForAgent())
+		_ = AppendKeysTo(session, out)
 	}
 
 	out.PrintErr()

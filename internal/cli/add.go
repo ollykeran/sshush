@@ -8,7 +8,6 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/openssh"
-	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
@@ -30,7 +29,8 @@ func newAddCommand() *cobra.Command {
 }
 
 func runAdd(cmd *cobra.Command, args []string) error {
-	if env.Config == nil {
+	cfg := configFrom(cmd)
+	if cfg == nil {
 		return style.NewOutput().Error("config not loaded").AsError()
 	}
 	paths := args
@@ -38,18 +38,20 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		cmd.Usage()
 		return style.NewOutput().Error("at least one key path is required").AsError()
 	}
-	socketPath, err := getSocketPath()
+	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	if !sshushd.CheckAlreadyRunning(socketPath) {
+	session, err := agent.Open(socketPath)
+	if err != nil {
 		return style.NewOutput().Error("Agent not running. Please start the agent with 'sshush start'").AsError()
 	}
+	defer session.Close()
 	noAutoload, _ := cmd.Flags().GetBool("no-autoload")
 	autoload := !noAutoload
 
-	mode, live := agent.LiveBackendMode(socketPath)
-	before, err := agent.ListKeysFromSocket(socketPath)
+	backend, backendErr := session.Backend()
+	before, err := session.List()
 	if err != nil {
 		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
@@ -57,25 +59,23 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	for _, arg := range paths {
 		path := utils.ExpandHomeDirectory(arg)
 		if _, err := os.Stat(path); err != nil {
-			resolved, resolveErr := resolveKeyPathByComment(arg, env.Config)
+			resolved, resolveErr := resolveKeyPathByComment(arg, cfg)
 			if resolveErr != nil {
 				return resolveErr
 			}
 			path = utils.ExpandHomeDirectory(resolved)
 		}
-		if live && mode == "vault" {
-			if err := vault.AddPrivateKeyFileToSocket(socketPath, path, autoload); err != nil {
-				msg := err.Error()
-				if msg == "agent: generic extension failure" && env.Config != nil && env.Config.AgentVault && env.Config.VaultPath != "" {
-					msg = "vault is locked; unlock first with 'sshush start' (enter passphrase) or 'sshush vault unlock-recovery'"
-				} else {
-					msg = "failed to add key: " + msg
+		if backendErr == nil && backend.Mode == "vault" {
+			if err := vault.AddPrivateKeyFile(session, path, autoload); err != nil {
+				msg := "failed to add key: " + err.Error()
+				if errors.Is(err, agent.ErrVaultLocked) {
+					msg = "vault is locked; unlock first with 'sshush unlock' or 'sshush vault unlock-recovery'"
 				}
 				return style.NewOutput().Error(msg).AsError()
 			}
 			continue
 		}
-		if err := agent.AddKeyToSocketFromPath(socketPath, path); err != nil {
+		if err := session.AddKeyFromPath(path); err != nil {
 			if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
 				return style.NewOutput().Error(err.Error()).AsError()
 			}
@@ -86,7 +86,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 	out.PrintErr()
-	after, _ := agent.ListKeysFromSocket(socketPath)
+	after, _ := session.List()
 	printKeysDiff(agentKeysToEntries(before), agentKeysToEntries(after)).Print()
 	return nil
 }

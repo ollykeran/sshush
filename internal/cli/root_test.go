@@ -18,6 +18,7 @@ func TestLoadMergedConfig_noOverrides(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/tmp/agent.sock",
 		KeyPaths:   []string{"/tmp/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := config.LoadConfig(path)
@@ -39,6 +40,7 @@ func TestLoadMergedConfig_socketOverride(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/from/file.sock",
 		KeyPaths:   []string{"/tmp/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := LoadMergedConfig(path, LoadOverrides{
@@ -60,6 +62,7 @@ func TestLoadMergedConfig_keyAppend(t *testing.T) {
 	writeConfig(t, path, config.Config{
 		SocketPath: "/tmp/sock",
 		KeyPaths:   []string{"/config/key1"},
+		AgentType:  config.AgentTypeKeys,
 	})
 
 	cfg, err := LoadMergedConfig(path, LoadOverrides{
@@ -169,6 +172,38 @@ func TestResolveNoColor_env_unset_does_not_activate(t *testing.T) {
 	resolveNoColor(cmd)
 	if style.IsPlainMode() {
 		t.Fatal("expected plain mode to remain false when NO_COLOR is unset")
+	}
+}
+
+func TestResolveNoColor_config_activates_plain_mode(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+	style.SetPlainMode(false)
+
+	t.Setenv("NO_COLOR", "")
+
+	cmd := newConfiguredCommand(&config.Config{Theme: config.ThemeSection{NoColor: true}})
+	cmd.Flags().Bool("no-color", false, "")
+	resolveNoColor(cmd)
+	if !style.IsPlainMode() {
+		t.Fatal("expected plain mode from theme.no_color in config")
+	}
+}
+
+// An explicit --no-color=false outranks theme.no_color (flag > env > config).
+func TestResolveNoColor_flag_false_outranks_config(t *testing.T) {
+	prev := style.IsPlainMode()
+	defer style.SetPlainMode(prev)
+	style.SetPlainMode(false)
+
+	t.Setenv("NO_COLOR", "")
+
+	cmd := newConfiguredCommand(&config.Config{Theme: config.ThemeSection{NoColor: true}})
+	cmd.Flags().Bool("no-color", false, "")
+	_ = cmd.ParseFlags([]string{"--no-color=false"})
+	resolveNoColor(cmd)
+	if style.IsPlainMode() {
+		t.Fatal("expected --no-color=false to outrank theme.no_color")
 	}
 }
 

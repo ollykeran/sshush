@@ -58,7 +58,9 @@ func themeMessageTimeoutCmd(generation int) tea.Cmd {
 // Theme is used for all TUI colours; pass theme.DefaultTheme() or from config.
 // configPath is used by the theme picker to persist theme changes.
 // agentBackendMode is "vault" or "keys" (from config.AgentBackendMode); shown in the footer.
-func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode string) *Skeleton {
+// vaultPath is the configured [vault].vault_path (from config.VaultPathForAgent), used only
+// when agentBackendMode is "vault" to register the Vault tab.
+func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode, vaultPath string) *Skeleton {
 	s := NewSkeleton()
 	s.theme = t
 	s.styles = BuildStyles(t)
@@ -71,6 +73,9 @@ func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode strin
 	s.AddPage("create", "Create", NewCreateScreen(s))
 	s.AddPage("edit", "Edit", NewEditScreen(s, socketPath))
 	s.AddPage("export", "Export", NewExportScreen(s, socketPath))
+	if agentBackendMode == "vault" {
+		s.AddPage("vault", "Vault", NewVaultScreen(s, configPath, socketPath, vaultPath))
+	}
 	s.AddWidget(daemonStatusWidgetID(), "stopped")
 	return s
 }

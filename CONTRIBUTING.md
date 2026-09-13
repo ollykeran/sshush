@@ -3,7 +3,7 @@
 ## Development setup
 
 1. Clone the repo.
-2. Install [just](https://github.com/casey/just) and Go 1.26+.
+2. Install [just](https://github.com/casey/just) and Go 1.27+.
 3. Run `just build` to build both binaries.
 4. Run `just test` to run tests.
 
