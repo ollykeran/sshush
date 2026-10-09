@@ -857,7 +857,7 @@ func (s *VaultScreen) View() tea.View {
 		boxW := sectionBoxWidth(width) - 4
 		body := lipgloss.NewStyle().Width(boxW).Render(s.recoveryDisplay.phrase)
 		box := st.FocusedBorderStyle.Width(boxW).Render(body)
-		hint := st.DimStyle.Render("Also written to " + utils.DisplayPath(s.recoveryDisplay.file) + " (mode 0600). Press any key to continue.")
+		hint := st.DimStyle.Render("Also written to " + utils.DisplayPath(s.recoveryDisplay.file) + " (readable only by you). Press any key to continue.")
 		return tea.NewView(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 			title+"\n"+box+"\n"+hint))
 	}

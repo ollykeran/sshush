@@ -6,18 +6,20 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/secfile"
+
 	ssh "golang.org/x/crypto/ssh"
 )
 
-// SavePair writes the private key with 0600 permissions and the public key
-// (.pub) with 0644 permissions to the specified directory.
+// SavePair writes the private key, readable only by the current user, and the
+// public key (.pub) to the specified directory.
 func SavePair(dir, filename string, privPEM, pubAuth []byte) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := secfile.MkdirAll(dir); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
 	privPath := filepath.Join(dir, filename)
-	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
+	if err := secfile.WriteFile(privPath, privPEM); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 
@@ -38,7 +40,7 @@ func SaveWithComment(rawKey interface{}, comment, privPath string) error {
 	}
 
 	privPEM := pem.EncodeToMemory(block)
-	if err := os.WriteFile(privPath, privPEM, 0o600); err != nil {
+	if err := secfile.WriteFile(privPath, privPEM); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 

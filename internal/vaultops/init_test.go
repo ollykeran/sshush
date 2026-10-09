@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 func TestInitTarget_noVaultPathIsAnError(t *testing.T) {
@@ -47,12 +49,8 @@ func TestInit_withRecoveryWritesPhraseAndFile(t *testing.T) {
 	if string(body) != res.Mnemonic+"\n" {
 		t.Fatalf("recovery.txt: want %q, got %q", res.Mnemonic+"\n", string(body))
 	}
-	fi, err := os.Stat(res.RecoveryFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("recovery.txt mode: want %v, got %v", os.FileMode(0o600), fi.Mode().Perm())
+	if private, err := secfile.IsPrivate(res.RecoveryFile); err != nil || !private {
+		t.Fatalf("recovery.txt is readable by other users (private=%v, err=%v)", private, err)
 	}
 }
 
@@ -75,12 +73,8 @@ func TestInit_extraRecoveryFileGetsTheSamePhrase(t *testing.T) {
 	if string(body) != res.Mnemonic+"\n" {
 		t.Fatalf("extra file: want %q, got %q", res.Mnemonic+"\n", string(body))
 	}
-	fi, err := os.Stat(extra)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("extra file mode: want %v, got %v", os.FileMode(0o600), fi.Mode().Perm())
+	if private, err := secfile.IsPrivate(extra); err != nil || !private {
+		t.Fatalf("the extra recovery file is readable by other users (private=%v, err=%v)", private, err)
 	}
 }
 

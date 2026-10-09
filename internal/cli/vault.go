@@ -75,7 +75,7 @@ func newVaultInitCommand() *cobra.Command {
 	}
 	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
 	cmd.Flags().Bool("no-recovery", false, "do not generate and display a 24-word recovery phrase")
-	cmd.Flags().String("recovery-file", "", "also write the recovery phrase to this file (mode 0600)")
+	cmd.Flags().String("recovery-file", "", "also write the recovery phrase to this file (readable only by you)")
 	return cmd
 }
 
@@ -122,7 +122,7 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 	}
 	out.Spacer().
 		Info("Store this phrase offline; it is not saved anywhere else.")
-	out.Success("Also written to " + utils.DisplayPath(res.RecoveryFile) + " (mode 0600)")
+	out.Success("Also written to " + utils.DisplayPath(res.RecoveryFile) + " (readable only by you)")
 	if err := CopyToClipboard(res.Mnemonic); err == nil {
 		out.Success("Copied to clipboard.")
 	}

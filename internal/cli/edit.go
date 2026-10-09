@@ -13,6 +13,7 @@ import (
 	"github.com/ollykeran/sshush/internal/editcomment"
 	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/runtime"
+	"github.com/ollykeran/sshush/internal/secfile"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/spf13/cobra"
@@ -48,7 +49,7 @@ sshush edit my-key-comment --comment 'updated'`,
 			return runEdit(configFrom(cmd), args[0], editorFlag, commentFlag, cmd.Flags().Changed("comment"), copyFlag, outputFlag, filepathFlag)
 		},
 	}
-	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim,nano,vi)")
+	cmd.Flags().StringVarP(&editorFlag, "editor", "e", "", "editor command (default $EDITOR, fallback vim, nano, then vi or notepad)")
 	cmd.Flags().StringVarP(&commentFlag, "comment", "C", "", "new key comment (skip editor)")
 	cmd.Flags().BoolVar(&copyFlag, "copy", false, "write edited key to a new file (requires -o/--output)")
 	cmd.Flags().StringVarP(&outputFlag, "output", "o", "", "destination path when using --copy")
@@ -227,7 +228,7 @@ func runEdit(cfg *config.Config, arg, editorFlag, commentFlag string, commentFla
 		if marshalErr != nil {
 			return style.NewOutput().Error(fmt.Sprintf("marshal key: %v", marshalErr)).AsError()
 		}
-		if writeErr := os.WriteFile(destPath, pem.EncodeToMemory(block), 0o600); writeErr != nil {
+		if writeErr := secfile.WriteFile(destPath, pem.EncodeToMemory(block)); writeErr != nil {
 			return style.NewOutput().Error(fmt.Sprintf("write private key: %v", writeErr)).AsError()
 		}
 		srcPubPath := privateKeyPath + ".pub"

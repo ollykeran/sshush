@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 // VaultFileVersion is the current vault JSON format version for future migrations.
@@ -52,11 +54,11 @@ type VaultStore struct {
 }
 
 // Open reads the vault at path, or creates an empty store if the file does not exist.
-// Creates parent directory with 0700. If file is missing, the store is ready for Init.
+// Creates the parent directory, private to the current user. If file is missing, the store is ready for Init.
 // Caller does not need to close the store; no persistent connection is held.
 func Open(path string) (*VaultStore, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := secfile.MkdirAll(dir); err != nil {
 		return nil, fmt.Errorf("vault: create directory %s: %w", dir, err)
 	}
 	data, err := os.ReadFile(path)
@@ -84,7 +86,8 @@ func Open(path string) (*VaultStore, error) {
 	}, nil
 }
 
-// Save serializes the store to JSON and writes atomically to path (.tmp then rename), then chmod 0600.
+// Save serializes the store to JSON and writes atomically to path (.tmp then rename),
+// readable only by the current user.
 func (s *VaultStore) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -98,29 +101,13 @@ func (s *VaultStore) Save() error {
 		return fmt.Errorf("vault: marshal JSON: %w", err)
 	}
 	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+	if err := secfile.WriteFile(tmpPath, data); err != nil {
+		os.Remove(tmpPath)
 		return fmt.Errorf("vault: write temp file %s: %w", tmpPath, err)
-	}
-	fh, err := os.Open(tmpPath)
-	if err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("vault: open temp file %s: %w", tmpPath, err)
-	}
-	if err := fh.Sync(); err != nil {
-		fh.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("vault: sync temp file %s: %w", tmpPath, err)
-	}
-	if err := fh.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("vault: close temp file %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, s.path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("vault: rename %s to %s: %w", tmpPath, s.path, err)
-	}
-	if err := os.Chmod(s.path, 0600); err != nil {
-		return fmt.Errorf("vault: chmod %s: %w", s.path, err)
 	}
 	return nil
 }

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	ssh "golang.org/x/crypto/ssh"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 func TestGenerate(t *testing.T) {
@@ -93,19 +96,16 @@ func TestSavePair(t *testing.T) {
 	privPath := filepath.Join(dir, "id_test")
 	pubPath := privPath + ".pub"
 
-	privInfo, err := os.Stat(privPath)
-	if err != nil {
-		t.Fatalf("stat private key: %v", err)
-	}
-	if got := privInfo.Mode().Perm(); got != 0o600 {
-		t.Fatalf("private permissions = %o, want 600", got)
+	if private, err := secfile.IsPrivate(privPath); err != nil || !private {
+		t.Fatalf("the private key is readable by other users (private=%v, err=%v)", private, err)
 	}
 
 	pubInfo, err := os.Stat(pubPath)
 	if err != nil {
 		t.Fatalf("stat public key: %v", err)
 	}
-	if got := pubInfo.Mode().Perm(); got != 0o644 {
+	// Windows has no file modes; who can read a file there is its access list.
+	if got := pubInfo.Mode().Perm(); runtime.GOOS != "windows" && got != 0o644 {
 		t.Fatalf("public permissions = %o, want 644", got)
 	}
 }

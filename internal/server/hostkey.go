@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 // EnsureHostKey makes path usable as the server's host key, generating a new
@@ -30,7 +32,7 @@ func EnsureHostKey(path string) (created bool, err error) {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := secfile.MkdirAll(dir); err != nil {
 		return false, fmt.Errorf("server: create host key directory %s: %w", dir, err)
 	}
 	keyPEM, err := generateHostKeyPEM()
@@ -47,6 +49,10 @@ func EnsureHostKey(path string) (created bool, err error) {
 		return false, fmt.Errorf("server: write host key %s: %w", path, err)
 	}
 	defer f.Close()
+	// Private before the key goes in; on Windows the mode above does not do it.
+	if err := secfile.Restrict(path); err != nil {
+		return false, fmt.Errorf("server: write host key %s: %w", path, err)
+	}
 	if _, err := f.Write(keyPEM); err != nil {
 		return false, fmt.Errorf("server: write host key %s: %w", path, err)
 	}
