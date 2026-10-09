@@ -210,6 +210,10 @@ func TestE2E_ServerStartStop(t *testing.T) {
 }
 
 func TestE2E_ServerConnectAgentAuth(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
@@ -265,6 +269,10 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 }
 
 func TestE2E_ServerFileAuth(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "fileauth-key")
@@ -384,6 +392,10 @@ func TestE2E_ServerHostKeyFile(t *testing.T) {
 }
 
 func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
