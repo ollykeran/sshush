@@ -233,6 +233,7 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().StringP("socket", "s", "", "path to agent socket")
 	root.PersistentFlags().Bool("no-color", false, "disable colours and fancy output (also via NO_COLOR)")
 	root.Flags().BoolP("version", "v", false, "print version and exit")
+	addShellFlag(root)
 
 	return root
 }

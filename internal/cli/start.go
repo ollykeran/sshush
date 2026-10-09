@@ -7,6 +7,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
@@ -18,14 +19,29 @@ import (
 func newStartCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "start",
-		Example: "sshush start\n\neval $(sshush start)",
+		Example: "sshush start\n\neval $(sshush start)\n\nsshush start --shell fish | source",
 		Short:   "Start the sshush agent daemon",
-		Long:    "Start the sshush agent daemon in the background.",
-		Args:    argsNoneOrHelp,
-		RunE:    runStart,
+		Long: "Start the sshush agent daemon in the background.\n\n" +
+			"When stdout is not a terminal, prints a line that sets SSH_AUTH_SOCK for the calling shell; " +
+			"its syntax comes from [agent].shell in config, or --shell (posix or fish).",
+		Args: argsNoneOrHelp,
+		RunE: runStart,
 	}
 	cmd.Flags().StringP("config", "c", "", "path to config file")
+	addShellFlag(cmd)
 	return cmd
+}
+
+// addShellFlag registers --shell, which picks the syntax of the SSH_AUTH_SOCK line.
+func addShellFlag(cmd *cobra.Command) {
+	cmd.Flags().String("shell", "", "syntax of the SSH_AUTH_SOCK line printed for eval: posix or fish (default: [agent].shell from config, else posix)")
+}
+
+// printAuthSockLine writes the SSH_AUTH_SOCK line to stdout (for eval) only when stdout is piped.
+func printAuthSockLine(authSockLine string) {
+	if !isTTY(os.Stdout) {
+		fmt.Fprintln(os.Stdout, authSockLine)
+	}
 }
 
 func runStart(cmd *cobra.Command, _ []string) error {
@@ -48,11 +64,18 @@ func runStartDaemon(cmd *cobra.Command) error {
 		return fmt.Errorf("cli: resolve absolute config path: %w", err)
 	}
 	cfg := *loaded
+	// --shell wins over [agent].shell; reload has no --shell flag and uses config.
+	shell := cfg.Shell
+	if f := cmd.Flags().Lookup("shell"); f != nil && f.Changed {
+		shell = f.Value.String()
+	}
+	absSocket, _ := filepath.Abs(cfg.SocketPath)
+	authSockLine, err := platform.AuthSockLine(shell, absSocket)
+	if err != nil {
+		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use posix or fish)").AsError()
+	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
-		absSocket, _ := filepath.Abs(cfg.SocketPath)
-		if !isTTY(os.Stdout) {
-			fmt.Fprintln(os.Stdout, "export SSH_AUTH_SOCK='"+absSocket+"'")
-		}
+		printAuthSockLine(authSockLine)
 		out := style.NewOutput().
 			Success("* sshushd running at " + utils.DisplayPath(absSocket))
 		session, err := agent.Open(cfg.SocketPath)
@@ -117,19 +140,17 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	return startSuccess(out, &cfg)
+	return startSuccess(out, &cfg, authSockLine)
 }
 
-// startSuccess prints the export line to stdout (for eval) only when stdout is
+// startSuccess prints authSockLine to stdout (for eval) only when stdout is
 // piped, and the pretty success message (and any prior warnings) to stderr.
 // If the agent uses a vault, prompts for passphrase and unlocks before listing keys.
-func startSuccess(out *style.Output, cfg *config.Config) error {
+func startSuccess(out *style.Output, cfg *config.Config, authSockLine string) error {
 	socketPath := cfg.SocketPath
 	absSocket, _ := filepath.Abs(socketPath)
 
-	if !isTTY(os.Stdout) {
-		fmt.Fprintln(os.Stdout, "export SSH_AUTH_SOCK='"+absSocket+"'")
-	}
+	printAuthSockLine(authSockLine)
 
 	if out.Len() > 0 {
 		out.Spacer()
