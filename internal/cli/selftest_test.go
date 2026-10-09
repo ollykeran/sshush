@@ -149,3 +149,27 @@ func TestRunSelftest_sshAuthSockUnset(t *testing.T) {
 		t.Fatalf("runSelftest with unset SSH_AUTH_SOCK: %v", err)
 	}
 }
+
+func TestAuthSockEnvLine(t *testing.T) {
+	const sock = `\\.\pipe\sshush-agent`
+	tests := []struct {
+		name, authSock, persisted string
+		want                      string
+		wantOK                    bool
+	}{
+		{"set and right", sock, "", "SSH_AUTH_SOCK=" + sock + "  ✓", true},
+		{"set and right, whatever is persisted", sock, "elsewhere", "SSH_AUTH_SOCK=" + sock + "  ✓", true},
+		{"set to another agent", "/tmp/other.sock", "", "SSH_AUTH_SOCK=/tmp/other.sock (differs from socket)", false},
+		{"unset", "", "", "SSH_AUTH_SOCK not set", false},
+		{"unset here but set for new windows", "", sock, "SSH_AUTH_SOCK not set in this window; new windows have it", false},
+		{"unset here, new windows get another agent", "", "elsewhere", "SSH_AUTH_SOCK not set in this window; new windows get elsewhere (differs from socket)", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := authSockEnvLine(tt.authSock, tt.persisted, sock)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("got %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

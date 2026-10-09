@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/version"
@@ -28,6 +29,26 @@ func newSelftestCommand() *cobra.Command {
 	}
 }
 
+// authSockEnvLine describes what SSH_AUTH_SOCK holds in this process against the
+// socket the agent is on, and whether that is what ssh needs to find the agent.
+// persisted is the value new processes will get when the system keeps one
+// (Windows; see platform.PersistedEnv), which explains the commonest surprise
+// there: the variable was just set for the user, and this window predates it.
+func authSockEnvLine(authSock, persisted, socketPath string) (line string, ok bool) {
+	switch {
+	case authSock == socketPath:
+		return fmt.Sprintf("SSH_AUTH_SOCK=%s  ✓", authSock), true
+	case authSock != "":
+		return fmt.Sprintf("SSH_AUTH_SOCK=%s (differs from socket)", authSock), false
+	case persisted == socketPath:
+		return "SSH_AUTH_SOCK not set in this window; new windows have it", false
+	case persisted != "":
+		return fmt.Sprintf("SSH_AUTH_SOCK not set in this window; new windows get %s (differs from socket)", persisted), false
+	default:
+		return "SSH_AUTH_SOCK not set", false
+	}
+}
+
 func runSelftest(cmd *cobra.Command, _ []string) error {
 	cfg := configFrom(cmd)
 	if cfg == nil {
@@ -40,13 +61,12 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 
 	out := style.NewOutput()
 
-	authSock := os.Getenv("SSH_AUTH_SOCK")
-	if authSock == "" {
-		out.Add(style.Focus("env:    ") + style.Err("SSH_AUTH_SOCK not set"))
-	} else if authSock != socketPath {
-		out.Add(style.Focus("env:    ") + style.Err(fmt.Sprintf("SSH_AUTH_SOCK=%s (differs from socket)", authSock)))
+	persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
+	envLine, envOK := authSockEnvLine(os.Getenv("SSH_AUTH_SOCK"), persisted, socketPath)
+	if envOK {
+		out.Add(style.Focus("env:    ") + style.Success(envLine))
 	} else {
-		out.Add(style.Focus("env:    ") + style.Success(fmt.Sprintf("SSH_AUTH_SOCK=%s  ✓", authSock)))
+		out.Add(style.Focus("env:    ") + style.Err(envLine))
 	}
 
 	session, sessionErr := agent.Open(socketPath)
