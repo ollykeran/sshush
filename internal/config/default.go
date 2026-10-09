@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"text/template"
 
@@ -210,6 +211,10 @@ func SetupConfig() {
 	if _, err := os.Stat(expanded); os.IsNotExist(err) {
 		firstRun = CreateDefaultConfig() == nil
 	}
+	if firstRun && goruntime.GOOS == "windows" {
+		// The config just written names the default pipe, so that is the one to point ssh at.
+		setupSSHIdentityAgent(utils.ExpandHomeDirectory("~/.ssh"), platform.DefaultSocketPath(), os.Stderr)
+	}
 
 	setup, ok := platform.ShellSetupForAutoSetup()
 	if !ok {
@@ -268,4 +273,50 @@ func setupPowerShellProfile(setup platform.ShellSetup, firstRun bool, hint io.Wr
 	}
 	defer f.Close()
 	_, _ = f.WriteString(addition)
+}
+
+// setupSSHIdentityAgent names the agent's pipe in sshDir's config file, so ssh
+// finds sshush even where SSH_AUTH_SOCK is not set (cmd, Git, a shell with no
+// profile). It does nothing without an existing sshDir, and leaves alone a
+// config that already sets IdentityAgent anywhere: that is the user's choice of
+// agent. The block goes last, where ssh reads it after every more specific Host.
+func setupSSHIdentityAgent(sshDir, pipe string, note io.Writer) {
+	if st, err := os.Stat(sshDir); err != nil || !st.IsDir() {
+		return
+	}
+	path := filepath.Join(sshDir, "config")
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if sshConfigSetsIdentityAgent(string(content)) {
+		return
+	}
+	// Forward slashes: ssh treats a backslash in its config as an escape.
+	addition := "# sshush: use the sshush agent\nHost *\n    IdentityAgent " + strings.ReplaceAll(pipe, `\`, "/") + "\n"
+	if len(content) > 0 {
+		if content[len(content)-1] != '\n' {
+			addition = "\n" + addition
+		}
+		addition = "\n" + addition
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(addition); err == nil {
+		fmt.Fprintln(note, "Added IdentityAgent for sshush to "+utils.DisplayPath(path))
+	}
+}
+
+// sshConfigSetsIdentityAgent reports whether ssh config content has an
+// IdentityAgent line that is not commented out.
+func sshConfigSetsIdentityAgent(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "identityagent") {
+			return true
+		}
+	}
+	return false
 }

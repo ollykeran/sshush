@@ -58,6 +58,8 @@ Only you (and the SYSTEM account) can connect to the pipe.
       IdentityAgent //./pipe/sshush-agent
   ```
 
+  sshush adds this block for you the first time it runs, if you have a `~\.ssh` folder and its `config` does not set `IdentityAgent` already. It is written once, for the default pipe: if you change `socket_path` later, change it here too.
+
 - Set `socket_path = '\\.\pipe\openssh-ssh-agent'`. That is the pipe `ssh.exe` uses when `SSH_AUTH_SOCK` is unset, so everything finds sshush with no setup at all. It only works while the Windows "OpenSSH Authentication Agent" service is stopped, since the two cannot share the name.
 
 A path that is not a pipe name is treated as a Unix socket, which Windows supports but `ssh.exe` does not.

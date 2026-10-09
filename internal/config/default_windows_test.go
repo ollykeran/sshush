@@ -94,3 +94,35 @@ func TestSetupConfig_appendsToAnExistingPowerShellProfile(t *testing.T) {
 		t.Fatalf("expected the start line exactly once, got:\n%s", data)
 	}
 }
+
+// On the run that creates the config, SetupConfig points ssh at the agent's
+// pipe when there is a .ssh directory to do it in, and only then.
+func TestSetupConfig_addsIdentityAgentToSSHConfig(t *testing.T) {
+	for _, haveSSHDir := range []bool{true, false} {
+		home := t.TempDir()
+		t.Setenv("USERPROFILE", home)
+		t.Setenv("XDG_CONFIG_HOME", "")
+		sshDir := filepath.Join(home, ".ssh")
+		if haveSSHDir {
+			if err := os.MkdirAll(sshDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		SetupConfig()
+
+		data, err := os.ReadFile(filepath.Join(sshDir, "config"))
+		if !haveSSHDir {
+			if _, statErr := os.Stat(sshDir); !os.IsNotExist(statErr) {
+				t.Fatalf(".ssh must not be created, stat err = %v", statErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "IdentityAgent //./pipe/sshush-agent\n") {
+			t.Fatalf("unexpected ssh config:\n%s", data)
+		}
+	}
+}

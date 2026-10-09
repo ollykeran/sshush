@@ -489,3 +489,83 @@ func TestSetupPowerShellProfile(t *testing.T) {
 		}
 	})
 }
+
+func TestSetupSSHIdentityAgent(t *testing.T) {
+	const pipe = platform.WindowsPipeName
+	const block = "Host *\n    IdentityAgent //./pipe/sshush-agent\n"
+
+	t.Run("no .ssh directory: nothing created", func(t *testing.T) {
+		sshDir := filepath.Join(t.TempDir(), ".ssh")
+		var note bytes.Buffer
+		setupSSHIdentityAgent(sshDir, pipe, &note)
+		if _, err := os.Stat(sshDir); !os.IsNotExist(err) {
+			t.Fatalf(".ssh must not be created, stat err = %v", err)
+		}
+		if note.Len() != 0 {
+			t.Fatalf("expected no note, got %q", note.String())
+		}
+	})
+
+	t.Run("no config: created with the pipe in forward slashes", func(t *testing.T) {
+		sshDir := t.TempDir()
+		var note bytes.Buffer
+		setupSSHIdentityAgent(sshDir, pipe, &note)
+		data, err := os.ReadFile(filepath.Join(sshDir, "config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(string(data), block) || strings.Contains(string(data), `\`) {
+			t.Fatalf("unexpected config:\n%s", data)
+		}
+		if !strings.Contains(note.String(), "IdentityAgent") {
+			t.Fatalf("expected a note saying what was added, got %q", note.String())
+		}
+	})
+
+	t.Run("existing config keeps its content and gets the block once", func(t *testing.T) {
+		sshDir := t.TempDir()
+		path := filepath.Join(sshDir, "config")
+		own := "Host work\n    User me"
+		if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+		data, _ := os.ReadFile(path)
+		got := string(data)
+		if !strings.HasPrefix(got, own+"\n\n") || strings.Count(got, block) != 1 {
+			t.Fatalf("unexpected config:\n%s", got)
+		}
+	})
+
+	t.Run("an IdentityAgent already set is respected", func(t *testing.T) {
+		for _, own := range []string{
+			"Host work\n    IdentityAgent //./pipe/other-agent\n",
+			"identityagent=none\n",
+		} {
+			sshDir := t.TempDir()
+			path := filepath.Join(sshDir, "config")
+			if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+			data, _ := os.ReadFile(path)
+			if string(data) != own {
+				t.Fatalf("config changed:\n%s", data)
+			}
+		}
+	})
+
+	t.Run("a commented IdentityAgent does not count", func(t *testing.T) {
+		sshDir := t.TempDir()
+		path := filepath.Join(sshDir, "config")
+		if err := os.WriteFile(path, []byte("# IdentityAgent none\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+		data, _ := os.ReadFile(path)
+		if !strings.HasSuffix(string(data), block) {
+			t.Fatalf("expected the block to be added, got:\n%s", data)
+		}
+	})
+}
