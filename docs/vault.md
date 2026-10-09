@@ -9,7 +9,7 @@ This page matches the implementation in `internal/vault/` (the store and the age
 1. **On disk**: One file (default name `vault.json`, or a path you choose) stores metadata and one record per identity: public key, comment, autoload flag, and an **AES-256-GCM** ciphertext of the private key material (`encrypted_blob` in JSON). The file is human-readable JSON; private keys are not stored in plaintext.
 2. **Master key**: A 32-byte key derived from your **master passphrase** and a random **salt** using **Argon2id** (`internal/kdf`). That key encrypts a **canary** string at init time; successful unlock decrypts the canary and proves the passphrase is correct (constant-time compare).
 3. **Agent**: In vault mode, the daemon uses `VaultAgent`, which implements the SSH agent protocol with encrypted storage. While **locked**, the agent lists no keys (same idea as a locked OpenSSH agent). While **unlocked**, the master key stays in memory so identities can be listed and signing can decrypt blobs temporarily.
-4. **Recovery (optional)**: If you did not pass `--no-recovery` at `vault init`, a **BIP-39** 24-word mnemonic is generated. A separate salt and Argon2id derivation wrap the master key for recovery-based unlock. The phrase is written to `recovery.txt` beside the vault (mode `0600`) and shown once in the terminal.
+4. **Recovery (optional)**: If you did not pass `--no-recovery` at `vault init`, a **BIP-39** 24-word mnemonic is generated. A separate salt and Argon2id derivation wrap the master key for recovery-based unlock. The phrase is written to `recovery.txt` beside the vault (readable only by you: mode `0600`, or the equivalent access list on Windows) and shown once in the terminal.
 
 **Path resolution**: If `vault_path` is a directory or ends with a path separator, the vault file is `vault.json` inside that directory (`internal/vault/path.go`). Otherwise the path is used as the file path.
 
@@ -25,7 +25,7 @@ This page matches the implementation in `internal/vault/` (the store and the age
 
 **Signing path**: `Sign` decrypts the identity blob with the master key, builds a signer, signs, and **wipes** the decrypted buffer (`internal/vault/agent.go`). The agent does **not** expose `Signers()` with long-lived decrypted keys; it returns "not implemented" so clients cannot keep raw `ssh.Signer` instances for every key.
 
-**On-disk write**: `Save` writes a temp file, syncs, renames over the vault path, then `chmod 0600` (`internal/vault/store.go`).
+**On-disk write**: `Save` writes a temp file readable only by you (mode `0600`; on Windows an access list naming you and SYSTEM, see `internal/secfile`), syncs it, and renames it over the vault path (`internal/vault/store.go`).
 
 ## Why this is considered secure (threat model)
 
@@ -105,7 +105,7 @@ Creates a new vault. Prompts for passphrase twice (confirm).
 |------|---------|
 | `--vault-path` | Vault file path (default: `[vault].vault_path` from config) |
 | `--no-recovery` | Do not generate a 24-word recovery phrase |
-| `--recovery-file` | Also write the recovery phrase to this file (mode `0600`) |
+| `--recovery-file` | Also write the recovery phrase to this file (readable only by you) |
 
 If recovery is enabled (default): generates a mnemonic, enables recovery in the store, writes `recovery.txt` next to the vault, optionally `--recovery-file`, prints the phrase (with layout to reduce copy mistakes), and may copy to clipboard when supported.
 

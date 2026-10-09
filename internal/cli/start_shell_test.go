@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
 )
 
 // runStartCapturingStdout runs runStartDaemon against an already-running test
@@ -64,7 +65,12 @@ func TestStart_authSockLineFish(t *testing.T) {
 		t.Fatal(err)
 	}
 	line, socketPath, _ := strings.Cut(got, "|")
-	if want := "set -gx SSH_AUTH_SOCK '" + socketPath + "';"; line != want {
+	// Not spelled out here: fish needs the backslashes of a Windows path escaped.
+	want, err := platform.AuthSockLine("fish", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(want, "set -gx SSH_AUTH_SOCK '") || line != want {
 		t.Fatalf("got %q, want %q", line, want)
 	}
 }
@@ -96,7 +102,12 @@ func TestStart_authSockLineFromConfigShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	line, socketPath, _ := strings.Cut(got, "|")
-	if want := "set -gx SSH_AUTH_SOCK '" + socketPath + "';"; line != want {
+	// Not spelled out here: fish needs the backslashes of a Windows path escaped.
+	want, err := platform.AuthSockLine("fish", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(want, "set -gx SSH_AUTH_SOCK '") || line != want {
 		t.Fatalf("got %q, want %q", line, want)
 	}
 }

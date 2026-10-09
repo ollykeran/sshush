@@ -49,6 +49,7 @@ jobs:
           files: |
             build/sshush-*-linux-amd64.tar.gz
             build/sshush-*-darwin-*.tar.gz
+            build/sshush-*-windows-amd64.zip
             build/sshush-*.deb
             build/sshush-*.rpm
             build/sshush-*.pkg.tar.zst

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestExternalMode_ReloadErrorsOnRestartNeeded(t *testing.T) {
 	// must declare external = true and point at an unreachable socket to force
 	// the needsRestart branch.
 	unreachableSocket := filepath.Join(t.TempDir(), "no-agent-here.sock")
-	configPath := writeConfigFile(t, "[agent]\nsocket_path = \""+unreachableSocket+"\"\nkey_paths = []\ntype = \"external\"\n")
+	configPath := writeConfigFile(t, "[agent]\nsocket_path = \""+filepath.ToSlash(unreachableSocket)+"\"\nkey_paths = []\ntype = \"external\"\n")
 	cmd := cmdWithConfigFlag(configPath)
 
 	// Ensure SSH_AUTH_SOCK fallback doesn't accidentally succeed.
@@ -105,6 +106,9 @@ func TestLoadMergedConfig_externalFallsBackToSSHAuthSock(t *testing.T) {
 }
 
 func TestLoadMergedConfig_externalWithExplicitSocketIgnoresSSHAuthSock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	configPath := writeConfigFile(t, "[agent]\ntype = \"external\"\nsocket_path = \"/tmp/configured.sock\"\n")
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/some-other-agent.sock")
 

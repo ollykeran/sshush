@@ -69,13 +69,14 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 ### Releases
 
-[GitHub Releases](https://github.com/ollykeran/sshush/releases): `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `tar.gz` (Linux and macOS arm/amd on the release page). Release archives ship both binaries; install or unpack as usual.
+[GitHub Releases](https://github.com/ollykeran/sshush/releases): `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `tar.gz` (Linux and macOS arm/amd on the release page), and a `.zip` for Windows. Release archives ship both binaries; install or unpack as usual.
 
 | Package | |
 | --- | --- |
 | **Debian/Ubuntu** | `sudo dpkg -i sshush-*-amd64.deb` |
 | **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
+| **Windows** | unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md) |
 
 ### From source
 

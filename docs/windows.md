@@ -8,13 +8,14 @@ See also: [Setup](setup.md) | [Config](config.md)
 
 | | Windows |
 |---|---|
-| Agent with `[agent].type = "keys"` (`start`, `stop`, `reload`, `list`, `add`, `remove`) | yes |
+| Agent (`start`, `stop`, `reload`, `list`, `add`, `remove`) | yes |
 | `ssh.exe`, `ssh-add.exe`, Git over SSH through the agent | yes |
 | PowerShell integration (`--shell powershell`) | yes |
-| Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | not yet |
-| SSH server (`sshush server`) | not yet: it refuses to start |
+| Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | yes |
+| TUI, key creation and editing, clipboard | yes |
+| SSH server (`sshush server`) | no: it refuses to start |
 
-The vault is held back on purpose. Its protection on disk rests on file modes (`0600`), which Windows does not have; until the vault file gets a proper access control list it would be readable more widely than it should be.
+The SSH server gives whoever signs in a shell on a pseudo-terminal, with process groups to clean up after them. Both are Unix mechanisms the server is built on, so on Windows it says it is not supported rather than half work.
 
 ## Quick start
 
@@ -69,13 +70,60 @@ A path that is not a pipe name is treated as a Unix socket, which Windows suppor
 | Pidfile | `%LOCALAPPDATA%\sshush\sshush.pid` |
 | Key paths in config | either separator; `"~/.ssh/id_ed25519"` and `'C:\Users\me\.ssh\id_ed25519'` both work. In a double-quoted TOML string a backslash must be doubled. |
 
+## Who can read your files
+
+On Unix sshush keeps its secrets private with file modes (`0600`). Windows has no such modes: a new file takes its permissions from the folder it is in. So on Windows sshush sets the permissions itself, on the vault file, the folder it creates for it, `recovery.txt`, and any private key it writes: your account and SYSTEM, nobody else, with inheritance from the parent folder switched off. To check one:
+
+```powershell
+icacls $env:LOCALAPPDATA\sshush\vault.json
+```
+
+Key files you already had are left as they are until sshush rewrites one (editing its comment, say).
+
+## Editor and clipboard
+
+`sshush edit` opens the comment in `$env:EDITOR`, or `--editor`; with neither set it uses vim or nano if installed, otherwise Notepad. A path with spaces works bare or quoted, and quotes are needed once there are arguments as well:
+
+```powershell
+$env:EDITOR = '"C:\Program Files\Notepad++\notepad++.exe" -multiInst -nosession'
+```
+
+The editor has to stay in the foreground until you close the file. For VS Code that is `code --wait`.
+
+Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install.
+
 ## Stopping the daemon
 
 `sshush stop` asks the daemon to exit and waits for it. If the daemon is killed some other way (Task Manager, a reboot) its pidfile is left behind; the next `sshush start` notices and starts normally.
 
 ## Using it from WSL
 
-A Linux distro under WSL can run its own sshush on a Unix socket, which needs nothing from Windows. Sharing the Windows agent with WSL (through a relay such as npiperelay) is not documented yet.
+A Linux distro under WSL can run its own sshush on a Unix socket, which needs nothing from Windows.
+
+To share the one Windows agent with WSL instead, relay a Unix socket in the distro to the Windows pipe. This takes two extra tools: `socat` in the distro, and [npiperelay](https://github.com/jstarks/npiperelay) on the Windows side (`go install github.com/jstarks/npiperelay@latest` with `GOOS=windows`, or a release binary), somewhere WSL can run it from.
+
+In your WSL shell's startup file:
+
+```sh
+export SSH_AUTH_SOCK="$HOME/.ssh/sshush-windows.sock"
+if ! ss -lx 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
+    rm -f "$SSH_AUTH_SOCK"
+    (setsid socat UNIX-LISTEN:"$SSH_AUTH_SOCK",fork \
+        EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork &) >/dev/null 2>&1
+fi
+```
+
+Each connection to the socket starts one `npiperelay.exe`, which connects to sshush's pipe as you, so the pipe's access list is satisfied without loosening it. `ssh-add -l` in WSL should then list the keys the Windows agent holds.
+
+If it does not:
+
+- **Nothing listed, or "connection refused"**: check that sshush is running on Windows (`sshush list` in PowerShell) and that the pipe name in the `socat` line matches `[agent].socket_path`.
+- **"Error connecting to agent"** after a WSL restart: a stale socket file is left behind; the snippet above removes it, a hand-written one may not.
+- **A vault that is locked** lists no keys from WSL either; unlock it on the Windows side.
+
+## Installing from a release
+
+Releases include `sshush-<version>-windows-amd64.zip`, holding `sshush.exe` and `sshushd.exe`. Unpack both into one folder and add it to your `PATH`. Each binary has a published checksum (`sshush-windows-amd64.sha256`), which `sshush selftest` checks for you.
 
 ## Building
 
@@ -85,4 +133,4 @@ Cross-compile from any platform:
 just build windows
 ```
 
-which writes `build/windows-amd64/sshush.exe` and `sshushd.exe`.
+which writes `build/windows-amd64/sshush.exe` and `sshushd.exe`; `just pkg zip-windows` zips them as a release does.

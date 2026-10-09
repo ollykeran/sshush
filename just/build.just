@@ -65,13 +65,24 @@ build arch="": deps
         ;;
     esac
 
-# Package: `just pkg tarball`, `just pkg deb`, `just pkg all`
+# Package: `just pkg tarball`, `just pkg zip-windows`, `just pkg deb`, `just pkg all`
 pkg target="": (build "linux")
     #!/usr/bin/env bash
     set -euo pipefail
     make_tarball() {
       local src_dir="$1" suffix="$2"
       tar czf "{{ build_dir }}/sshush-{{ version }}-${suffix}.tar.gz" -C "{{ build_dir }}/${src_dir}" sshush sshushd
+    }
+    # Windows users expect a zip. Uses zip when installed, python3's zipfile otherwise.
+    make_zip() {
+      local src_dir="$1" suffix="$2"
+      local out="$(cd "{{ build_dir }}" && pwd)/sshush-{{ version }}-${suffix}.zip"
+      rm -f "$out"
+      if command -v zip >/dev/null 2>&1; then
+        (cd "{{ build_dir }}/${src_dir}" && zip -q "$out" sshush.exe sshushd.exe)
+      else
+        (cd "{{ build_dir }}/${src_dir}" && python3 -m zipfile -c "$out" sshush.exe sshushd.exe)
+      fi
     }
     case "{{ target }}" in
       tarball)
@@ -87,6 +98,11 @@ pkg target="": (build "linux")
         just build darwin-amd64
         echo "Creating macOS amd64 tarball..."
         make_tarball "darwin-amd64" "darwin-amd64"
+        ;;
+      zip-windows)
+        just build windows
+        echo "Creating Windows amd64 zip..."
+        make_zip "windows-amd64" "windows-amd64"
         ;;
       tarball-all)
         just build darwin-all
@@ -121,6 +137,9 @@ pkg target="": (build "linux")
         make_tarball "darwin-arm64" "darwin-arm64"
         echo "Creating macOS amd64 tarball..."
         make_tarball "darwin-amd64" "darwin-amd64"
+        just build windows
+        echo "Creating Windows amd64 zip..."
+        make_zip "windows-amd64" "windows-amd64"
         echo "Building .deb package..."
         VERSION={{ version }} nfpm pkg --packager deb --target {{ build_dir }}/sshush-{{ version }}-amd64.deb
         echo "Building .rpm package..."
@@ -131,12 +150,12 @@ pkg target="": (build "linux")
         VERSION={{ version }} nfpm pkg --packager archlinux --target {{ build_dir }}/sshush-{{ version }}-amd64.pkg.tar.zst
         ;;
       "")
-        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|deb|rpm|source|archlinux|all]" >&2
+        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|deb|rpm|source|archlinux|all]" >&2
         exit 1
         ;;
       *)
         echo "Unknown target: {{ target }}" >&2
-        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|deb|rpm|source|archlinux|all]" >&2
+        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|deb|rpm|source|archlinux|all]" >&2
         exit 1
         ;;
     esac
@@ -170,9 +189,12 @@ check-artifacts ver="dev":
     check "$dir/darwin-arm64/sshushd"                   "Mach-O"
     check "$dir/darwin-amd64/sshush"                    "Mach-O"
     check "$dir/darwin-amd64/sshushd"                   "Mach-O"
+    check "$dir/windows-amd64/sshush.exe"               "PE32+"
+    check "$dir/windows-amd64/sshushd.exe"              "PE32+"
     check "$dir/sshush-{{ ver }}-linux-amd64.tar.gz"   "gzip"
     check "$dir/sshush-{{ ver }}-darwin-arm64.tar.gz"  "gzip"
     check "$dir/sshush-{{ ver }}-darwin-amd64.tar.gz"  "gzip"
+    check "$dir/sshush-{{ ver }}-windows-amd64.zip"    "Zip archive"
     check "$dir/sshush-{{ ver }}-amd64.deb"            "Debian"
     check "$dir/sshush-{{ ver }}-amd64.rpm"            "RPM"
     check "$dir/sshush-{{ ver }}.src.rpm"              "RPM"
@@ -187,9 +209,11 @@ checksums:
     set -euo pipefail
     dir="{{ build_dir }}"
     count=0
-    for plat in linux-amd64 darwin-arm64 darwin-amd64; do
+    for plat in linux-amd64 darwin-arm64 darwin-amd64 windows-amd64; do
         for bin in sshush sshushd; do
             f="$dir/$plat/$bin"
+            # The checksum is named without .exe; see platformKeyFor in internal/version.
+            if [ "$plat" = "windows-amd64" ]; then f="$f.exe"; fi
             if [ -f "$f" ]; then
                 sha=$(sha256sum "$f" | cut -d' ' -f1)
                 echo "$sha" > "$dir/${bin}-${plat}.sha256"

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
@@ -12,6 +13,9 @@ import (
 )
 
 func TestLoadMergedConfig_noOverrides(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

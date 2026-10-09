@@ -9,6 +9,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/agent** – SSH agent protocol: serving it over a Unix socket (a named pipe on Windows), and `Session`, the single client entry point for reaching a running agent
 - **internal/cli** – Cobra commands (start, stop, reload, list, add, remove, lock, unlock, selftest, create, edit, export, find, validate, generate, vault, server, theme, tui, completion, version)
 - **internal/config** – Config load, default creation, shell rc setup
+- **internal/clipboard** – Copying text to the system clipboard
 - **internal/editcomment** – Editing a key comment in `$EDITOR` through a temp file
 - **internal/platform** – Portable defaults for config dir, socket/pid paths, shell rc selection
 - **internal/kdf** – Argon2id key derivation, salts and constant-time compare for the vault
@@ -17,6 +18,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/readypipe** – Parent/child readiness handshake used when forking `sshushd`
 - **internal/runtime** – Config/socket path resolution
 - **internal/server** – The TCP SSH server: public-key auth against a file or the agent, optional password auth against the vault's passphrase, and the shell or remote command each session runs, on a pty or over pipes, all logged to a file
+- **internal/secfile** – Files and directories only the current user can read: a file mode on Unix, an access list on Windows
 - **internal/sshushd** – Daemon start/stop/reload control
 - **internal/transport** – Dialling and listening on the agent endpoint: a Unix socket, or a named pipe on Windows (see [Windows](windows.md))
 - **internal/style** – Styled terminal output
