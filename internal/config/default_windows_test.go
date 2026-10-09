@@ -47,7 +47,6 @@ func TestWriteDefaultConfigFile_loadableOnWindows(t *testing.T) {
 func TestSetupConfig_doesNotCreateAPowerShellProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("XDG_CONFIG_HOME", "")
 
 	SetupConfig()
@@ -71,7 +70,6 @@ func TestSetupConfig_doesNotCreateAPowerShellProfile(t *testing.T) {
 func TestSetupConfig_appendsToAnExistingPowerShellProfile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("XDG_CONFIG_HOME", "")
 
 	setup, ok := platform.ShellSetupForAutoSetup()

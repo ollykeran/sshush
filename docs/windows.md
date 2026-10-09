@@ -26,7 +26,7 @@ sshush start --shell powershell | Invoke-Expression
 ssh-add -l
 ```
 
-The first run creates `%LOCALAPPDATA%\sshush\config.toml`, listing the keys found in `~\.ssh`. `sshush start` starts the daemon in the background and prints the line that sets `SSH_AUTH_SOCK`; `Invoke-Expression` applies it to the current shell.
+The first run creates `~\.config\sshush\config.toml`, listing the keys found in `~\.ssh`. `sshush start` starts the daemon in the background and prints the line that sets `SSH_AUTH_SOCK`; `Invoke-Expression` applies it to the current shell.
 
 To do that in every new PowerShell window, add this line to your profile (`notepad $PROFILE`):
 
@@ -66,8 +66,8 @@ A path that is not a pipe name is treated as a Unix socket, which Windows suppor
 
 | | |
 |---|---|
-| Config | `%LOCALAPPDATA%\sshush\config.toml` (or `$XDG_CONFIG_HOME\sshush\config.toml` if that is set) |
-| Pidfile | `%LOCALAPPDATA%\sshush\sshush.pid` |
+| Config | `~\.config\sshush\config.toml` (or `$XDG_CONFIG_HOME\sshush\config.toml` if that is set), the same place as on Unix; `~` is `%USERPROFILE%` |
+| Pidfile | `~\.config\sshush\sshush.pid` |
 | Key paths in config | either separator; `"~/.ssh/id_ed25519"` and `'C:\Users\me\.ssh\id_ed25519'` both work. In a double-quoted TOML string a backslash must be doubled. |
 
 ## Who can read your files
@@ -75,7 +75,7 @@ A path that is not a pipe name is treated as a Unix socket, which Windows suppor
 On Unix sshush keeps its secrets private with file modes (`0600`). Windows has no such modes: a new file takes its permissions from the folder it is in. So on Windows sshush sets the permissions itself, on the vault file, the folder it creates for it, `recovery.txt`, and any private key it writes: your account and SYSTEM, nobody else, with inheritance from the parent folder switched off. To check one:
 
 ```powershell
-icacls $env:LOCALAPPDATA\sshush\vault.json
+icacls $HOME\.config\sshush\vault.json
 ```
 
 Key files you already had are left as they are until sshush rewrites one (editing its comment, say).

@@ -24,21 +24,13 @@ const (
 )
 
 // ConfigDir returns the absolute path to the sshush config directory:
-// $XDG_CONFIG_HOME/sshush when XDG_CONFIG_HOME is set, otherwise ~/.config/sshush
-// — or, on Windows, %LOCALAPPDATA%\sshush.
+// $XDG_CONFIG_HOME/sshush when XDG_CONFIG_HOME is set, otherwise ~/.config/sshush,
+// on Windows as everywhere else.
 func ConfigDir() string {
 	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
 		return filepath.Join(d, "sshush")
 	}
 	home, err := os.UserHomeDir()
-	if goruntime.GOOS == "windows" {
-		if d := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); d != "" {
-			return filepath.Join(d, "sshush")
-		}
-		if err == nil && home != "" {
-			return filepath.Join(home, "AppData", "Local", "sshush")
-		}
-	}
 	if err != nil || home == "" {
 		return filepath.Join(".config", "sshush")
 	}

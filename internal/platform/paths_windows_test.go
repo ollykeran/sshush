@@ -5,12 +5,15 @@ import (
 	"testing"
 )
 
-func TestConfigDir_usesLocalAppData(t *testing.T) {
+// The config directory is ~\.config\sshush, as on Unix, and not under
+// %LOCALAPPDATA% even when that is set.
+func TestConfigDir_isUnderTheProfile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("LOCALAPPDATA", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("LOCALAPPDATA", filepath.Join(tmp, "AppData", "Local"))
 
-	want := filepath.Join(tmp, "sshush")
+	want := filepath.Join(tmp, ".config", "sshush")
 	if got := ConfigDir(); got != want {
 		t.Fatalf("ConfigDir: got %q, want %q", got, want)
 	}
@@ -18,18 +21,6 @@ func TestConfigDir_usesLocalAppData(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	if got := DefaultPidFilePath(); got != filepath.Join(want, PidFileName) {
 		t.Fatalf("DefaultPidFilePath: got %q", got)
-	}
-}
-
-func TestConfigDir_fallsBackToTheProfileWithoutLocalAppData(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("LOCALAPPDATA", "")
-	t.Setenv("USERPROFILE", tmp)
-
-	want := filepath.Join(tmp, "AppData", "Local", "sshush")
-	if got := ConfigDir(); got != want {
-		t.Fatalf("ConfigDir: got %q, want %q", got, want)
 	}
 }
 
