@@ -6,7 +6,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 
 - **cmd/sshush** – CLI entry point
 - **cmd/sshushd** – Daemon entry point (runs the agent)
-- **internal/agent** – SSH agent protocol: serving it over a Unix socket, and `Session`, the single client entry point for reaching a running agent
+- **internal/agent** – SSH agent protocol: serving it over a Unix socket (a named pipe on Windows), and `Session`, the single client entry point for reaching a running agent
 - **internal/cli** – Cobra commands (start, stop, reload, list, add, remove, lock, unlock, selftest, create, edit, export, find, validate, generate, vault, server, theme, tui, completion, version)
 - **internal/config** – Config load, default creation, shell rc setup
 - **internal/editcomment** – Editing a key comment in `$EDITOR` through a temp file
@@ -18,6 +18,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/runtime** – Config/socket path resolution
 - **internal/server** – The TCP SSH server: public-key auth against a file or the agent, optional password auth against the vault's passphrase, and the shell or remote command each session runs, on a pty or over pipes, all logged to a file
 - **internal/sshushd** – Daemon start/stop/reload control
+- **internal/transport** – Dialling and listening on the agent endpoint: a Unix socket, or a named pipe on Windows (see [Windows](windows.md))
 - **internal/style** – Styled terminal output
 - **internal/theme** – Colour theme presets, custom hex validation and merging with the default
 - **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens, and Vault when `[agent].type = "vault"`)
@@ -26,7 +27,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/vaultops** – The vault operations the CLI and TUI both offer, implemented once
 - **internal/version** – Version string
 
-CLI loads config and starts the daemon; daemon runs the agent on a Unix socket. OpenSSH (`ssh`, `ssh-add`) connect via `SSH_AUTH_SOCK`.
+CLI loads config and starts the daemon; daemon runs the agent on a Unix socket, or on Windows a named pipe. OpenSSH (`ssh`, `ssh-add`) connect via `SSH_AUTH_SOCK`.
 
 ## Talking to a running agent
 

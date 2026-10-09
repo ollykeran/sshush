@@ -95,6 +95,7 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 ## Docs
 
 - [Setup](docs/setup.md) – shell, eval, config path
+- [Windows](docs/windows.md) – named pipe, PowerShell, what is not supported yet
 - [Config](docs/config.md) – options, reload, flat TOML migration
 - [Vault](docs/vault.md) – optional vault
 - [TUI](docs/tui.md) – TUI structure

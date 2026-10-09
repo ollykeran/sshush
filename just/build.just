@@ -1,4 +1,4 @@
-# Build binaries: `just build linux`, `just build darwin`, `just build all`
+# Build binaries: `just build linux`, `just build darwin`, `just build windows`, `just build all`
 build arch="": deps
     #!/usr/bin/env bash
     set -euo pipefail
@@ -6,8 +6,10 @@ build arch="": deps
       local os="$1" goarch="$2" out_dir="$3"
       shift 3
       mkdir -p "$out_dir"
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd" ./cmd/sshushd
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush" ./cmd/sshush
+      local ext=""
+      if [ "$os" = "windows" ]; then ext=".exe"; fi
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd$ext" ./cmd/sshushd
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush$ext" ./cmd/sshush
     }
     case "{{ arch }}" in
       dev)
@@ -38,6 +40,10 @@ build arch="": deps
         echo "Building darwin/amd64..."
         build_local darwin amd64 "{{ build_dir }}/darwin-amd64"
         ;;
+      windows)
+        echo "Building windows/amd64..."
+        build_local windows amd64 "{{ build_dir }}/windows-amd64"
+        ;;
       all)
         echo "Building linux/amd64..."
         build_local linux amd64 "{{ build_dir }}/linux-amd64"
@@ -54,7 +60,7 @@ build arch="": deps
         ;;
       *)
         echo "Unknown arch: {{ arch }}" >&2
-        echo "Usage: just build [linux|darwin|darwin-arm64|darwin-amd64|darwin-all|all|dev]" >&2
+        echo "Usage: just build [linux|darwin|darwin-arm64|darwin-amd64|darwin-all|windows|all|dev]" >&2
         exit 1
         ;;
     esac

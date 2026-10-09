@@ -2,7 +2,7 @@
 
 How to get sshush running and integrated with your shell.
 
-See also: [Config](config.md) | [TUI](tui.md)
+See also: [Config](config.md) | [TUI](tui.md) | [Windows](windows.md) (PowerShell, named pipe)
 
 ## eval $(sshush)
 
