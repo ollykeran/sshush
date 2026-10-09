@@ -3,12 +3,16 @@ package platform
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 )
 
 const (
 	// SocketFileName is the default Unix socket filename under the runtime data dir.
 	SocketFileName = "sshush.sock"
+	// WindowsPipeName is the default agent endpoint on Windows: a named pipe,
+	// which is what ssh.exe expects SSH_AUTH_SOCK to name there.
+	WindowsPipeName = `\\.\pipe\sshush-agent`
 	// PidFileName is the sshushd pidfile name under the runtime data dir.
 	PidFileName = "sshush.pid"
 	// ConfigFileName is the config file name inside the config directory.
@@ -20,12 +24,21 @@ const (
 )
 
 // ConfigDir returns the absolute path to the sshush config directory:
-// $XDG_CONFIG_HOME/sshush when XDG_CONFIG_HOME is set, otherwise ~/.config/sshush.
+// $XDG_CONFIG_HOME/sshush when XDG_CONFIG_HOME is set, otherwise ~/.config/sshush
+// — or, on Windows, %LOCALAPPDATA%\sshush.
 func ConfigDir() string {
 	if d := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); d != "" {
 		return filepath.Join(d, "sshush")
 	}
 	home, err := os.UserHomeDir()
+	if goruntime.GOOS == "windows" {
+		if d := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); d != "" {
+			return filepath.Join(d, "sshush")
+		}
+		if err == nil && home != "" {
+			return filepath.Join(home, "AppData", "Local", "sshush")
+		}
+	}
 	if err != nil || home == "" {
 		return filepath.Join(".config", "sshush")
 	}
@@ -47,8 +60,12 @@ func RuntimeDataDir() string {
 	return ConfigDir()
 }
 
-// DefaultSocketPath returns the default absolute path to the agent socket.
+// DefaultSocketPath returns the default absolute path to the agent socket, or
+// on Windows the agent's named pipe.
 func DefaultSocketPath() string {
+	if goruntime.GOOS == "windows" {
+		return WindowsPipeName
+	}
 	return filepath.Join(RuntimeDataDir(), SocketFileName)
 }
 

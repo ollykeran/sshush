@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -18,6 +16,7 @@ import (
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/server"
+	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/ollykeran/sshush/internal/version"
@@ -28,11 +27,11 @@ import (
 // until ctx is done. Does not detach or write a pidfile. Use for in-process (e.g. subshell) mode.
 // If vaultPath is non-empty, uses the vault at that path (starts locked; use sshush unlock).
 func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPath string) error {
-	absSocket, err := filepath.Abs(socketPath)
+	absSocket, err := transport.Abs(socketPath)
 	if err != nil {
 		return fmt.Errorf("socket path: %w", err)
 	}
-	defer os.Remove(absSocket)
+	defer transport.Remove(absSocket)
 	var ext sshagent.ExtendedAgent
 	if vaultPath != "" {
 		resolved := vault.ResolveToFile(vaultPath)
@@ -66,7 +65,7 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 // Call only from the sshushd binary. Removes pidfile and socket on exit.
 // ready, if non-nil, is signaled once the socket is accepting connections.
 func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
-	absSocket, err := filepath.Abs(cfg.SocketPath)
+	absSocket, err := transport.Abs(cfg.SocketPath)
 	if err != nil {
 		return fmt.Errorf("socket path: %w", err)
 	}
@@ -103,9 +102,11 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		}
 		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 	}
-	defer os.Remove(socketPath)
+	defer transport.Remove(socketPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, release := withStopRequest(ctx)
+	defer release()
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
 	err = agent.ListenAndServe(ctx, socketPath, ext, agent.WithReady(ready.Ready))
 	if err != nil {
@@ -122,6 +123,9 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 // Call only from the sshushd binary when invoked with --server. Removes pidfile on exit.
 // ready, if non-nil, is signaled once the listener is accepting connections.
 func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
+	if err := serverSupported(); err != nil {
+		return err
+	}
 	if cfg.ServerListenPort <= 0 {
 		return fmt.Errorf("[server].listen_port must be set in config (e.g. listen_port = 2222 under [server])")
 	}
@@ -251,7 +255,7 @@ func passwordAuthVault(cfg config.Config) (string, error) {
 // Used by the CLI after starting sshushd to confirm the daemon is up before exiting.
 func WaitForSocket(socketPath string, maxAttempts int, interval time.Duration) bool {
 	for i := 0; i < maxAttempts; i++ {
-		if conn, err := net.Dial("unix", socketPath); err == nil {
+		if conn, err := transport.Dial(socketPath); err == nil {
 			conn.Close()
 			return true
 		}
@@ -263,19 +267,4 @@ func WaitForSocket(socketPath string, maxAttempts int, interval time.Duration) b
 // CheckAlreadyRunning returns true if something is already listening on the socket.
 func CheckAlreadyRunning(socketPath string) bool {
 	return checkAlreadyRunning(socketPath)
-}
-
-func detachProcess() error {
-	if _, err := syscall.Setsid(); err != nil {
-		return err
-	}
-	devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
-	if err != nil {
-		return err
-	}
-	defer devNull.Close()
-	dupFd(int(devNull.Fd()), 0)
-	dupFd(int(devNull.Fd()), 1)
-	dupFd(int(devNull.Fd()), 2)
-	return nil
 }

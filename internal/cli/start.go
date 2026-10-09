@@ -11,6 +11,7 @@ import (
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
@@ -19,11 +20,11 @@ import (
 func newStartCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "start",
-		Example: "sshush start\n\neval $(sshush start)\n\nsshush start --shell fish | source",
+		Example: "sshush start\n\neval $(sshush start)\n\nsshush start --shell fish | source\n\nsshush start --shell powershell | Invoke-Expression",
 		Short:   "Start the sshush agent daemon",
 		Long: "Start the sshush agent daemon in the background.\n\n" +
 			"When stdout is not a terminal, prints a line that sets SSH_AUTH_SOCK for the calling shell; " +
-			"its syntax comes from [agent].shell in config, or --shell (posix or fish).",
+			"its syntax comes from [agent].shell in config, or --shell (" + platform.ShellNames + ").",
 		Args: argsNoneOrHelp,
 		RunE: runStart,
 	}
@@ -34,7 +35,7 @@ func newStartCommand() *cobra.Command {
 
 // addShellFlag registers --shell, which picks the syntax of the SSH_AUTH_SOCK line.
 func addShellFlag(cmd *cobra.Command) {
-	cmd.Flags().String("shell", "", "syntax of the SSH_AUTH_SOCK line printed for eval: posix or fish (default: [agent].shell from config, else posix)")
+	cmd.Flags().String("shell", "", "syntax of the SSH_AUTH_SOCK line printed for eval: "+platform.ShellNames+" (default: [agent].shell from config, else posix)")
 }
 
 // printAuthSockLine writes the SSH_AUTH_SOCK line to stdout (for eval) only when stdout is piped.
@@ -69,10 +70,10 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if f := cmd.Flags().Lookup("shell"); f != nil && f.Changed {
 		shell = f.Value.String()
 	}
-	absSocket, _ := filepath.Abs(cfg.SocketPath)
+	absSocket, _ := transport.Abs(cfg.SocketPath)
 	authSockLine, err := platform.AuthSockLine(shell, absSocket)
 	if err != nil {
-		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use posix or fish)").AsError()
+		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use " + platform.ShellNames + ")").AsError()
 	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		printAuthSockLine(authSockLine)
@@ -130,12 +131,15 @@ func runStartDaemon(cmd *cobra.Command) error {
 	}
 
 	pidFilePath := runtime.PidFilePath()
-	if _, err := os.Stat(pidFilePath); err == nil {
+	if sshushd.PidFileLive(pidFilePath) {
 		return style.NewOutput().
 			Error("sshushd already running (pidfile " + utils.DisplayPath(pidFilePath) + " exists)").
 			Info("use 'sshush reload' to apply config changes").
 			AsError()
 	}
+	// A pidfile whose daemon is gone (it was killed, or the machine rebooted
+	// with the pidfile somewhere that survives that) must not block the start.
+	_ = os.Remove(pidFilePath)
 
 	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
@@ -148,7 +152,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 // If the agent uses a vault, prompts for passphrase and unlocks before listing keys.
 func startSuccess(out *style.Output, cfg *config.Config, authSockLine string) error {
 	socketPath := cfg.SocketPath
-	absSocket, _ := filepath.Abs(socketPath)
+	absSocket, _ := transport.Abs(socketPath)
 
 	printAuthSockLine(authSockLine)
 

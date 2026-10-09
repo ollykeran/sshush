@@ -1,13 +1,14 @@
 package sshushd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	goruntime "runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ollykeran/sshush/internal/readypipe"
@@ -48,6 +49,7 @@ func StartDaemon(configPath, socketPath string) error {
 	}
 	defer rp.Close()
 	rp.Attach(child)
+	startDetached(child)
 
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("sshushd: start failed: %w", err)
@@ -62,14 +64,15 @@ func StartDaemon(configPath, socketPath string) error {
 
 // StartServerDaemon starts the SSH server daemon (sshushd --server) with SSHUSH_CONFIG and waits for TCP listen.
 func StartServerDaemon(configPath string, port int) error {
+	if err := serverSupported(); err != nil {
+		return err
+	}
 	pidFilePath := runtime.ServerPidFilePath()
 	data, err := os.ReadFile(pidFilePath)
 	if err == nil {
 		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		if pid > 0 {
-			if process, findErr := os.FindProcess(pid); findErr == nil && process.Signal(syscall.Signal(0)) == nil {
-				return fmt.Errorf("sshushd: server already running on port %d", port)
-			}
+		if pid > 0 && processAlive(pid) {
+			return fmt.Errorf("sshushd: server already running on port %d", port)
 		}
 	}
 	addr := "127.0.0.1:" + strconv.Itoa(port)
@@ -98,6 +101,7 @@ func StartServerDaemon(configPath string, port int) error {
 	}
 	defer rp.Close()
 	rp.Attach(child)
+	startDetached(child)
 
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("sshushd: start server failed: %w", err)
@@ -116,6 +120,21 @@ func ReloadDaemon(configPath, socketPath, pidFilePath string) error {
 	time.Sleep(100 * time.Millisecond)
 	if err := StartDaemon(configPath, socketPath); err != nil {
 		return fmt.Errorf("sshushd: reload failed: %w", err)
+	}
+	return nil
+}
+
+// ProcessAlive reports whether a process with this pid is running.
+func ProcessAlive(pid int) bool { return processAlive(pid) }
+
+// errServerUnsupported is returned by anything that would start the SSH server on Windows.
+var errServerUnsupported = errors.New("sshushd: the SSH server is not supported on Windows yet")
+
+// serverSupported reports whether this platform can run the SSH server. Its
+// sessions need a pty and process groups, which are only implemented for Unix.
+func serverSupported() error {
+	if goruntime.GOOS == "windows" {
+		return errServerUnsupported
 	}
 	return nil
 }

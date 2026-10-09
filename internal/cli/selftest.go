@@ -6,6 +6,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -75,7 +76,13 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 		out.Add(style.Focus("state:  ") + style.Success("ready  ✓"))
 	}
 
-	if _, err := os.Stat(socketPath); err != nil {
+	// A named pipe is not a file to stat: it exists exactly when it can be dialled.
+	socketMissing := sessionErr != nil
+	if !transport.IsPipe(socketPath) {
+		_, statErr := os.Stat(socketPath)
+		socketMissing = statErr != nil
+	}
+	if socketMissing {
 		out.Add(style.Focus("socket: ") + style.Err(fmt.Sprintf("%s  ✗", socketPath)))
 		out.Add(style.Focus("        ") + style.Err("agent is not running (try sshush start)"))
 		out.Print()

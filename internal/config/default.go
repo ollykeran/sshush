@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +95,9 @@ func keyPathsToTOMLArray(keyPaths []string) string {
 		if strings.HasPrefix(p, home) {
 			p = "~" + strings.TrimPrefix(p, home)
 		}
-		quoted[i] = `"` + p + `"`
+		// Forward slashes: a backslash starts an escape in a TOML string, and
+		// Windows takes either separator.
+		quoted[i] = `"` + filepath.ToSlash(p) + `"`
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
@@ -203,12 +206,17 @@ func AddEvalToShell() error {
 func SetupConfig() {
 	expanded := platform.DefaultConfigPath()
 
+	firstRun := false
 	if _, err := os.Stat(expanded); os.IsNotExist(err) {
-		_ = CreateDefaultConfig()
+		firstRun = CreateDefaultConfig() == nil
 	}
 
 	setup, ok := platform.ShellSetupForAutoSetup()
 	if !ok {
+		return
+	}
+	if setup.PowerShell {
+		setupPowerShellProfile(setup, firstRun, os.Stderr)
 		return
 	}
 	if setup.Fish {
@@ -232,4 +240,32 @@ func SetupConfig() {
 		return
 	}
 	_ = AddEvalToShell()
+}
+
+// setupPowerShellProfile adds the agent startup line to an existing PowerShell
+// profile that does not start sshush yet. It never creates the profile (see
+// platform.ShellSetup.PowerShell); when there is none it says, once — on the run
+// that created the config — what to add, and leaves the choice to the user.
+func setupPowerShellProfile(setup platform.ShellSetup, firstRun bool, hint io.Writer) {
+	content, err := os.ReadFile(setup.RcPath)
+	if os.IsNotExist(err) {
+		if firstRun {
+			fmt.Fprintln(hint, "To start sshush in new PowerShell windows, add this line to "+setup.RcPath+":")
+			fmt.Fprint(hint, "  "+setup.Snippet)
+		}
+		return
+	}
+	if err != nil || platform.PowerShellProfileStartsAgent(string(content)) {
+		return
+	}
+	addition := "# sshush: start agent in new shells\n" + setup.Snippet
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		addition = "\n" + addition
+	}
+	f, err := os.OpenFile(setup.RcPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(addition)
 }

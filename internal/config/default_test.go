@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -41,6 +43,9 @@ func TestKeyPathsToTOMLArray(t *testing.T) {
 }
 
 func TestRenderDefaultConfigBytes_loads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	t.Parallel()
 	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", []string{"/tmp/id_ed25519"}, "fish", theme.DefaultTheme())
 	if err != nil {
@@ -85,7 +90,8 @@ func TestLoadConfig_shell(t *testing.T) {
 		{"omitted means default", "", "", false},
 		{"fish", "shell = \"fish\"\n", "fish", false},
 		{"bash alias", "shell = \"bash\"\n", "bash", false},
-		{"unsupported", "shell = \"powershell\"\n", "", true},
+		{"powershell", "shell = \"powershell\"\n", "powershell", false},
+		{"unsupported", "shell = \"nushell\"\n", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,6 +205,9 @@ func TestRenderDefaultConfigBytes_serverOptionsLoadOnceUncommented(t *testing.T)
 }
 
 func TestStandardConfigFile_suffix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	got := StandardConfigFile()
 	if !strings.HasSuffix(got, filepath.Join(".config", "sshush", "config.toml")) {
 		t.Errorf("StandardConfigFile: got %q", got)
@@ -240,6 +249,9 @@ func TestWriteDefaultConfigFile_overwrite(t *testing.T) {
 }
 
 func TestWriteDefaultConfigFile_loadableWithHomeSSHKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	sshDir := filepath.Join(tmp, ".ssh")
@@ -278,6 +290,9 @@ func writeTestSSHKeyFile(privPath string) error {
 }
 
 func TestCreateDefaultConfig_socketPathAbsoluteWithoutXDG(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -332,6 +347,9 @@ func setupFishHome(t *testing.T) (home, fishDir string) {
 }
 
 func TestSetupConfig_fishWritesConfD(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	home, fishDir := setupFishHome(t)
 
 	SetupConfig()
@@ -379,6 +397,9 @@ func TestSetupConfig_fishRespectsExistingConfigFish(t *testing.T) {
 }
 
 func TestSetupConfig_fishCompletionLineAloneIsNotSetup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	_, fishDir := setupFishHome(t)
 	if err := os.MkdirAll(fishDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -392,4 +413,79 @@ func TestSetupConfig_fishCompletionLineAloneIsNotSetup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fishDir, "conf.d", "sshush.fish")); err != nil {
 		t.Fatalf("expected conf.d/sshush.fish: %v", err)
 	}
+}
+
+func TestKeyPathsToTOMLArray_backslashes(t *testing.T) {
+	// A Windows path must not put backslashes in a TOML basic string, where they are escapes.
+	got := keyPathsToTOMLArray([]string{filepath.FromSlash("/keys/id_ed25519")})
+	if strings.Contains(got, `\`) {
+		t.Fatalf("got %s, want forward slashes only", got)
+	}
+}
+
+func TestSetupPowerShellProfile(t *testing.T) {
+	setup := func(t *testing.T) platform.ShellSetup {
+		return platform.ShellSetup{
+			RcPath:     filepath.Join(t.TempDir(), "Microsoft.PowerShell_profile.ps1"),
+			Snippet:    platform.PowerShellSnippet,
+			PowerShell: true,
+		}
+	}
+
+	t.Run("no profile: hint on first run, nothing created", func(t *testing.T) {
+		s := setup(t)
+		var hint bytes.Buffer
+		setupPowerShellProfile(s, true, &hint)
+		if _, err := os.Stat(s.RcPath); !os.IsNotExist(err) {
+			t.Fatalf("profile must not be created, stat err = %v", err)
+		}
+		if !strings.Contains(hint.String(), "Invoke-Expression") {
+			t.Fatalf("expected a hint naming the line to add, got %q", hint.String())
+		}
+	})
+
+	t.Run("no profile: silent after the first run", func(t *testing.T) {
+		var hint bytes.Buffer
+		setupPowerShellProfile(setup(t), false, &hint)
+		if hint.Len() != 0 {
+			t.Fatalf("expected no hint, got %q", hint.String())
+		}
+	})
+
+	t.Run("existing profile gets the line once", func(t *testing.T) {
+		s := setup(t)
+		if err := os.WriteFile(s.RcPath, []byte("Set-Alias ll ls"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var hint bytes.Buffer
+		setupPowerShellProfile(s, true, &hint)
+		setupPowerShellProfile(s, false, &hint)
+		data, err := os.ReadFile(s.RcPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(data)
+		if strings.Count(got, platform.PowerShellSnippet) != 1 {
+			t.Fatalf("expected the snippet exactly once, got:\n%s", got)
+		}
+		if !strings.HasPrefix(got, "Set-Alias ll ls\n") {
+			t.Fatalf("existing content must be kept on its own line, got:\n%s", got)
+		}
+		if hint.Len() != 0 {
+			t.Fatalf("expected no hint, got %q", hint.String())
+		}
+	})
+
+	t.Run("hand-written start line is respected", func(t *testing.T) {
+		s := setup(t)
+		own := "sshush | iex\n"
+		if err := os.WriteFile(s.RcPath, []byte(own), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		setupPowerShellProfile(s, true, &bytes.Buffer{})
+		data, _ := os.ReadFile(s.RcPath)
+		if string(data) != own {
+			t.Fatalf("profile changed:\n%s", data)
+		}
+	})
 }

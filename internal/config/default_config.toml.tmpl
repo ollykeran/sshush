@@ -6,7 +6,7 @@ type = "keys"
 #               "vault" (use [vault].vault_path as the agent backend instead of key_paths)
 #               "external" (socket_path points at a foreign ssh-agent/1Password/etc.; sshush never starts/stops it)
 key_paths = {{ .KeyPathsTOML }}
-# shell: syntax of the SSH_AUTH_SOCK line printed for eval/source: "posix" (sh, bash, zsh) or "fish".
+# shell: syntax of the SSH_AUTH_SOCK line printed for eval/source: "posix" (sh, bash, zsh), "fish" or "powershell".
 #        Set from the shell that first ran sshush; override per call with --shell.
 shell = {{ printf "%q" .Shell }}
 

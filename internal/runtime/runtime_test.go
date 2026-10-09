@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
@@ -56,6 +57,9 @@ func TestResolveSocketPath_UsesSSHAuthSock(t *testing.T) {
 }
 
 func TestResolveSocketPath_UsesXDGRuntimeDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	withEnv(t, "SSH_AUTH_SOCK", "", func() {
 		withEnv(t, "XDG_RUNTIME_DIR", "/run/user/1000", func() {
 			got, err := ResolveSocketPath(nil)
@@ -71,6 +75,9 @@ func TestResolveSocketPath_UsesXDGRuntimeDir(t *testing.T) {
 }
 
 func TestResolveSocketPath_FallbackWhenNoXDG(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	withEnv(t, "HOME", tmp, func() {
 		withEnv(t, "SSH_AUTH_SOCK", "", func() {
@@ -91,6 +98,9 @@ func TestResolveSocketPath_FallbackWhenNoXDG(t *testing.T) {
 }
 
 func TestSocketPathForSSHushGUI_IgnoresSSHAuthSock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	withEnv(t, "SSH_AUTH_SOCK", "/wrong/gnome-keyring/ssh", func() {
 		withEnv(t, "XDG_RUNTIME_DIR", "/run/user/1000", func() {
 			got, err := SocketPathForSSHushGUI(nil)
@@ -131,6 +141,9 @@ func TestPidFilePath_UsesXDGRuntimeDir(t *testing.T) {
 }
 
 func TestPidFilePath_FallbackWithoutXDG(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	withEnv(t, "HOME", tmp, func() {
 		withEnv(t, "XDG_RUNTIME_DIR", "", func() {

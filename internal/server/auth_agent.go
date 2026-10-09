@@ -2,8 +2,8 @@ package server
 
 import (
 	"crypto/subtle"
-	"net"
 
+	"github.com/ollykeran/sshush/internal/transport"
 	"golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -51,7 +51,7 @@ func (s *SocketAuth) Authorized(key ssh.PublicKey) bool {
 	if s.SocketPath == "" {
 		return false
 	}
-	conn, err := net.Dial("unix", s.SocketPath)
+	conn, err := transport.Dial(s.SocketPath)
 	if err != nil {
 		return false
 	}

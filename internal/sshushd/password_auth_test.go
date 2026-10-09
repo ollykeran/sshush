@@ -3,6 +3,7 @@ package sshushd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -36,6 +37,9 @@ func TestPasswordAuthVault_RefusesAnUninitializedVault(t *testing.T) {
 }
 
 func TestPasswordAuthVault_ResolvesAVaultDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the vault is not supported on Windows")
+	}
 	dir := t.TempDir()
 	store, err := vault.Open(filepath.Join(dir, "vault.json"))
 	if err != nil {

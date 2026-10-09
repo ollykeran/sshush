@@ -37,7 +37,7 @@ type Config struct {
 	KeyPaths   []string // From [agent].key_paths; when AgentType is not "vault", keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
 	AgentType  string   // From [agent].type: "vault", "keys", or "external".
-	Shell      string   // From [agent].shell: syntax of the SSH_AUTH_SOCK line ("posix", "fish"); empty means posix.
+	Shell      string   // From [agent].shell: syntax of the SSH_AUTH_SOCK line ("posix", "fish", "powershell"); empty means posix.
 	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentType is not "vault").
 	Theme      ThemeSection
 
@@ -231,7 +231,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 
 	if !platform.ValidShell(doc.Agent.Shell) {
 		return Config{}, style.NewOutput().
-			Error("[agent].shell must be \"posix\" (or \"sh\", \"bash\", \"zsh\") or \"fish\"").
+			Error("[agent].shell must be \"posix\" (or \"sh\", \"bash\", \"zsh\"), \"fish\" or \"powershell\" (or \"pwsh\")").
 			AsError()
 	}
 
