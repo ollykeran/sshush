@@ -42,7 +42,7 @@ func TestKeyPathsToTOMLArray(t *testing.T) {
 
 func TestRenderDefaultConfigBytes_loads(t *testing.T) {
 	t.Parallel()
-	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", []string{"/tmp/id_ed25519"}, theme.DefaultTheme())
+	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", []string{"/tmp/id_ed25519"}, "fish", theme.DefaultTheme())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,6 +71,43 @@ func TestRenderDefaultConfigBytes_loads(t *testing.T) {
 	}
 	if cfg.Theme.Name != "default" {
 		t.Errorf("Theme.Name: got %q", cfg.Theme.Name)
+	}
+	if cfg.Shell != "fish" {
+		t.Errorf("Shell: got %q, want the shell passed at render time", cfg.Shell)
+	}
+}
+
+func TestLoadConfig_shell(t *testing.T) {
+	tests := []struct {
+		name, line, want string
+		wantErr          bool
+	}{
+		{"omitted means default", "", "", false},
+		{"fish", "shell = \"fish\"\n", "fish", false},
+		{"bash alias", "shell = \"bash\"\n", "bash", false},
+		{"unsupported", "shell = \"powershell\"\n", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			content := "[agent]\nsocket_path = \"/tmp/a.sock\"\ntype = \"keys\"\nkey_paths = []\n" + tt.line
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfig(path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error for unsupported [agent].shell")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Shell != tt.want {
+				t.Fatalf("Shell: got %q, want %q", cfg.Shell, tt.want)
+			}
+		})
 	}
 }
 
@@ -105,7 +142,7 @@ func loadRenderedConfig(t *testing.T, data []byte) Config {
 // running the server has to be a deliberate edit.
 func TestRenderDefaultConfigBytes_listsEveryServerOptionCommentedOut(t *testing.T) {
 	t.Parallel()
-	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, theme.DefaultTheme())
+	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, "posix", theme.DefaultTheme())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +167,7 @@ func TestRenderDefaultConfigBytes_listsEveryServerOptionCommentedOut(t *testing.
 // defaults they claim to be.
 func TestRenderDefaultConfigBytes_serverOptionsLoadOnceUncommented(t *testing.T) {
 	t.Parallel()
-	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, theme.DefaultTheme())
+	data, err := renderDefaultConfigBytes("/run/user/1000/sshush.sock", nil, "posix", theme.DefaultTheme())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,5 +310,86 @@ func TestCreateDefaultConfig_socketPathAbsoluteWithoutXDG(t *testing.T) {
 	expanded := utils.ExpandHomeDirectory(sp)
 	if !filepath.IsAbs(expanded) {
 		t.Fatalf("expanded socket_path not absolute: %q", expanded)
+	}
+}
+
+// setupFishHome points HOME at a temp dir with SHELL=fish and an existing
+// sshush config, so SetupConfig only exercises the shell startup snippet.
+func setupFishHome(t *testing.T) (home, fishDir string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/usr/bin/fish")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	if err := os.MkdirAll(filepath.Join(home, ".config", "sshush"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "sshush", "config.toml"), []byte("[agent]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home, filepath.Join(home, ".config", "fish")
+}
+
+func TestSetupConfig_fishWritesConfD(t *testing.T) {
+	home, fishDir := setupFishHome(t)
+
+	SetupConfig()
+
+	snippetPath := filepath.Join(fishDir, "conf.d", "sshush.fish")
+	data, err := os.ReadFile(snippetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "sshush start --shell fish | source") {
+		t.Fatalf("unexpected snippet: %q", data)
+	}
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		if _, err := os.Stat(filepath.Join(home, rc)); !os.IsNotExist(err) {
+			t.Fatalf("%s should not be created for fish", rc)
+		}
+	}
+
+	// Second run must not append to or rewrite the snippet.
+	SetupConfig()
+	again, err := os.ReadFile(snippetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(data) {
+		t.Fatalf("snippet changed on second run: %q", again)
+	}
+}
+
+func TestSetupConfig_fishRespectsExistingConfigFish(t *testing.T) {
+	_, fishDir := setupFishHome(t)
+	if err := os.MkdirAll(fishDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFish := "if status is-interactive\n  sshush completion fish | source\n  eval (sshush start)\nend\n"
+	if err := os.WriteFile(filepath.Join(fishDir, "config.fish"), []byte(configFish), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	SetupConfig()
+
+	if _, err := os.Stat(filepath.Join(fishDir, "conf.d", "sshush.fish")); !os.IsNotExist(err) {
+		t.Fatal("conf.d/sshush.fish should not be created when config.fish already starts sshush")
+	}
+}
+
+func TestSetupConfig_fishCompletionLineAloneIsNotSetup(t *testing.T) {
+	_, fishDir := setupFishHome(t)
+	if err := os.MkdirAll(fishDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fishDir, "config.fish"), []byte("sshush completion fish | source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	SetupConfig()
+
+	if _, err := os.Stat(filepath.Join(fishDir, "conf.d", "sshush.fish")); err != nil {
+		t.Fatalf("expected conf.d/sshush.fish: %v", err)
 	}
 }

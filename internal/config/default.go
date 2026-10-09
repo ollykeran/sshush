@@ -27,6 +27,7 @@ var defaultConfigTemplate = template.Must(
 type defaultConfigTemplateData struct {
 	SocketPath    string
 	KeyPathsTOML  string
+	Shell         string
 	ServerHostKey string // where the server keeps its host key when [server].host_key is unset
 	ServerLogFile string // where the server logs when [server].log_file is unset
 	ThemeText     string
@@ -99,10 +100,11 @@ func keyPathsToTOMLArray(keyPaths []string) string {
 }
 
 // renderDefaultConfigBytes renders the embedded default config template. Exposed for tests.
-func renderDefaultConfigBytes(socketPath string, keyPaths []string, def theme.Theme) ([]byte, error) {
+func renderDefaultConfigBytes(socketPath string, keyPaths []string, shell string, def theme.Theme) ([]byte, error) {
 	data := defaultConfigTemplateData{
 		SocketPath:    socketPath,
 		KeyPathsTOML:  keyPathsToTOMLArray(keyPaths),
+		Shell:         shell,
 		ServerHostKey: utils.ContractHomeDirectory(platform.ServerHostKeyPath("")),
 		ServerLogFile: utils.ContractHomeDirectory(platform.ServerLogPath("")),
 		ThemeText:     def.Text,
@@ -140,7 +142,7 @@ func WriteDefaultConfigFile(path string, overwrite bool) error {
 	keyPaths := findDefaultKeys()
 	socketDisplay := utils.ContractHomeDirectory(platform.DefaultSocketPath())
 	def := theme.DefaultTheme()
-	data, err := renderDefaultConfigBytes(socketDisplay, keyPaths, def)
+	data, err := renderDefaultConfigBytes(socketDisplay, keyPaths, platform.DetectShell(), def)
 	if err != nil {
 		return fmt.Errorf("config: render default config: %w", err)
 	}
@@ -157,21 +159,26 @@ func CreateDefaultConfig() error {
 	if err := WriteDefaultConfigFile(p, false); err != nil {
 		return fmt.Errorf("config: write default config: %w", err)
 	}
-	fmt.Println("Default config created")
+	fmt.Fprintln(os.Stderr, "Default config created")
 	return nil
 }
 
-// AddEvalToShell appends eval $(sshush) to the preferred shell rc file (see platform.ShellRcPathForAutoSetup).
-// Creates the rc file if it does not exist.
+// AddEvalToShell adds the agent startup snippet to the preferred shell startup file
+// (see platform.ShellSetupForAutoSetup): eval $(sshush) appended to the bash/zsh rc file,
+// or a dedicated conf.d/sshush.fish for fish. Creates the file if it does not exist.
 func AddEvalToShell() error {
-	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	setup, ok := platform.ShellSetupForAutoSetup()
 	if !ok {
 		return style.NewOutput().Error("cannot determine shell rc file (no home directory)").AsError()
 	}
+	rcPath := setup.RcPath
 
 	if _, err := os.Stat(rcPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(rcPath), 0o755); err != nil {
+			return style.NewOutput().Error("failed to create " + filepath.Dir(rcPath) + ": " + err.Error()).AsError()
+		}
 		header := "# sshush: start agent in new shells\n"
-		if err := os.WriteFile(rcPath, []byte(header+platform.EvalLine), 0o644); err != nil {
+		if err := os.WriteFile(rcPath, []byte(header+setup.Snippet), 0o644); err != nil {
 			return style.NewOutput().Error("failed to create " + rcPath + ": " + err.Error()).AsError()
 		}
 		return nil
@@ -185,13 +192,13 @@ func AddEvalToShell() error {
 	}
 	defer f.Close()
 
-	if _, err := f.WriteString(platform.EvalLine); err != nil {
+	if _, err := f.WriteString(setup.Snippet); err != nil {
 		return style.NewOutput().Error("failed to write " + rcPath + ": " + err.Error()).AsError()
 	}
 	return nil
 }
 
-// SetupConfig ensures default config exists and eval is added to the shell rc if needed.
+// SetupConfig ensures default config exists and the agent startup snippet is added to the shell rc if needed.
 // Call from root PersistentPreRunE or main before loading config.
 func SetupConfig() {
 	expanded := platform.DefaultConfigPath()
@@ -200,11 +207,24 @@ func SetupConfig() {
 		_ = CreateDefaultConfig()
 	}
 
-	rcPath, ok := platform.ShellRcPathForAutoSetup()
+	setup, ok := platform.ShellSetupForAutoSetup()
 	if !ok {
 		return
 	}
-	content, err := os.ReadFile(rcPath)
+	if setup.Fish {
+		// conf.d/sshush.fish is ours: once it exists (even edited or emptied) leave it alone.
+		if _, err := os.Stat(setup.RcPath); !os.IsNotExist(err) {
+			return
+		}
+		// Respect a hand-written start line in config.fish.
+		configFish := filepath.Join(filepath.Dir(filepath.Dir(setup.RcPath)), "config.fish")
+		if content, err := os.ReadFile(configFish); err == nil && platform.FishConfigStartsAgent(string(content)) {
+			return
+		}
+		_ = AddEvalToShell()
+		return
+	}
+	content, err := os.ReadFile(setup.RcPath)
 	if err != nil && !os.IsNotExist(err) {
 		return
 	}

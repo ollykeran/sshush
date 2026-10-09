@@ -134,6 +134,7 @@ See also: [Setup](setup.md) | [TUI](tui.md)
 | `socket_path` | Unix socket for the agent. Required for `type = "vault"`/`"keys"`. Optional for `type = "external"` — falls back to `SSH_AUTH_SOCK`, resolved fresh on every run. | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
 | `type` | Agent backend: `"keys"` (in-memory keyring from `key_paths`), `"vault"` (use `[vault].vault_path` as the backend), or `"external"` (socket_path points at an agent sshush does not own). Required. | `"keys"` / `"vault"` / `"external"` |
 | `key_paths` | Paths to private keys to load when `type` is `"keys"` (optional for `"vault"` if you add keys after unlock; ignored for `"external"`) | `["~/.ssh/id_ed25519"]` |
+| `shell` | Syntax of the `SSH_AUTH_SOCK` line that `sshush` / `sshush start` print for `eval` or `source`: `"posix"` (`"sh"`, `"bash"` and `"zsh"` mean the same) or `"fish"`. Optional; `"posix"` when omitted. The default config sets it from the shell that first ran sshush. | `"fish"` |
 
 Example (in-memory keyring):
 
@@ -171,7 +172,7 @@ type = "external"
 
 With `type = "external"`, `sshush list`/`add`/`remove`/`lock`/`unlock` work against whatever agent is listening at `socket_path` (or `SSH_AUTH_SOCK`), but `sshush start`, `stop`, and `reload` refuse to start, stop, or restart anything there — start your own agent yourself.
 
-CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`.
+CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`; `--shell` (on `sshush` and `sshush start`) overrides `[agent].shell`.
 
 ## `[vault]`
 

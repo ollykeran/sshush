@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/theme"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -36,6 +37,7 @@ type Config struct {
 	KeyPaths   []string // From [agent].key_paths; when AgentType is not "vault", keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
 	AgentType  string   // From [agent].type: "vault", "keys", or "external".
+	Shell      string   // From [agent].shell: syntax of the SSH_AUTH_SOCK line ("posix", "fish"); empty means posix.
 	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentType is not "vault").
 	Theme      ThemeSection
 
@@ -66,6 +68,7 @@ type agentSection struct {
 	SocketPath string   `toml:"socket_path"`
 	KeyPaths   []string `toml:"key_paths"`
 	Type       string   `toml:"type"`
+	Shell      string   `toml:"shell,omitempty"`
 }
 
 type vaultSection struct {
@@ -97,6 +100,7 @@ func toDocument(cfg Config) configDocument {
 		SocketPath: cfg.SocketPath,
 		KeyPaths:   cfg.KeyPaths,
 		Type:       cfg.AgentType,
+		Shell:      cfg.Shell,
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -225,6 +229,12 @@ func documentToConfig(doc *configDocument) (Config, error) {
 			AsError()
 	}
 
+	if !platform.ValidShell(doc.Agent.Shell) {
+		return Config{}, style.NewOutput().
+			Error("[agent].shell must be \"posix\" (or \"sh\", \"bash\", \"zsh\") or \"fish\"").
+			AsError()
+	}
+
 	vaultPath := doc.Vault.VaultPath
 	switch doc.Agent.Type {
 	case AgentTypeVault:
@@ -250,6 +260,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		SocketPath:           doc.Agent.SocketPath,
 		KeyPaths:             doc.Agent.KeyPaths,
 		AgentType:            doc.Agent.Type,
+		Shell:                doc.Agent.Shell,
 		VaultPath:            vaultPath,
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,
