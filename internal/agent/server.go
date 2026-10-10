@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/transport"
@@ -45,6 +46,15 @@ func WithReady(fn func()) Option {
 // and replaces a stale socket file otherwise. Cancelling ctx closes the listener, so a
 // normal shutdown also returns a non-nil error.
 func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent, opts ...Option) error {
+	return ListenAndHandle(ctx, socketPath, func(conn net.Conn) {
+		_ = sshagent.ServeAgent(keyring, conn)
+	}, opts...)
+}
+
+// ListenAndHandle is [ListenAndServe] for a caller that answers connections
+// some other way than from a keyring in this process: handle is run in its own
+// goroutine for each accepted connection, and owns it.
+func ListenAndHandle(ctx context.Context, socketPath string, handle func(net.Conn), opts ...Option) error {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -73,6 +83,6 @@ func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.Ext
 		if err != nil {
 			return fmt.Errorf("agent: accept connection: %w", err)
 		}
-		go sshagent.ServeAgent(keyring, conn)
+		go handle(conn)
 	}
 }

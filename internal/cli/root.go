@@ -32,12 +32,16 @@ func isGenerateConfigCmd(cmd *cobra.Command) bool {
 	return cmd != nil && cmd.Name() == "config" && cmd.Parent() != nil && cmd.Parent().Name() == "generate"
 }
 
+func isRelayCmd(cmd *cobra.Command) bool {
+	return cmd != nil && cmd.Name() == "relay" && cmd.Parent() == cmd.Root()
+}
+
 func suppressAgentModeIndicator(cmd *cobra.Command) bool {
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
 		case "tui", "theme", "help", "completion",
 			"validate", "create", "export", "find", "version",
-			"generate", "selftest":
+			"generate", "selftest", "relay":
 			return true
 		case "vault":
 			if c != cmd && cmd.Name() == "init" {
@@ -194,7 +198,12 @@ func NewRootCommand() *cobra.Command {
 				resolveNoColor(cmd)
 				return nil
 			}
-			config.SetupConfig()
+			if !isRelayCmd(cmd) {
+				// relay is run by the sshush in WSL for every agent connection, not
+				// by a person: first-run setup there would be work per connection,
+				// and its notices would have nobody to read them.
+				config.SetupConfig()
+			}
 			configPath, err := runtime.ResolveConfigPath(cmd)
 			if err != nil {
 				if isThemeCmd(cmd) {
