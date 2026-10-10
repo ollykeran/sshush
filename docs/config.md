@@ -131,9 +131,10 @@ See also: [Setup](setup.md) | [TUI](tui.md)
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `socket_path` | Unix socket for the agent. Required for `type = "vault"`/`"keys"`. Optional for `type = "external"` — falls back to `SSH_AUTH_SOCK`, resolved fresh on every run. | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
-| `type` | Agent backend: `"keys"` (in-memory keyring from `key_paths`), `"vault"` (use `[vault].vault_path` as the backend), or `"external"` (socket_path points at an agent sshush does not own). Required. | `"keys"` / `"vault"` / `"external"` |
-| `key_paths` | Paths to private keys to load when `type` is `"keys"` (optional for `"vault"` if you add keys after unlock; ignored for `"external"`) | `["~/.ssh/id_ed25519"]` |
+| `socket_path` | Unix socket for the agent. Required for `type = "vault"`/`"keys"`/`"windows"`. Optional for `type = "external"` — falls back to `SSH_AUTH_SOCK`, resolved fresh on every run. | `"$XDG_RUNTIME_DIR/sshush.sock"` when set, else `"~/.config/sshush/sshush.sock"` (or under `$XDG_CONFIG_HOME`) |
+| `type` | Agent backend: `"keys"` (in-memory keyring from `key_paths`), `"vault"` (use `[vault].vault_path` as the backend), `"external"` (socket_path points at an agent sshush does not own), or `"windows"` (inside WSL: relay `socket_path` to the agent of the sshush on Windows). Required. | `"keys"` / `"vault"` / `"external"` / `"windows"` |
+| `key_paths` | Paths to private keys to load when `type` is `"keys"` (optional for `"vault"` if you add keys after unlock; ignored for `"external"` and `"windows"`) | `["~/.ssh/id_ed25519"]` |
+| `windows_sshush` | Only for `type = "windows"`: where `sshush.exe` is, as WSL sees it. Optional; when omitted, `sshush.exe` is found on `PATH`, which under WSL includes the Windows `PATH` unless that has been turned off. | `"/mnt/c/Tools/sshush/sshush.exe"` |
 | `shell` | Syntax of the `SSH_AUTH_SOCK` line that `sshush` / `sshush start` print for `eval` or `source`: `"posix"` (`"sh"`, `"bash"` and `"zsh"` mean the same), `"fish"`, or `"powershell"` (`"pwsh"` means the same; see [Windows](windows.md)). Optional; `"posix"` when omitted. The default config sets it from the shell that first ran sshush. | `"fish"` |
 
 Example (in-memory keyring):
@@ -172,7 +173,17 @@ type = "external"
 
 With `type = "external"`, `sshush list`/`add`/`remove`/`lock`/`unlock` work against whatever agent is listening at `socket_path` (or `SSH_AUTH_SOCK`), but `sshush start`, `stop`, and `reload` refuse to start, stop, or restart anything there — start your own agent yourself.
 
-The external agent can be another `sshushd`: one in a different environment, reached through a relay. What it is comes from the agent, not from this file, so if it is a vault then `sshush vault …`, the transparent unlock and the TUI's Vault tab all work against it with no `[vault].vault_path` here. [Windows](windows.md#using-it-from-wsl) sets that up between WSL and a daemon on Windows.
+The external agent can be another `sshushd`: one in a different environment, reached through a relay. What it is comes from the agent, not from this file, so if it is a vault then `sshush vault …`, the transparent unlock and the TUI's Vault tab all work against it with no `[vault].vault_path` here.
+
+Example (inside WSL — use the agent of the sshush on Windows):
+
+```toml
+[agent]
+type = "windows"
+socket_path = "~/.ssh/sshush-windows.sock"
+```
+
+With `type = "windows"` the daemon in the distro holds no keys: it listens on `socket_path` and relays every connection to the agent that sshush runs on Windows, so both sides share one vault and one unlock. `sshush start` starts the relay, and the daemon on Windows too if it is not running; `stop` and `reload` act on the relay only. See [Windows](windows.md#using-it-from-wsl).
 
 CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`; `--shell` (on `sshush` and `sshush start`) overrides `[agent].shell`.
 

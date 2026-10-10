@@ -11,6 +11,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/config** – Config load, default creation, shell rc setup
 - **internal/clipboard** – Copying text to the system clipboard
 - **internal/editcomment** – Editing a key comment in `$EDITOR` through a temp file
+- **internal/bridge** – Inside WSL, relays agent connections to the sshush on Windows by running `sshush.exe relay` for each (see [Windows](windows.md#using-it-from-wsl))
 - **internal/platform** – Portable defaults for config dir, socket/pid paths, shell rc selection
 - **internal/kdf** – Argon2id key derivation, salts and constant-time compare for the vault
 - **internal/keys** – Key generation, load, save, comment edit, format
@@ -72,7 +73,7 @@ A command that needs a vault and finds `SpeaksOps` false says so, because the us
 
 ### The agent answers for its own vault
 
-What a vault holds is the agent's to say. The `list-identities` op returns every identity in the vault the daemon serves — fingerprint, public key, comment, autoload flag and the path it was added from — including the ones it is not listing to `ssh` this session, and `internal/vaultops` resolves a fingerprint, comment or key file against that. So `sshush vault …` needs no access to the vault file, which is what lets a client in one environment drive a daemon in another: `[agent].type = "external"` in WSL, a daemon on Windows, a relay between them.
+What a vault holds is the agent's to say. The `list-identities` op returns every identity in the vault the daemon serves — fingerprint, public key, comment, autoload flag and the path it was added from — including the ones it is not listing to `ssh` this session, and `internal/vaultops` resolves a fingerprint, comment or key file against that. So `sshush vault …` needs no access to the vault file, which is what lets a client in one environment drive a daemon in another: sshush in WSL, a daemon on Windows, a relay between them.
 
 `vaultops` picks its source in one place (`conn.roster`):
 
@@ -88,6 +89,17 @@ A locked vault refuses on purpose. `List` answers a locked agent with nothing, a
 For the same reason the transparent unlock and the TUI's Vault tab follow `Backend()`, not `[agent].type`: a config that says `external` cannot know what it is pointed at, and the agent can. Only for a vault named with `--vault-path` does config decide — the prompt is skipped unless config says the agent serves that very file.
 
 The listing is SSH wire data in which each identity is its own length-prefixed record, and both the listing and a record may carry trailing fields this version does not read. Adding a field is therefore not a format break; see `internal/vault/list.go`.
+
+### One agent for Windows and WSL
+
+`[agent].type = "windows"` is for an sshush inside WSL. Neither a named pipe nor a Unix socket crosses the WSL boundary, but a process does: a Linux process can start a Windows one and talk to it over stdin and stdout. So `sshushd` in the distro listens on its Unix socket as usual and, instead of answering from a keyring, hands each connection to a freshly started `sshush.exe relay` (`internal/bridge`), which copies between its stdio and the Windows agent's pipe. The agent protocol passes through untouched; the Linux daemon holds no key and no unlock.
+
+Everything above then applies unchanged, because the client is still talking to an sshush agent: `Backend()` says whether it is a vault, `list-identities` says what it holds. Two things follow from the agent living elsewhere, and the same two hold for `type = "external"`:
+
+- **Config does not own the agent's keys.** `Config.OwnsAgentKeys()` is false, and `reload` never reconciles them: `key_paths` here says nothing about what that agent should hold, so reconciling would remove every key it lists — and from a vault, removing is deleting. For `"windows"`, reload restarts the relay; for `"external"` it refuses.
+- **A relay accepts the connection whether or not anything is behind it.** A connection that goes quiet is therefore the agent being down, not a foreign agent, and is reported as such (`windowsAgentDown` in the CLI, `CodeNoAgent` from `vaultops`).
+
+`sshush start` in the distro starts both halves: the relay, then, if no agent answers through it, `sshush.exe start` on the Windows side. The relay itself never starts the Windows daemon, so `sshush stop` on Windows stays stopped however many clients in WSL go on polling.
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 
