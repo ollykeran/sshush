@@ -53,6 +53,15 @@ func runReload(cmd *cobra.Command, _ []string) error {
 
 	pidFilePath := runtime.PidFilePath()
 
+	if newCfg.RelaysToWindows() {
+		// The keys are the Windows agent's, and that agent is reloaded from
+		// Windows. All there is to reload here is the relay, which holds
+		// nothing: restart it so it picks up this config.
+		_ = sshushd.StopDaemon(pidFilePath) // best-effort; may not be running
+		style.NewOutput().Info("restarting the relay to the sshush agent on Windows...").Print()
+		return runStartDaemon(cmd)
+	}
+
 	// Try connecting to the socket from the new config.
 	session, err := agent.Open(newCfg.SocketPath)
 	needsRestart := err != nil

@@ -53,6 +53,9 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	backend, backendErr := session.Backend()
 	before, err := session.List()
 	if err != nil {
+		if down := windowsAgentDown(cfg); down != nil {
+			return down
+		}
 		return style.NewOutput().Error("failed to list keys from socket").AsError()
 	}
 	out := style.NewOutput()

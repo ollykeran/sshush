@@ -78,6 +78,10 @@ func printAgentModeIndicator(cmd *cobra.Command) {
 		return
 	}
 	configMode := cfg.AgentBackendMode()
+	if !cfg.OwnsAgentKeys() && cfg.AgentType != "" {
+		// Config does not say what such an agent is, only where it is.
+		configMode = cfg.AgentType
+	}
 	sock, sockErr := getSocketPath(cfg)
 	liveMode, liveOK := "", false
 	// Cold start / reload-before-socket: probing here falsely looks "unreachable".

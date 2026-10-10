@@ -2,6 +2,7 @@ package vaultops
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -198,6 +199,29 @@ func startForeignAgent(t *testing.T, dir string) string {
 		t.Fatal("keyring is not an ExtendedAgent")
 	}
 	return serve(t, dir, "foreign.sock", inner)
+}
+
+// startSilentRelay listens on a socket and hangs up on every connection without
+// a word: what a relay to an agent somewhere else does while that agent is not
+// running.
+func startSilentRelay(t *testing.T, dir string) string {
+	t.Helper()
+	socketPath := filepath.Join(dir, "relay.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return socketPath
 }
 
 // writeTestKey writes a freshly generated ed25519 private key and returns its

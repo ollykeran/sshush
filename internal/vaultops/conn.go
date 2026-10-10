@@ -101,6 +101,16 @@ func (c *conn) attachAgent(n need) error {
 	backend, berr := session.Backend()
 	if berr == nil {
 		c.backend = backend
+	} else if _, listErr := session.List(); listErr != nil {
+		// It took the connection and then answered nothing at all, which is
+		// what a relay does when the agent behind it is gone. That is no
+		// agent, not the wrong kind of agent.
+		_ = session.Close()
+		if n&needAgent != 0 {
+			return noAgentError(c.verb, berr)
+		}
+		c.dialErr = berr
+		return nil
 	}
 	if n&needAgent != 0 && (berr != nil || backend.Mode != "vault") {
 		_ = session.Close()
@@ -205,19 +215,21 @@ func gateError(verb string, backend agent.Backend, cause error) *OpError {
 }
 
 // remedy rewrites the hints that tell the user to start or reload the daemon,
-// for an agent this sshush does not manage: 'sshush start' and 'sshush reload'
-// refuse there, so pointing at them sends the user in a circle.
+// for an agent those commands do not reach. 'sshush start' and 'sshush reload'
+// refuse for an agent this sshush does not manage, and reload restarts only the
+// relay for one on Windows, so pointing at them sends the user in a circle.
 func (e Env) remedy(err error) error {
 	var op *OpError
-	if !e.AgentUnmanaged || !errors.As(err, &op) || op.Hint == "" {
+	if !errors.As(err, &op) || op.Hint == "" {
 		return err
 	}
-	switch op.Code {
-	case CodeNoAgent:
+	elsewhere := e.AgentUnmanaged || e.AgentElsewhere
+	switch {
+	case op.Code == CodeNoAgent && e.AgentUnmanaged:
 		op.Hint = "Nothing answers on " + utils.DisplayPath(e.SocketPath) + ". This sshush does not manage that agent ([agent].type = \"external\"): start it, or the relay that reaches it, where it runs."
-	case CodeNotVaultAgent:
+	case op.Code == CodeNotVaultAgent && elsewhere:
 		op.Hint = "this agent does not speak sshush's protocol; if it is an sshushd from an older install, restart it where it runs."
-	case CodeAgentTooOld:
+	case op.Code == CodeAgentTooOld && elsewhere:
 		op.Hint = "It is an sshushd older than this sshush: restart it where it runs, or set [vault].vault_path to read the vault file instead."
 	}
 	return err

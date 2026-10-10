@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
+	goruntime "runtime"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/bridge"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
@@ -82,36 +85,48 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		}
 		defer os.Remove(pidFilePath)
 	}
-	var ext sshagent.ExtendedAgent
-	if vp := cfg.VaultPathForAgent(); vp != "" {
-		resolved := vault.ResolveToFile(vp)
-		if _, err := os.Stat(resolved); err != nil && os.IsNotExist(err) {
-			keyring := sshagent.NewKeyring()
-			if len(cfg.KeyPaths) > 0 {
-				agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
-			}
-			ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
-		} else {
-			store, err := vault.Open(resolved)
-			if err != nil {
-				return fmt.Errorf("vault: %w", err)
-			}
-			ext = vault.NewVaultAgent(store)
-		}
-	} else {
-		keyring := sshagent.NewKeyring()
-		if len(cfg.KeyPaths) > 0 {
-			agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
-		}
-		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
-	}
 	defer transport.Remove(socketPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, release := withStopRequest(ctx)
 	defer release()
+
+	var handle func(net.Conn)
+	if cfg.RelaysToWindows() {
+		// No keyring here at all: every connection goes to the agent on Windows.
+		windows, err := bridge.Find(cfg.WindowsSSHush)
+		if err != nil {
+			return err
+		}
+		handle = func(conn net.Conn) { windows.Serve(ctx, conn) }
+	} else {
+		var ext sshagent.ExtendedAgent
+		if vp := cfg.VaultPathForAgent(); vp != "" {
+			resolved := vault.ResolveToFile(vp)
+			if _, err := os.Stat(resolved); err != nil && os.IsNotExist(err) {
+				keyring := sshagent.NewKeyring()
+				if len(cfg.KeyPaths) > 0 {
+					agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
+				}
+				ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
+			} else {
+				store, err := vault.Open(resolved)
+				if err != nil {
+					return fmt.Errorf("vault: %w", err)
+				}
+				ext = vault.NewVaultAgent(store)
+			}
+		} else {
+			keyring := sshagent.NewKeyring()
+			if len(cfg.KeyPaths) > 0 {
+				agent.LoadKeys(keyring, cfg.KeyPaths, os.Stderr)
+			}
+			ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
+		}
+		handle = func(conn net.Conn) { _ = sshagent.ServeAgent(ext, conn) }
+	}
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
-	err = agent.ListenAndServe(ctx, socketPath, ext, agent.WithReady(ready.Ready))
+	err = agent.ListenAndHandle(ctx, socketPath, handle, agent.WithReady(ready.Ready))
 	if err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
 			return fmt.Errorf("agent already running at %s", utils.DisplayPath(socketPath))
@@ -125,10 +140,15 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 // serves. With [agent].type = "external" the socket belongs to somebody else's
 // agent: serving a keyring there would answer in its place once it went away.
 // The CLI refuses before it gets this far; this is for every other caller, the
-// TUI's start button among them.
+// TUI's start button among them. [agent].type = "windows" is served, by
+// relaying, but only where there is a Windows side to relay to.
 func agentDaemonSupported(cfg config.Config) error {
 	if cfg.IsExternal() {
 		return errors.New(`[agent].type = "external": sshush does not run a daemon for an agent it does not manage`)
+	}
+	if cfg.RelaysToWindows() && goruntime.GOOS == "windows" {
+		// Here the agent is this daemon, not something to relay to.
+		return errors.New(`[agent].type = "windows" is for sshush inside WSL; on Windows itself use "vault" or "keys"`)
 	}
 	return nil
 }

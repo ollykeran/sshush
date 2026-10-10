@@ -396,3 +396,44 @@ func TestAdd_unmanagedAgentRemediesDoNotNameStartOrReload(t *testing.T) {
 		}
 	}
 }
+
+// TestAdd_relayWithNothingBehindItIsNoAgent: a relay accepts the connection
+// whether or not there is an agent behind it. One that then says nothing is a
+// missing agent, to be started, and not a foreign agent to be upgraded.
+func TestAdd_relayWithNothingBehindItIsNoAgent(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	path, _ := writeTestKey(t, dir, "id_new", "new-key")
+	socketPath := startSilentRelay(t, dir)
+
+	_, err := Add(Env{SocketPath: socketPath, AgentElsewhere: true}, []string{path}, true)
+	if got := CodeOf(err); got != CodeNoAgent {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeNoAgent, got, err)
+	}
+	if hint := HintOf(err); !strings.Contains(hint, "sshush start") {
+		t.Fatalf("hint: want 'sshush start', which brings up both sides of a relay, got %q", hint)
+	}
+
+	// With the agent optional, the same silence means there is no agent to ask.
+	res, err := List(Env{VaultPath: filepath.Join(dir, "vault.json"), SocketPath: socketPath})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if res.AgentReachable {
+		t.Fatal("agent reachable: want false for a relay with nothing behind it")
+	}
+}
+
+// TestRemove_relayedAgentTooOldIsRestartedWhereItRuns: 'sshush reload' restarts
+// only the relay, so it is no remedy for a stale daemon on the other side.
+func TestRemove_relayedAgentTooOldIsRestartedWhereItRuns(t *testing.T) {
+	f := startLegacyVaultAgent(t)
+	f.addKey(t, "id_one", "one-key", true)
+
+	_, err := Remove(Env{SocketPath: f.socketPath, AgentElsewhere: true}, []string{"one-key"})
+	if got := CodeOf(err); got != CodeAgentTooOld {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeAgentTooOld, got, err)
+	}
+	if hint := HintOf(err); strings.Contains(hint, "sshush reload") || !strings.Contains(hint, "where it runs") {
+		t.Fatalf("hint: want a remedy for an agent that runs elsewhere, got %q", hint)
+	}
+}

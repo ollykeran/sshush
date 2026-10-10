@@ -57,6 +57,7 @@ func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
 		SocketPath:     socketPath,
 		AgentVaultPath: agentVaultPath,
 		AgentUnmanaged: cfg != nil && cfg.IsExternal(),
+		AgentElsewhere: cfg != nil && !cfg.OwnsAgentKeys() && cfg.AgentType != "",
 		AskPassphrase:  readPassphrase,
 	}, nil
 }

@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/bridge"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -75,6 +77,9 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if err != nil {
 		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use " + platform.ShellNames + ")").AsError()
 	}
+	if cfg.RelaysToWindows() {
+		return runStartRelay(&cfg, absConfigPath, authSockLine)
+	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		printAuthSockLine(authSockLine)
 		out := style.NewOutput().
@@ -130,6 +135,15 @@ func runStartDaemon(cmd *cobra.Command) error {
 		out.Error("no keys will be loaded")
 	}
 
+	if err := startDaemonProcess(absConfigPath, cfg.SocketPath); err != nil {
+		return err
+	}
+	return startSuccess(out, &cfg, authSockLine)
+}
+
+// startDaemonProcess starts sshushd for the config at absConfigPath, refusing
+// when the pidfile says one is already running.
+func startDaemonProcess(absConfigPath, socketPath string) error {
 	pidFilePath := runtime.PidFilePath()
 	if sshushd.PidFileLive(pidFilePath) {
 		return style.NewOutput().
@@ -141,10 +155,116 @@ func runStartDaemon(cmd *cobra.Command) error {
 	// with the pidfile somewhere that survives that) must not block the start.
 	_ = os.Remove(pidFilePath)
 
-	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
+	if err := sshushd.StartDaemon(absConfigPath, socketPath); err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	return startSuccess(out, &cfg, authSockLine)
+	return nil
+}
+
+// runStartRelay is start for [agent].type = "windows": the agent is the one
+// sshush runs on the Windows side of this WSL distro, and the daemon here only
+// relays to it. Both halves are started if they are not running, so this one
+// command is all a WSL shell needs, whatever state Windows is in.
+func runStartRelay(cfg *config.Config, absConfigPath, authSockLine string) error {
+	absSocket, _ := transport.Abs(cfg.SocketPath)
+
+	startedRelay := false
+	if !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
+		if err := startDaemonProcess(absConfigPath, cfg.SocketPath); err != nil {
+			return err
+		}
+		startedRelay = true
+	}
+	startedWindows, err := ensureWindowsAgent(cfg)
+	if err != nil {
+		return err
+	}
+
+	printAuthSockLine(authSockLine)
+	out := style.NewOutput()
+	state := "running at "
+	if startedRelay {
+		state = "started with socket: "
+	}
+	out.Success("* sshushd " + state + utils.DisplayPath(absSocket))
+	out.Info("relaying to the sshush agent on Windows")
+
+	session, err := agent.Open(cfg.SocketPath)
+	if err == nil {
+		defer session.Close()
+		// What is behind the relay is the agent's to say, not this config's. A
+		// locked vault is worth a prompt when this run brought something up, as
+		// it is for a vault started here; a shell that finds everything already
+		// running is left alone, and told the vault is locked.
+		if startedRelay || startedWindows {
+			if backend, berr := session.Backend(); berr == nil && backend.Mode == "vault" && backend.VaultLocked {
+				promptUnlock(session, out)
+			}
+		}
+		out.Spacer()
+		_ = AppendKeysTo(session, out)
+	}
+	out.PrintErr()
+	return nil
+}
+
+// ensureWindowsAgent makes sure an agent answers through the relay, starting
+// the daemon on Windows if none does, and reports whether it had to.
+func ensureWindowsAgent(cfg *config.Config) (started bool, err error) {
+	if agentAnswers(cfg.SocketPath) {
+		return false, nil
+	}
+	windows, err := bridge.Find(cfg.WindowsSSHush)
+	if err != nil {
+		return false, style.NewOutput().Error(err.Error()).AsError()
+	}
+	ctx := context.Background()
+	if err := windows.StartDaemon(ctx); err != nil {
+		return false, style.NewOutput().
+			Error("could not start the sshush agent on Windows").
+			Info(err.Error()).
+			AsError()
+	}
+	if agentAnswers(cfg.SocketPath) {
+		return true, nil
+	}
+	// It started, or said it did, and still nothing answers. Ask the relay
+	// itself: an sshush.exe from before the relay command says so here.
+	out := style.NewOutput().Error("the sshush agent on Windows is not answering through the relay")
+	if said := windows.Diagnose(ctx); said != "" {
+		out.Info("'" + utils.DisplayPath(windows.Path) + " relay' says: " + said)
+	}
+	out.Info("Both sides need the same sshush version.")
+	return true, out.AsError()
+}
+
+// agentAnswers reports whether an agent completes a round trip on socketPath.
+// Connecting is not enough to tell: a relay accepts the connection whether or
+// not anything is behind it.
+func agentAnswers(socketPath string) bool {
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		return false
+	}
+	defer session.Close()
+	_, err = session.Backend()
+	return err == nil
+}
+
+// promptUnlock asks for the vault's passphrase and unlocks the agent behind
+// session, noting on out why if that does not happen.
+func promptUnlock(session *agent.Session, out *style.Output) {
+	passphrase, err := readPassphrase("Passphrase: ")
+	if err != nil {
+		out.Spacer()
+		out.Error("unlock skipped: " + err.Error())
+		return
+	}
+	defer ClearBytes(passphrase)
+	if err := session.Unlock(passphrase); err != nil {
+		out.Spacer()
+		out.Error("unlock failed: " + err.Error())
+	}
 }
 
 // startSuccess prints authSockLine to stdout (for eval) only when stdout is
@@ -174,17 +294,7 @@ func startSuccess(out *style.Output, cfg *config.Config, authSockLine string) er
 				// Vault file missing or uninitialized; daemon fell back to key_paths or empty
 				// Do not prompt for passphrase
 			} else {
-				passphrase, err := readPassphrase("Passphrase: ")
-				if err != nil {
-					out.Spacer()
-					out.Error("unlock skipped: " + err.Error())
-				} else {
-					if err := session.Unlock(passphrase); err != nil {
-						out.Spacer()
-						out.Error("unlock failed: " + err.Error())
-					}
-					ClearBytes(passphrase)
-				}
+				promptUnlock(session, out)
 			}
 		}
 		out.Spacer()

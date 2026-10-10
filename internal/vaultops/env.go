@@ -44,6 +44,12 @@ type Env struct {
 	// to do that from here.
 	AgentUnmanaged bool
 
+	// AgentElsewhere reports that the agent runs somewhere 'sshush reload' here
+	// does not reach: an external agent, or the one on Windows that
+	// [agent].type = "windows" relays to. A stale daemon there has to be
+	// restarted where it runs.
+	AgentElsewhere bool
+
 	// AskPassphrase prompts for the agent's unlock passphrase. Nil means this
 	// front end cannot prompt — the TUI drives its passphrase modal from its
 	// own event loop and cannot block inside a tea.Cmd — and a locked agent is

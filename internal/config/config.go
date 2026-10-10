@@ -29,6 +29,7 @@ const (
 	AgentTypeVault    = "vault"    // sshushd uses VaultPath as the agent backend.
 	AgentTypeKeys     = "keys"     // sshushd loads keys from KeyPaths into an in-memory keyring.
 	AgentTypeExternal = "external" // socket_path points at an agent sshush does not own; sshush never starts, stops, or reloads a daemon for it.
+	AgentTypeWindows  = "windows"  // Inside WSL: sshushd relays socket_path to the agent of the sshush on the Windows side.
 )
 
 // Config is the runtime view of the TOML file (flat fields for callers).
@@ -36,10 +37,13 @@ const (
 type Config struct {
 	KeyPaths   []string // From [agent].key_paths; when AgentType is not "vault", keys load from these paths.
 	SocketPath string   // From [agent].socket_path.
-	AgentType  string   // From [agent].type: "vault", "keys", or "external".
+	AgentType  string   // From [agent].type: "vault", "keys", "external", or "windows".
 	Shell      string   // From [agent].shell: syntax of the SSH_AUTH_SOCK line ("posix", "fish", "powershell"); empty means posix.
 	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentType is not "vault").
-	Theme      ThemeSection
+	// WindowsSSHush is [agent].windows_sshush: sshush.exe as WSL sees it, for
+	// AgentType "windows". Empty means sshush.exe on PATH.
+	WindowsSSHush string
+	Theme         ThemeSection
 
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
@@ -56,6 +60,17 @@ func (c Config) IsVault() bool { return c.AgentType == AgentTypeVault }
 // IsExternal reports whether socket_path points at an agent sshush does not own.
 func (c Config) IsExternal() bool { return c.AgentType == AgentTypeExternal }
 
+// RelaysToWindows reports whether the daemon here only relays socket_path to
+// the agent of the sshush on the Windows side of this WSL distro.
+func (c Config) RelaysToWindows() bool { return c.AgentType == AgentTypeWindows }
+
+// OwnsAgentKeys reports whether this config says what the agent should hold:
+// its key_paths, or its vault. It does not for an agent that lives somewhere
+// else, and nothing here may then be reconciled against the agent's keys.
+func (c Config) OwnsAgentKeys() bool {
+	return c.AgentType == AgentTypeKeys || c.AgentType == AgentTypeVault
+}
+
 // configDocument matches the on-disk TOML layout.
 type configDocument struct {
 	Agent  agentSection  `toml:"agent"`
@@ -69,6 +84,8 @@ type agentSection struct {
 	KeyPaths   []string `toml:"key_paths"`
 	Type       string   `toml:"type"`
 	Shell      string   `toml:"shell,omitempty"`
+	// WindowsSSHush is only meaningful for type = "windows".
+	WindowsSSHush string `toml:"windows_sshush,omitempty"`
 }
 
 type vaultSection struct {
@@ -101,6 +118,8 @@ func toDocument(cfg Config) configDocument {
 		KeyPaths:   cfg.KeyPaths,
 		Type:       cfg.AgentType,
 		Shell:      cfg.Shell,
+
+		WindowsSSHush: cfg.WindowsSSHush,
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -182,6 +201,7 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
+	cfg.WindowsSSHush = utils.ExpandHomeDirectory(cfg.WindowsSSHush)
 	cfg.ServerAuthorizedKeys = utils.ExpandHomeDirectory(cfg.ServerAuthorizedKeys)
 	cfg.ServerHostKey = utils.ExpandHomeDirectory(cfg.ServerHostKey)
 	cfg.ServerShell = utils.ExpandHomeDirectory(cfg.ServerShell)
@@ -202,7 +222,8 @@ func (c Config) VaultPathForAgent() string {
 }
 
 // AgentBackendMode returns a short label for the agent storage backend: "vault" or "keys".
-// External agents are reported as "keys" since they never expose sshush's vault extensions.
+// An agent that lives elsewhere ("external", "windows") is reported as "keys": only
+// the agent itself can say whether it is a vault, and callers that care ask it.
 func (c Config) AgentBackendMode() string {
 	if c.IsVault() {
 		return AgentTypeVault
@@ -212,10 +233,10 @@ func (c Config) AgentBackendMode() string {
 
 func documentToConfig(doc *configDocument) (Config, error) {
 	switch doc.Agent.Type {
-	case AgentTypeVault, AgentTypeKeys, AgentTypeExternal:
+	case AgentTypeVault, AgentTypeKeys, AgentTypeExternal, AgentTypeWindows:
 	default:
 		return Config{}, style.NewOutput().
-			Error("[agent].type is required and must be \"vault\", \"keys\", or \"external\"").
+			Error("[agent].type is required and must be \"vault\", \"keys\", \"external\", or \"windows\"").
 			Info("Configs from before this option existed used [agent].vault = true/false; replace that with type = \"vault\" or type = \"keys\".").
 			AsError()
 	}
@@ -254,6 +275,8 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		}
 	case AgentTypeExternal:
 		// No key material requirement: sshush is a pure client of an agent it does not manage.
+	case AgentTypeWindows:
+		// Nor here: the keys are the Windows agent's, and the daemon only relays to it.
 	}
 
 	cfg := Config{
@@ -262,6 +285,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		AgentType:            doc.Agent.Type,
 		Shell:                doc.Agent.Shell,
 		VaultPath:            vaultPath,
+		WindowsSSHush:        doc.Agent.WindowsSSHush,
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,
