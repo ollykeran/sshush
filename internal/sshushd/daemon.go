@@ -65,6 +65,9 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 // Call only from the sshushd binary. Removes pidfile and socket on exit.
 // ready, if non-nil, is signaled once the socket is accepting connections.
 func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
+	if err := agentDaemonSupported(cfg); err != nil {
+		return err
+	}
 	absSocket, err := transport.Abs(cfg.SocketPath)
 	if err != nil {
 		return fmt.Errorf("socket path: %w", err)
@@ -114,6 +117,18 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 			return fmt.Errorf("agent already running at %s", utils.DisplayPath(socketPath))
 		}
 		return err
+	}
+	return nil
+}
+
+// agentDaemonSupported reports whether cfg describes an agent this daemon
+// serves. With [agent].type = "external" the socket belongs to somebody else's
+// agent: serving a keyring there would answer in its place once it went away.
+// The CLI refuses before it gets this far; this is for every other caller, the
+// TUI's start button among them.
+func agentDaemonSupported(cfg config.Config) error {
+	if cfg.IsExternal() {
+		return errors.New(`[agent].type = "external": sshush does not run a daemon for an agent it does not manage`)
 	}
 	return nil
 }
