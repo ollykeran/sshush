@@ -115,13 +115,48 @@ if ! ss -lx 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
 fi
 ```
 
+The same thing for fish, in `~/.config/fish/config.fish`:
+
+```fish
+set -gx SSH_AUTH_SOCK $HOME/.ssh/sshush-windows.sock
+if not ss -lx 2>/dev/null | string match -q "*$SSH_AUTH_SOCK*"
+    rm -f $SSH_AUTH_SOCK
+    setsid socat UNIX-LISTEN:$SSH_AUTH_SOCK,fork,mode=600 EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork >/dev/null 2>&1 &
+    disown
+end
+```
+
 Each connection to the socket starts one `npiperelay.exe`, which connects to sshush's pipe as you, so the pipe's access list is satisfied without loosening it. `ssh-add -l` in WSL should then list the keys the Windows agent holds.
 
-If it does not:
+### sshush in WSL, on the Windows daemon
+
+That is enough for `ssh` and `git`. To use `sshush` itself in the distro against the same daemon — one vault and one unlock for both sides — tell it the agent is one it does not run. In the distro's `~/.config/sshush/config.toml`:
+
+```toml
+[agent]
+type = "external"
+socket_path = "/home/you/.ssh/sshush-windows.sock"
+```
+
+Leave `socket_path` out to follow `SSH_AUTH_SOCK` instead. There is no `[vault]` section: the daemon answers for its own vault, so the vault file stays on Windows and WSL never reads it.
+
+With that, in the distro:
+
+- `sshush list`, `add`, `remove`, `lock` and `unlock` act on the Windows agent, and locking or unlocking on one side does it for the other.
+- `sshush vault list`, `add`, `remove`, `load` and `autoload` work on the Windows vault, by fingerprint, comment or key file. A locked vault is unlocked in passing, with a prompt for its passphrase.
+- `sshush tui` shows the Vault tab once it has heard from the daemon.
+- `sshush start`, `stop` and `reload` refuse: the daemon is managed from Windows. `sshush vault init` has nothing to create here; make the vault on Windows.
+
+`sshush vault add ~/.ssh/id_ed25519` in WSL reads the key file there and sends its contents, so the key need not exist on Windows. The path the vault shows for it is the WSL one, which means nothing to the Windows side; that column is a note of where a key came from, not something sshush opens again.
+
+Keep the two installs on the same version. A WSL `sshush` newer than the daemon says so when it needs something the daemon cannot do yet.
+
+If something does not work:
 
 - **Nothing listed, or "connection refused"**: check that sshush is running on Windows (`sshush list` in PowerShell) and that the pipe name in the `socat` line matches `[agent].socket_path`.
-- **"Error connecting to agent"** after a WSL restart: a stale socket file is left behind; the snippet above removes it, a hand-written one may not.
-- **A vault that is locked** lists no keys from WSL either; unlock it on the Windows side.
+- **"Error connecting to agent"** after a WSL restart: a stale socket file is left behind; the snippets above remove it, a hand-written one may not.
+- **"requires a running vault agent"** from `sshush` in WSL: nothing is answering on the socket. The relay is not running, or the daemon on Windows is stopped.
+- **A vault that is locked** lists no keys from WSL either. `sshush unlock` on either side opens it for both.
 
 ## Installing from a release
 
