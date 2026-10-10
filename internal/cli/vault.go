@@ -29,12 +29,16 @@ func newVaultCommand() *cobra.Command {
 }
 
 // vaultEnv builds the vaultops.Env for a vault subcommand from --vault-path,
-// config and the resolved socket. AskPassphrase is set, so a locked agent
-// serving this very vault is unlocked in passing rather than refused.
+// config and the resolved socket. Without --vault-path the running vault agent
+// answers for its own vault, and [vault].vault_path is only where to look when
+// there is none; with it, that file is the vault. AskPassphrase is set, so a
+// locked agent serving the vault in question is unlocked in passing rather
+// than refused.
 func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
 	cfg := configFrom(cmd)
 	var vaultPath string
-	if cmd.Flags().Changed("vault-path") {
+	named := cmd.Flags().Changed("vault-path")
+	if named {
 		vaultPath, _ = cmd.Flags().GetString("vault-path")
 	} else if cfg != nil {
 		vaultPath = cfg.VaultPath
@@ -49,8 +53,10 @@ func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
 	}
 	return vaultops.Env{
 		VaultPath:      vaultPath,
+		NamedVault:     named,
 		SocketPath:     socketPath,
 		AgentVaultPath: agentVaultPath,
+		AgentUnmanaged: cfg != nil && cfg.IsExternal(),
 		AskPassphrase:  readPassphrase,
 	}, nil
 }
@@ -135,11 +141,13 @@ func newVaultListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all keys in the vault",
-		Long:  "Show fingerprint, loaded (in current agent), autoload, comment, and key type for each identity. If the vault is locked, prompts for passphrase to unlock.",
-		Args:  cobra.NoArgs,
-		RunE:  runVaultList,
+		Long: "Show fingerprint, loaded (in current agent), autoload, comment, and key type for each identity. " +
+			"The running vault agent is asked what its vault holds, so the vault file need not be readable from here; " +
+			"with no vault agent running, [vault].vault_path is read instead. If the vault is locked, prompts for passphrase to unlock.",
+		Args: cobra.NoArgs,
+		RunE: runVaultList,
 	}
-	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
+	cmd.Flags().String("vault-path", "", "use this vault file instead of the running agent's vault (default: ask the agent, else [vault].vault_path from config)")
 	return cmd
 }
 
@@ -195,7 +203,7 @@ func newVaultAddCommand() *cobra.Command {
 		Use:     "add <key_paths...>",
 		Example: "sshush vault add ~/.ssh/id_ed25519",
 		Short:   "Add private key file(s) to the vault via the running agent",
-		Long: "Add unencrypted OpenSSH private key(s) to the vault-backed agent. Requires [agent].type = \"vault\" and sshush start. " +
+		Long: "Add unencrypted OpenSSH private key(s) to the vault-backed agent. Requires a running vault agent. " +
 			"Keys are stored encrypted with autoload on by default; use --no-autoload for session-only until daemon restart.",
 		RunE: runVaultAdd,
 	}
@@ -249,7 +257,7 @@ func newVaultRemoveCommand() *cobra.Command {
 			"Requires a running vault agent and an unlocked vault.",
 		RunE: runVaultRemove,
 	}
-	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
+	cmd.Flags().String("vault-path", "", "use this vault file instead of the running agent's vault (default: ask the agent, else [vault].vault_path from config)")
 	return cmd
 }
 
@@ -282,7 +290,7 @@ func newVaultLoadCommand() *cobra.Command {
 		RunE: runVaultLoad,
 		Args: cobra.MinimumNArgs(1),
 	}
-	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
+	cmd.Flags().String("vault-path", "", "use this vault file instead of the running agent's vault (default: ask the agent, else [vault].vault_path from config)")
 	return cmd
 }
 
@@ -322,7 +330,7 @@ func newVaultAutoloadCommand() *cobra.Command {
 		RunE: runVaultAutoload,
 		Args: cobra.MinimumNArgs(2),
 	}
-	cmd.Flags().String("vault-path", "", "path to vault file (default: [vault].vault_path from config)")
+	cmd.Flags().String("vault-path", "", "use this vault file instead of the running agent's vault (default: ask the agent, else [vault].vault_path from config)")
 	return cmd
 }
 

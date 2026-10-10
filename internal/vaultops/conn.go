@@ -17,71 +17,75 @@ import (
 type need uint8
 
 const (
-	// needVaultPath requires Env.VaultPath to name something.
-	needVaultPath need = 1 << iota
-	// needStore requires an initialized vault at that path. Implies needVaultPath.
-	needStore
+	// needStore requires the vault file to hold an initialized vault, in the
+	// cases where the file is what the verb works on: a vault the user named,
+	// or a configured one with no vault agent to answer for it.
+	needStore need = 1 << iota
 	// needAgent requires a reachable, vault-backed agent.
 	needAgent
 	// agentIfRunning attaches an agent when one answers and leaves the session
 	// nil otherwise, for verbs that can still report a partial answer.
 	agentIfRunning
 	// mayUnlock lets open prompt for a passphrase and unlock a locked agent,
-	// when the front end can prompt and the agent serves this very vault.
+	// when the front end can prompt and the agent serves the vault in question.
 	mayUnlock
 )
 
-// conn is one unit of work: the resolved vault path, the store behind it, and a
-// single agent session, opened once and shared by every selector a verb
-// handles. The store is opened whenever a vault path is configured; need only
-// decides whether a missing or uninitialized one is fatal.
+// conn is one unit of work: a single agent session, opened once and shared by
+// every selector a verb handles, and the vault's contents from whichever of the
+// agent and the vault file can supply them.
 type conn struct {
-	env         Env
-	verb        string
-	vaultPath   string
+	env       Env
+	verb      string
+	vaultPath string
+	session   *agent.Session
+	backend   agent.Backend
+	dialErr   error // why there is no session, when the agent was optional
+
+	// The vault file is opened only when something has to be read from it, so
+	// a config whose vault_path cannot be read from here costs nothing while
+	// the agent answers.
 	store       *vault.VaultStore
 	initialized bool
-	session     *agent.Session
-	backend     agent.Backend
+
+	contents     roster
+	haveContents bool
+}
+
+// roster is what a vault holds, from the agent serving it or from its file.
+type roster struct {
+	// vaultPath is the vault file. When the agent answered it is that agent's
+	// own name for it, which may mean nothing on this machine.
+	vaultPath   string
+	initialized bool
+	identities  []vault.IdentityInfo
 }
 
 // open satisfies n for verb and returns a conn the caller must close.
 func open(env Env, verb string, n need) (*conn, error) {
 	c := &conn{env: env, verb: verb, vaultPath: env.vaultFile()}
 
-	if n&(needVaultPath|needStore) != 0 && c.vaultPath == "" {
-		return nil, &OpError{
-			Code: CodeNoVaultPath,
-			Msg:  "vault path required",
-			Hint: "Set [vault].vault_path in config, or pass --vault-path.",
+	// A named vault is checked before the agent, so a mistyped --vault-path is
+	// reported as a missing vault rather than as whatever the agent makes of it.
+	if n&needStore != 0 && env.namedVault() {
+		if err := c.requireStore(); err != nil {
+			return nil, err
 		}
 	}
-	if c.vaultPath != "" {
-		store, err := vault.Open(c.vaultPath)
-		if err != nil {
-			return nil, &OpError{
-				Code: CodeVaultUnreadable,
-				Msg:  "open vault: " + err.Error(),
-				Err:  err,
+	if err := c.attachAgent(n); err != nil {
+		// With no vault agent the configured file is all there is, and "there is
+		// no vault there yet" explains the failure better than the agent does.
+		if n&needStore != 0 && c.vaultPath != "" {
+			if storeErr := c.requireStore(); storeErr != nil {
+				return nil, storeErr
 			}
 		}
-		c.store = store
-		c.initialized = store.GetMetadata() != nil
-	}
-	if n&needStore != 0 && !c.initialized {
-		return nil, notInitializedError(c.vaultPath)
-	}
-
-	if err := c.attachAgent(n); err != nil {
-		return nil, err
+		return nil, c.env.remedy(err)
 	}
 	return c, nil
 }
 
-// attachAgent opens the agent session n asks for. It is separate from open so a
-// verb can inspect the store first and skip the agent entirely — an empty vault
-// has nothing to ask an agent about, and asking would start prompting for a
-// passphrase nobody needs to give.
+// attachAgent opens the agent session n asks for.
 func (c *conn) attachAgent(n need) error {
 	if n&(needAgent|agentIfRunning) == 0 {
 		return nil
@@ -89,13 +93,9 @@ func (c *conn) attachAgent(n need) error {
 	session, err := agent.Open(c.env.SocketPath)
 	if err != nil {
 		if n&needAgent != 0 {
-			return &OpError{
-				Code: CodeNoAgent,
-				Msg:  "vault " + c.verb + " requires a running vault agent",
-				Hint: "Start it with 'sshush start'.",
-				Err:  err,
-			}
+			return noAgentError(c.verb, err)
 		}
+		c.dialErr = err
 		return nil
 	}
 	backend, berr := session.Backend()
@@ -134,6 +134,52 @@ func (c *conn) close() {
 	}
 }
 
+// describe phrases err for this verb, as the package-level describe does, with
+// the remedy adjusted for an agent this sshush does not manage.
+func (c *conn) describe(err error, selector string) error {
+	return c.env.remedy(describe(err, c.verb, selector))
+}
+
+// openStore reads the vault file, once. It is not an error for the file to be
+// missing; initialized says whether a vault was found in it.
+func (c *conn) openStore() error {
+	if c.store != nil {
+		return nil
+	}
+	store, err := vault.Open(c.vaultPath)
+	if err != nil {
+		return &OpError{
+			Code: CodeVaultUnreadable,
+			Msg:  "open vault: " + err.Error(),
+			Err:  err,
+		}
+	}
+	c.store = store
+	c.initialized = store.GetMetadata() != nil
+	return nil
+}
+
+// requireStore fails unless the vault file holds an initialized vault.
+func (c *conn) requireStore() error {
+	if err := c.openStore(); err != nil {
+		return err
+	}
+	if !c.initialized {
+		return notInitializedError(c.vaultPath)
+	}
+	return nil
+}
+
+// noAgentError says nothing answered on the agent socket verb needed.
+func noAgentError(verb string, cause error) *OpError {
+	return &OpError{
+		Code: CodeNoAgent,
+		Msg:  "vault " + verb + " requires a running vault agent",
+		Hint: "Start it with 'sshush start'.",
+		Err:  cause,
+	}
+}
+
 // notInitializedError names the vault path the caller asked for, so a front end
 // can offer the right way to create it.
 func notInitializedError(vaultPath string) *OpError {
@@ -158,66 +204,171 @@ func gateError(verb string, backend agent.Backend, cause error) *OpError {
 	return e
 }
 
-// unlockIfLocked prompts for a passphrase and unlocks a locked agent, but only
-// when the front end can prompt and the agent serves this very vault. Failures
-// are deliberately swallowed: the verb's own error names the problem better
-// than "unlock failed" would.
-func (c *conn) unlockIfLocked() {
-	if c.session == nil || c.env.AskPassphrase == nil {
-		return
+// remedy rewrites the hints that tell the user to start or reload the daemon,
+// for an agent this sshush does not manage: 'sshush start' and 'sshush reload'
+// refuse there, so pointing at them sends the user in a circle.
+func (e Env) remedy(err error) error {
+	var op *OpError
+	if !e.AgentUnmanaged || !errors.As(err, &op) || op.Hint == "" {
+		return err
 	}
-	agentVault := c.env.agentVaultFile()
-	if agentVault == "" || c.vaultPath == "" || c.vaultPath != agentVault {
-		return
+	switch op.Code {
+	case CodeNoAgent:
+		op.Hint = "Nothing answers on " + utils.DisplayPath(e.SocketPath) + ". This sshush does not manage that agent ([agent].type = \"external\"): start it, or the relay that reaches it, where it runs."
+	case CodeNotVaultAgent:
+		op.Hint = "this agent does not speak sshush's protocol; if it is an sshushd from an older install, restart it where it runs."
+	case CodeAgentTooOld:
+		op.Hint = "It is an sshushd older than this sshush: restart it where it runs, or set [vault].vault_path to read the vault file instead."
+	}
+	return err
+}
+
+// ownVault reports whether this verb works on the vault the attached agent
+// serves, so the agent is the one to ask what is in it.
+func (c *conn) ownVault() bool {
+	return c.session != nil && c.backend.Mode == "vault" && !c.env.namedVault()
+}
+
+// unlockIfLocked prompts for a passphrase and unlocks a locked agent, but only
+// when the front end can prompt and the agent serves the vault this verb works
+// on, and reports whether the agent ended up unlocked by it. Failures are
+// deliberately swallowed: the verb's own error names the problem better than
+// "unlock failed" would.
+func (c *conn) unlockIfLocked() bool {
+	if c.session == nil || c.env.AskPassphrase == nil {
+		return false
 	}
 	if c.backend.Mode != "vault" || !c.backend.VaultLocked {
-		return
+		return false
+	}
+	if c.env.namedVault() {
+		// The user named a file. Only config can say whether the agent serves
+		// it, and if it does not, this is not the moment to ask for the
+		// agent's passphrase.
+		if agentVault := c.env.agentVaultFile(); agentVault == "" || c.vaultPath != agentVault {
+			return false
+		}
 	}
 	passphrase, err := c.env.AskPassphrase("Passphrase: ")
 	if err != nil {
-		return
+		return false
 	}
 	defer zero(passphrase)
-	if err := c.session.Unlock(passphrase); err == nil {
-		c.backend.VaultLocked = false
+	if err := c.session.Unlock(passphrase); err != nil {
+		return false
 	}
+	c.backend.VaultLocked = false
+	return true
 }
 
-// resolveIdentity turns a user-typed selector into a stored vault identity. It
-// accepts a SHA256 fingerprint, an exact comment, or a path to the private key
-// file, and needs an initialized store.
-func (c *conn) resolveIdentity(selector string) (vault.Identity, error) {
+// roster returns what the vault this verb works on holds, reading it once.
+//
+// The agent is asked first when the vault is its own. It can refuse — a locked
+// vault tells whoever reaches its socket nothing, and an older sshushd does not
+// know the question — and then the vault file answers instead, if this machine
+// has one.
+func (c *conn) roster() (roster, error) {
+	if c.haveContents {
+		return c.contents, nil
+	}
+	r, err := c.readRoster()
+	if err != nil {
+		return roster{}, err
+	}
+	c.contents, c.haveContents = r, true
+	return r, nil
+}
+
+func (c *conn) readRoster() (roster, error) {
+	var refused error
+	if c.ownVault() {
+		listing, err := vault.Identities(c.session)
+		if errors.Is(err, agent.ErrVaultLocked) && c.vaultPath == "" && c.unlockIfLocked() {
+			// Only the agent can say what this vault holds, which makes the
+			// question worth a passphrase. With a vault file to read instead,
+			// the caller decides whether what it finds there is.
+			listing, err = vault.Identities(c.session)
+		}
+		switch {
+		case err == nil:
+			return roster{vaultPath: listing.VaultPath, initialized: true, identities: listing.Identities}, nil
+		case errors.Is(err, agent.ErrVaultLocked), errors.Is(err, agent.ErrOpUnknown):
+			refused = err
+		default:
+			return roster{}, c.describe(err, "")
+		}
+	}
+
+	if c.vaultPath == "" {
+		switch {
+		case refused == nil && c.dialErr != nil && c.env.AgentUnmanaged:
+			// Someone else's agent is the only place this config keeps a vault,
+			// so its absence is the problem, not a missing vault_path.
+			return roster{}, c.env.remedy(noAgentError(c.verb, c.dialErr))
+		case refused == nil:
+			return roster{}, &OpError{
+				Code: CodeNoVaultPath,
+				Msg:  "vault path required",
+				Hint: "Set [vault].vault_path in config, or pass --vault-path.",
+			}
+		case errors.Is(refused, agent.ErrOpUnknown):
+			return roster{}, c.env.remedy(&OpError{
+				Code: CodeAgentTooOld,
+				Msg:  "this vault agent cannot say what its vault holds",
+				Hint: "It is an sshushd older than this sshush: restart it with 'sshush reload', or set [vault].vault_path to read the vault file instead.",
+				Err:  refused,
+			})
+		default:
+			return roster{}, c.describe(refused, "")
+		}
+	}
+
+	if err := c.openStore(); err != nil {
+		return roster{}, err
+	}
+	r := roster{vaultPath: c.vaultPath, initialized: c.initialized}
 	if !c.initialized {
-		return vault.Identity{}, notInitializedError(c.vaultPath)
+		return r, nil
+	}
+	identities, err := vault.ListIdentities(c.store)
+	if err != nil {
+		return roster{}, &OpError{Code: CodeVaultUnreadable, Msg: "list identities: " + err.Error(), Err: err}
+	}
+	r.identities = identities
+	return r, nil
+}
+
+// resolveIdentity turns a user-typed selector into a vault identity. It accepts
+// a SHA256 fingerprint, an exact comment, or a path to the private key file.
+func (c *conn) resolveIdentity(selector string) (vault.IdentityInfo, error) {
+	r, err := c.roster()
+	if err != nil {
+		return vault.IdentityInfo{}, err
+	}
+	if !r.initialized {
+		return vault.IdentityInfo{}, notInitializedError(r.vaultPath)
 	}
 	path := utils.ExpandHomeDirectory(selector)
 	if fi, err := os.Stat(path); err == nil && !fi.IsDir() {
 		pubKey, _, _, err := agent.ParseKeyFromPath(path)
 		if err == nil {
-			return vault.ResolveIdentityByFingerprint(c.store, ssh.FingerprintSHA256(pubKey))
+			return vault.ResolveIdentityByFingerprint(r.identities, ssh.FingerprintSHA256(pubKey))
 		}
 		if errors.Is(err, openssh.ErrEncryptedPrivateKey) {
-			return vault.Identity{}, err
+			return vault.IdentityInfo{}, err
 		}
 	}
-	return vault.ResolveIdentity(c.store, selector)
+	return vault.ResolveIdentity(r.identities, selector)
 }
 
-// resolveFingerprint is resolveIdentity reduced to a fingerprint. With no vault
-// path configured at all — the TUI, which selects a table row and already holds
-// the fingerprint — a SHA256 selector passes straight through for the agent to
-// look up. A vault path that was configured but holds no vault is still an
-// error: the caller asked for that vault by name.
+// resolveFingerprint is resolveIdentity reduced to a fingerprint. A SHA256
+// selector for the agent's own vault passes straight through for the agent to
+// look up: the TUI selects a table row and already holds the fingerprint, and
+// an agent too old to list its vault can still act on one. A vault the user
+// named is always consulted, so naming one that is not there is still an error.
 func (c *conn) resolveFingerprint(selector string) (string, error) {
-	if c.store == nil {
-		if strings.HasPrefix(selector, "SHA256:") {
-			return selector, nil
-		}
-		return "", &OpError{
-			Code: CodeNoVaultPath,
-			Msg:  "vault path required to resolve " + selector,
-			Hint: "Set [vault].vault_path in config, or select by SHA256 fingerprint.",
-		}
+	if strings.HasPrefix(selector, "SHA256:") && !c.env.namedVault() {
+		return selector, nil
 	}
 	id, err := c.resolveIdentity(selector)
 	if err != nil {

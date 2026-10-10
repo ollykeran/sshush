@@ -71,6 +71,33 @@ type fixture struct {
 // startVaultAgent builds an initialized, unlocked vault and serves it.
 func startVaultAgent(t *testing.T, withRecovery bool) *fixture {
 	t.Helper()
+	return startVaultAgentAs(t, withRecovery, func(va *vault.VaultAgent) sshagent.ExtendedAgent { return va })
+}
+
+// legacyVault is a vault agent from before it could say what its vault holds:
+// every other operation works, and that one is answered as unknown.
+type legacyVault struct{ *vault.VaultAgent }
+
+func (l legacyVault) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if extensionType == agent.ExtensionOp {
+		if op, _, err := agent.DecodeOpRequest(contents); err == nil && op == agent.OpListIdentities {
+			return agent.EncodeOpResponse(agent.StatusUnsupportedOp, nil), nil
+		}
+	}
+	return l.VaultAgent.Extension(extensionType, contents)
+}
+
+// startLegacyVaultAgent is startVaultAgent for an sshushd older than the
+// list-identities operation.
+func startLegacyVaultAgent(t *testing.T) *fixture {
+	t.Helper()
+	return startVaultAgentAs(t, false, func(va *vault.VaultAgent) sshagent.ExtendedAgent { return legacyVault{va} })
+}
+
+// startVaultAgentAs builds an initialized, unlocked vault and serves it through
+// whatever served makes of its agent.
+func startVaultAgentAs(t *testing.T, withRecovery bool, served func(*vault.VaultAgent) sshagent.ExtendedAgent) *fixture {
+	t.Helper()
 	dir := unixSocketTempDirVaultOps(t)
 	f := &fixture{
 		dir:       dir,
@@ -99,7 +126,7 @@ func startVaultAgent(t *testing.T, withRecovery bool) *fixture {
 	if err := f.va.Unlock(f.pass); err != nil {
 		t.Fatal(err)
 	}
-	f.socketPath = serve(t, dir, "agent.sock", f.va)
+	f.socketPath = serve(t, dir, "agent.sock", served(f.va))
 	return f
 }
 
@@ -116,6 +143,21 @@ func (f *fixture) env() Env {
 // silentEnv is the Env the TUI builds: no prompting, no agent vault path.
 func (f *fixture) silentEnv() Env {
 	return Env{VaultPath: f.vaultPath, SocketPath: f.socketPath}
+}
+
+// remoteEnv is the Env of a client that reaches the agent but has no vault
+// file to read, as sshush in WSL has for a daemon on Windows: no vault path,
+// and an agent it does not manage.
+func (f *fixture) remoteEnv() Env {
+	return Env{SocketPath: f.socketPath, AgentUnmanaged: true, AskPassphrase: f.ask.fn}
+}
+
+// namedEnv is env with the vault file named by the user, as --vault-path does.
+func (f *fixture) namedEnv(vaultPath string) Env {
+	env := f.env()
+	env.VaultPath = vaultPath
+	env.NamedVault = true
+	return env
 }
 
 // lock wipes the agent's master key, as 'sshush lock' does.

@@ -68,7 +68,7 @@ The vault agent speaks the standard SSH agent protocol over `SSH_AUTH_SOCK`, ser
 - **rsa-sha2 signing**: RSA identities sign with `rsa-sha2-256` / `rsa-sha2-512` when the client requests them (what `ssh` needs for modern RSA host/client auth). Non-RSA keys and unknown flag values are rejected.
 - **Add constraints**: `ssh-add -t` (lifetime) is honored — the identity expires and is dropped lazily on the next List/Sign. `ssh-add -c` (confirm), constraint extensions, and certificates are **rejected** rather than silently ignored, because the daemon has no confirm UI and cannot store cert identities.
 - **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `sshush-op`.
-- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
+- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key, list-identities. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
 
 ### Lock: wipe vs OpenSSH soft-lock
 
@@ -86,8 +86,10 @@ Background: OpenSSH `PROTOCOL.agent` and RFC 9987; where they diverge (notably e
 ## Configuration prerequisites
 
 - **`sshush vault init`**: Set `[vault].vault_path` in config or pass `--vault-path`. Does not require the agent.
-- **Most other `sshush vault` subcommands**: Need config loaded (so `vault_path` resolves), and usually a **running** vault agent (`sshush start` with `[agent].type = "vault"`).
-- **`sshush vault list`**: Reads the vault file directly; if the running agent uses the same vault and is locked, the CLI may prompt to unlock so the **LOADED** column can be computed.
+- **Every other `sshush vault` subcommand** works on the vault the **running agent** serves, and asks the agent what that vault holds. The vault file does not have to be readable from where you run the command, or be on the same machine: that is what lets one daemon on Windows serve PowerShell and WSL (see [Windows](windows.md#using-it-from-wsl)). All but `list` need that vault agent running.
+- **`[vault].vault_path`** is what those subcommands fall back on when no vault agent answers: `vault list` reads the file and shows **LOADED** as `n/a`. It is also read when the agent will not say what it holds, which is a locked vault, or an `sshushd` from before the `list-identities` operation.
+- **`--vault-path`** names a file for one command, and that file is then read even with a vault agent running. Naming a vault other than the agent's never prompts for the agent's passphrase.
+- **A locked vault** is unlocked in passing: the CLI prompts for the passphrase when the command needs the vault open.
 
 Use `-c` / `--config` and `-s` / `--socket` as documented in global flags when needed.
 
@@ -117,9 +119,11 @@ Lists all identities: SHA256 fingerprint, whether each key is loaded in the **cu
 
 | Flag | Meaning |
 |------|---------|
-| `--vault-path` | Vault file (default: config) |
+| `--vault-path` | Read this vault file instead of asking the running agent (default: the agent's vault, else `[vault].vault_path`) |
 
-Works with the vault file alone; uses the agent only for the **LOADED** column when the socket is available and the config’s vault path matches.
+Asks the running vault agent what its vault holds, which includes the identities it is not serving this session. With no vault agent it works from the vault file alone, and **LOADED** reads `n/a`.
+
+A locked vault tells whoever connects to its socket nothing, the same as it lists no keys to `ssh-add -l`. So for a locked vault, `vault list` reads the vault file if there is one here, and prompts for the passphrase only if there is something to report as loaded; with no file to read, the passphrase is the only way to an answer.
 
 ### `vault add`
 
@@ -133,7 +137,7 @@ sshush vault add <key_paths...> [--no-autoload]
 |------|---------|
 | `--no-autoload` | Store without autoload (visible until daemon restart only, unless you `vault load` later) |
 
-Requires `[agent].type = "vault"`, initialized vault, and `sshush start`. Default is autoload **on** (keys return after restart). In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
+Requires a running vault agent. Default is autoload **on** (keys return after restart). The key file is read where you run the command and its contents sent to the agent, so a key in WSL can go into a vault on Windows; the path the vault records for it is the one the command saw. In vault mode, `sshush add` uses the same agent extension as `vault add`; `vault add` refuses a non-vault agent so you get a clear error if vault mode is off.
 
 ### `vault remove`
 
@@ -147,7 +151,7 @@ Removes identities from the vault **by talking to the agent** (so the store is u
 sshush vault remove <fingerprint|comment|key_path...> [--vault-path ...]
 ```
 
-Requires a running, **unlocked** vault agent. Can remove keys that are not currently listed (e.g. after restart with autoload off).
+Requires a running vault agent. Can remove keys that are not currently listed (e.g. after restart with autoload off). A key file path is read where you run the command, to find the fingerprint to remove.
 
 This is a **permanent** deletion from the encrypted store — distinct from the session-unload operation (see below), which only hides an identity from the current agent session.
 

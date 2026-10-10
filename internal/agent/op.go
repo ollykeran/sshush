@@ -32,15 +32,16 @@ const opVersion byte = 1
 
 // Operation codes for [Session.Op]. Values are wire format: never renumber.
 const (
-	OpVaultLocked    byte = 1 // is this a vault, and is it locked
-	OpUnlock         byte = 2 // unlock with a passphrase
-	OpLock           byte = 3 // lock
-	OpUnlockRecovery byte = 4 // unlock with a BIP-39 recovery phrase
-	OpSessionLoad    byte = 5 // make a non-autoload identity visible this session
-	OpSessionUnload  byte = 6 // hide an identity for this session
-	OpSetAutoload    byte = 7 // persist an identity's autoload flag
-	OpSetComment     byte = 8 // persist an identity's comment
-	OpAddKey         byte = 9 // add a private key, with autoload
+	OpVaultLocked    byte = 1  // is this a vault, and is it locked
+	OpUnlock         byte = 2  // unlock with a passphrase
+	OpLock           byte = 3  // lock
+	OpUnlockRecovery byte = 4  // unlock with a BIP-39 recovery phrase
+	OpSessionLoad    byte = 5  // make a non-autoload identity visible this session
+	OpSessionUnload  byte = 6  // hide an identity for this session
+	OpSetAutoload    byte = 7  // persist an identity's autoload flag
+	OpSetComment     byte = 8  // persist an identity's comment
+	OpAddKey         byte = 9  // add a private key, with autoload
+	OpListIdentities byte = 10 // list every identity in the vault, loaded or not
 )
 
 // Reasons an operation failed. Callers compare with errors.Is rather than

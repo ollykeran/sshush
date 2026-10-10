@@ -112,6 +112,9 @@ func (s *VaultStore) Save() error {
 	return nil
 }
 
+// Path returns the vault file this store reads and writes.
+func (s *VaultStore) Path() string { return s.path }
+
 // GetMetadata returns a copy of the vault metadata, or nil if not initialized.
 func (s *VaultStore) GetMetadata() *VaultMetadata {
 	s.mu.RLock()

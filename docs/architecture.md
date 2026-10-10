@@ -70,6 +70,25 @@ A command that needs a vault and finds `SpeaksOps` false says so, because the us
 
 `Session.Lock` and `Session.Unlock` still fall back to the plain agent protocol when `sshush-op` is unsupported. That is not a legacy path — a real `ssh-agent` or 1Password implements lock and unlock natively, and `[agent].type = "external"` points at exactly those.
 
+### The agent answers for its own vault
+
+What a vault holds is the agent's to say. The `list-identities` op returns every identity in the vault the daemon serves — fingerprint, public key, comment, autoload flag and the path it was added from — including the ones it is not listing to `ssh` this session, and `internal/vaultops` resolves a fingerprint, comment or key file against that. So `sshush vault …` needs no access to the vault file, which is what lets a client in one environment drive a daemon in another: `[agent].type = "external"` in WSL, a daemon on Windows, a relay between them.
+
+`vaultops` picks its source in one place (`conn.roster`):
+
+| | the vault's contents come from |
+|---|---|
+| a vault agent answers | the agent |
+| it refuses because the vault is locked, or because it predates the op (`ErrOpUnknown`) | `[vault].vault_path`, if set; otherwise the verb reports the lock, or that the daemon is too old |
+| no agent, or a keys agent | `[vault].vault_path` |
+| `--vault-path` was given | that file, whatever is running |
+
+A locked vault refuses on purpose. `List` answers a locked agent with nothing, and `list-identities` is not a way around that for whoever can reach the socket: a relay, or a host the agent was forwarded to. The client either reads the file it already has access to or asks for the passphrase.
+
+For the same reason the transparent unlock and the TUI's Vault tab follow `Backend()`, not `[agent].type`: a config that says `external` cannot know what it is pointed at, and the agent can. Only for a vault named with `--vault-path` does config decide — the prompt is skipped unless config says the agent serves that very file.
+
+The listing is SSH wire data in which each identity is its own length-prefixed record, and both the listing and a record may carry trailing fields this version does not read. Adding a field is therefore not a format break; see `internal/vault/list.go`.
+
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 
 Two things deliberately do not use a Session. `internal/sshushd`'s liveness probes (`CheckAlreadyRunning`, `WaitForSocket`) dial and close without speaking the protocol, so a Session would spawn a client and a goroutine to learn nothing. And the SSH server's `server.SocketAuth` dials the agent socket directly for each authorization, because all it needs is `List` over the plain agent protocol.

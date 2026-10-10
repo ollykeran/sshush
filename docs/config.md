@@ -172,6 +172,8 @@ type = "external"
 
 With `type = "external"`, `sshush list`/`add`/`remove`/`lock`/`unlock` work against whatever agent is listening at `socket_path` (or `SSH_AUTH_SOCK`), but `sshush start`, `stop`, and `reload` refuse to start, stop, or restart anything there — start your own agent yourself.
 
+The external agent can be another `sshushd`: one in a different environment, reached through a relay. What it is comes from the agent, not from this file, so if it is a vault then `sshush vault …`, the transparent unlock and the TUI's Vault tab all work against it with no `[vault].vault_path` here. [Windows](windows.md#using-it-from-wsl) sets that up between WSL and a daemon on Windows.
+
 CLI overrides: `-s` / `--socket` overrides `[agent].socket_path`; `--shell` (on `sshush` and `sshush start`) overrides `[agent].shell`.
 
 ## `[vault]`

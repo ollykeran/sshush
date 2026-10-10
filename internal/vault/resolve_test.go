@@ -31,7 +31,11 @@ func TestResolveIdentity_ambiguousComment(t *testing.T) {
 	if err := va.Add(sshagent.AddedKey{PrivateKey: p2, Comment: "dup"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = ResolveIdentity(store, "dup")
+	ids, err := ListIdentities(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ResolveIdentity(ids, "dup")
 	if !errors.Is(err, ErrAmbiguousComment) {
 		t.Fatalf("want ErrAmbiguousComment, got %v", err)
 	}
