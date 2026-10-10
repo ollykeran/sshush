@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -26,10 +27,15 @@ type vaultIdentityRow struct {
 
 // vaultIdentitiesMsg reports the result of listing vault identities. When err is nil
 // and initialized is false, the vault file at vaultPath does not exist yet (not an
-// error state: this is the normal pre-init condition).
+// error state: this is the normal pre-init condition). vaultPath is where the listing
+// came from: the running agent's own vault file when the agent answered, which need
+// not be the configured one or even on this machine. locked means the listing was
+// refused because the vault is locked and there is no vault file here to read instead.
 type vaultIdentitiesMsg struct {
 	rows        []vaultIdentityRow
 	initialized bool
+	vaultPath   string
+	locked      bool
 	err         error
 }
 
@@ -68,12 +74,14 @@ const (
 )
 
 // VaultScreen is the vault tab: identity table, init/add/remove/load/autoload/unlock/lock actions.
-// Registered only when the configured agent backend mode is vault (see NewTUI).
+// Registered when the configured agent backend mode is vault, or once the running agent
+// reports that it is one (see NewTUI and Skeleton.ensureVaultPage).
 type VaultScreen struct {
 	sk         *Skeleton
 	configPath string
 	socketPath string
-	vaultPath  string
+	vaultPath  string // configured vault file; "" when only the agent knows where its vault is
+	listedPath string // vault file the last listing came from, as whoever answered names it
 
 	table      table.Model
 	buttons    ButtonRow
@@ -229,9 +237,14 @@ func (s *VaultScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.rows = nil
 			s.table.SetRows(nil)
 			s.resizeTable()
+			if msg.locked {
+				// A locked vault is a vault: do not offer to create one.
+				s.vaultInitialized = true
+			}
 			return s, nil
 		}
 		s.vaultInitialized = msg.initialized
+		s.listedPath = msg.vaultPath
 		if !msg.initialized {
 			s.rows = nil
 			s.table.SetRows(nil)
@@ -874,7 +887,7 @@ func (s *VaultScreen) View() tea.View {
 
 	s.syncButtons()
 	buttonsLine := s.buttons.View(st)
-	pathLine := st.DimStyle.Render("vault: " + utils.DisplayPath(s.vaultPath))
+	pathLine := st.DimStyle.Render("vault: " + s.vaultPathLabel())
 
 	content := lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top,
 		title+"\n"+tableBox+"\n\n"+buttonsLine+"\n"+pathLine)
@@ -883,6 +896,19 @@ func (s *VaultScreen) View() tea.View {
 		content = strings.Repeat("\n", padTop) + content
 	}
 	return tea.NewView(content)
+}
+
+// vaultPathLabel names the vault under the table: the file the last listing came
+// from, else the configured one, else nothing more than who holds it.
+func (s *VaultScreen) vaultPathLabel() string {
+	switch {
+	case s.listedPath != "":
+		return utils.DisplayPath(s.listedPath)
+	case s.vaultPath != "":
+		return utils.DisplayPath(s.vaultPath)
+	default:
+		return "held by the agent"
+	}
 }
 
 func (s *VaultScreen) StatusTextRaw() (string, bool) {
@@ -987,7 +1013,7 @@ func vaultTableStyles(rowWidth int, st Styles, highlightCursor bool) table.Style
 
 // vaultEnv is the environment a vault command runs in. vaultPath is empty for
 // the commands that only need the agent, which then resolve a selected row by
-// its fingerprint alone.
+// its fingerprint alone, and for a screen whose vault only the agent can find.
 func vaultEnv(vaultPath, socketPath string) vaultops.Env {
 	return vaultops.Env{VaultPath: vaultPath, SocketPath: socketPath}
 }
@@ -1006,10 +1032,14 @@ func listVaultIdentitiesCmd(vaultPath, socketPath string) tea.Cmd {
 	return func() tea.Msg {
 		res, err := vaultops.List(vaultEnv(vaultPath, socketPath))
 		if err != nil {
+			if vaultops.CodeOf(err) == vaultops.CodeVaultLocked {
+				// The CLI's remedy names commands; here the unlock is a key away.
+				return vaultIdentitiesMsg{locked: true, err: errors.New("vault locked - press U to unlock")}
+			}
 			return vaultIdentitiesMsg{err: vaultStatusErr(err)}
 		}
 		if !res.Initialized {
-			return vaultIdentitiesMsg{initialized: false}
+			return vaultIdentitiesMsg{initialized: false, vaultPath: res.VaultPath}
 		}
 		rows := make([]vaultIdentityRow, len(res.Identities))
 		for i, id := range res.Identities {
@@ -1026,7 +1056,7 @@ func listVaultIdentitiesCmd(vaultPath, socketPath string) tea.Cmd {
 				keyFile:     keyFile,
 			}
 		}
-		return vaultIdentitiesMsg{rows: rows, initialized: true}
+		return vaultIdentitiesMsg{rows: rows, initialized: true, vaultPath: res.VaultPath}
 	}
 }
 

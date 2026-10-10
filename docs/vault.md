@@ -192,7 +192,7 @@ No subcommand-specific flags beyond global `-c` / `-s`.
 
 ## TUI
 
-`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set — it runs every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. It is not a second implementation: both front ends call `internal/vaultops`, so a fix to a verb reaches the CLI and the tab at once. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
+`sshush tui` registers a **Vault** tab (`internal/tui/vault.go`) whenever `[agent].type = "vault"` and `[vault].vault_path` is set, and otherwise as soon as the running agent reports that it is a vault (`[agent].type = "external"` pointed at an `sshushd`) — it runs every `sshush vault` subcommand above (init, list with LOADED/autoload columns, add, remove, session load, autoload toggle, unlock by passphrase or recovery phrase, lock) without leaving the app. It is not a second implementation: both front ends call `internal/vaultops`, so a fix to a verb reaches the CLI and the tab at once. See [TUI Architecture](tui.md#vaultscreen) for the screen's layout, keybindings, and message flow.
 
 Three surface differences are deliberate, and each is a property of the front end rather than of the operation:
 
