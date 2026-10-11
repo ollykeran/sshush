@@ -72,15 +72,40 @@ func commandMayStartDaemon(cmd *cobra.Command) bool {
 	return cmd.Root() == cmd
 }
 
-func printAgentModeIndicator(cmd *cobra.Command) {
-	cfg := configFrom(cmd)
-	if cfg == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) {
-		return
-	}
-	configMode := cfg.AgentBackendMode()
+// commandPrintsAgentMode reports whether cmd prints the "Agent:" line itself
+// instead of having it printed before it runs. Starting an agent that is
+// relayed to Windows has to ask that agent what it is anyway, to learn whether
+// it is there at all, and prints the line from that answer. Asking here as well
+// would be a second connection for the same fact, and through the relay every
+// connection costs a Windows process.
+func commandPrintsAgentMode(cfg *config.Config, cmd *cobra.Command) bool {
+	return cfg != nil && cfg.RelaysToWindows() && commandMayStartDaemon(cmd)
+}
+
+// configModeLabel is what the config calls the agent, for the "Agent:" line.
+func configModeLabel(cfg *config.Config) string {
 	if !cfg.OwnsAgentKeys() && cfg.AgentType != "" {
 		// Config does not say what such an agent is, only where it is.
-		configMode = cfg.AgentType
+		return cfg.AgentType
+	}
+	return cfg.AgentBackendMode()
+}
+
+// printAgentModeLine prints the "Agent:" line to stderr when that is a
+// terminal. liveMode is what the running agent said it is, if answered;
+// skipUnreachableNote leaves out "(agent not reachable)" for an agent that has
+// simply not been started yet.
+func printAgentModeLine(cfg *config.Config, liveMode string, answered, skipUnreachableNote bool) {
+	if !isTTYStderr() {
+		return
+	}
+	fmt.Fprintln(os.Stderr, style.AgentModeIndicatorLine(configModeLabel(cfg), liveMode, answered, skipUnreachableNote))
+}
+
+func printAgentModeIndicator(cmd *cobra.Command) {
+	cfg := configFrom(cmd)
+	if cfg == nil || !isTTYStderr() || suppressAgentModeIndicator(cmd) || commandPrintsAgentMode(cfg, cmd) {
+		return
 	}
 	sock, sockErr := getSocketPath(cfg)
 	liveMode, liveOK := "", false
@@ -95,8 +120,7 @@ func printAgentModeIndicator(cmd *cobra.Command) {
 			_ = session.Close()
 		}
 	}
-	line := style.AgentModeIndicatorLine(configMode, liveMode, liveOK, skipProbe && sockErr == nil && sock != "")
-	fmt.Fprintln(os.Stderr, line)
+	printAgentModeLine(cfg, liveMode, liveOK, skipProbe && sockErr == nil && sock != "")
 }
 
 // argsNoneOrHelp rejects positional args like cobra.NoArgs, but treats

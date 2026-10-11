@@ -174,7 +174,7 @@ sequenceDiagram
   S->>W: Unlock(passphrase), by the same route
 ```
 
-With the relay or the agent already running, the matching steps are skipped: an agent that answers the first `Backend()` means `sshush.exe start` is never run. The passphrase prompt comes only when this run started one of the halves and the agent is a locked vault, so a new shell that finds everything running is not asked. The daemon's readiness handshake ([below](#daemon-startup)) covers the relay's own socket and nothing more: a relay is ready before anything is behind it, which is why `start` asks for a round trip rather than trusting the connection.
+With the relay or the agent already running, the matching steps are skipped: an agent that answers the first `Backend()` means `sshush.exe start` is never run. That answer is also all `start` needs to know about the agent, so the session it arrived on is kept for the unlock and the key list, and the `Agent:` line the CLI prints ahead of other commands is printed by `start` from it rather than fetched separately (`commandPrintsAgentMode`). A new shell that finds everything running therefore costs one connection, which is one relay process. The passphrase prompt comes only when this run started one of the halves and the agent is a locked vault, so a new shell that finds everything running is not asked. The daemon's readiness handshake ([below](#daemon-startup)) covers the relay's own socket and nothing more: a relay is ready before anything is behind it, which is why `start` asks for a round trip rather than trusting the connection.
 
 The relay itself never starts the Windows daemon, so `sshush stop` on Windows stays stopped however many clients in WSL go on polling.
 

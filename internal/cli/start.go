@@ -165,20 +165,31 @@ func startDaemonProcess(absConfigPath, socketPath string) error {
 // sshush runs on the Windows side of this WSL distro, and the daemon here only
 // relays to it. Both halves are started if they are not running, so this one
 // command is all a WSL shell needs, whatever state Windows is in.
+//
+// Every connection through the relay costs a Windows process, and this runs
+// in every new shell, so everything it learns from the agent comes over one
+// connection: the round trip that shows an agent is there also says what kind
+// it is, and the same session then carries the unlock and the key list. The
+// "Agent:" line other commands have printed for them before they run comes
+// from that answer too (see commandPrintsAgentMode).
 func runStartRelay(cfg *config.Config, absConfigPath, authSockLine string) error {
 	absSocket, _ := transport.Abs(cfg.SocketPath)
 
 	startedRelay := false
 	if !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		if err := startDaemonProcess(absConfigPath, cfg.SocketPath); err != nil {
+			printAgentModeLine(cfg, "", false, true)
 			return err
 		}
 		startedRelay = true
 	}
-	startedWindows, err := ensureWindowsAgent(cfg)
+	session, backend, startedWindows, err := connectWindowsAgent(cfg)
 	if err != nil {
+		printAgentModeLine(cfg, "", false, false)
 		return err
 	}
+	defer session.Close()
+	printAgentModeLine(cfg, backend.Mode, true, false)
 
 	printAuthSockLine(authSockLine)
 	out := style.NewOutput()
@@ -189,44 +200,40 @@ func runStartRelay(cfg *config.Config, absConfigPath, authSockLine string) error
 	out.Success("* sshushd " + state + utils.DisplayPath(absSocket))
 	out.Info("relaying to the sshush agent on Windows")
 
-	session, err := agent.Open(cfg.SocketPath)
-	if err == nil {
-		defer session.Close()
-		// What is behind the relay is the agent's to say, not this config's. A
-		// locked vault is worth a prompt when this run brought something up, as
-		// it is for a vault started here; a shell that finds everything already
-		// running is left alone, and told the vault is locked.
-		if startedRelay || startedWindows {
-			if backend, berr := session.Backend(); berr == nil && backend.Mode == "vault" && backend.VaultLocked {
-				promptUnlock(session, out)
-			}
-		}
-		out.Spacer()
-		_ = AppendKeysTo(session, out)
+	// What is behind the relay is the agent's to say, not this config's. A
+	// locked vault is worth a prompt when this run brought something up, as it
+	// is for a vault started here; a shell that finds everything already
+	// running is left alone, and told the vault is locked.
+	if (startedRelay || startedWindows) && backend.Mode == "vault" && backend.VaultLocked {
+		promptUnlock(session, out)
 	}
+	out.Spacer()
+	_ = AppendKeysTo(session, out)
 	out.PrintErr()
 	return nil
 }
 
-// ensureWindowsAgent makes sure an agent answers through the relay, starting
-// the daemon on Windows if none does, and reports whether it had to.
-func ensureWindowsAgent(cfg *config.Config) (started bool, err error) {
-	if agentAnswers(cfg.SocketPath) {
-		return false, nil
+// connectWindowsAgent returns a session on which the agent behind the relay
+// has answered, with what it said it is, starting the daemon on Windows if
+// nothing answers. started reports whether it had to. The caller closes the
+// session.
+func connectWindowsAgent(cfg *config.Config) (session *agent.Session, backend agent.Backend, started bool, err error) {
+	if session, backend, ok := probeAgent(cfg.SocketPath); ok {
+		return session, backend, false, nil
 	}
 	windows, err := bridge.Find(cfg.WindowsSSHush)
 	if err != nil {
-		return false, style.NewOutput().Error(err.Error()).AsError()
+		return nil, agent.Backend{}, false, style.NewOutput().Error(err.Error()).AsError()
 	}
 	ctx := context.Background()
 	if err := windows.StartDaemon(ctx); err != nil {
-		return false, style.NewOutput().
+		return nil, agent.Backend{}, false, style.NewOutput().
 			Error("could not start the sshush agent on Windows").
 			Info(err.Error()).
 			AsError()
 	}
-	if agentAnswers(cfg.SocketPath) {
-		return true, nil
+	if session, backend, ok := probeAgent(cfg.SocketPath); ok {
+		return session, backend, true, nil
 	}
 	// It started, or said it did, and still nothing answers. Ask the relay
 	// itself: an sshush.exe from before the relay command says so here.
@@ -235,20 +242,24 @@ func ensureWindowsAgent(cfg *config.Config) (started bool, err error) {
 		out.Info("'" + utils.DisplayPath(windows.Path) + " relay' says: " + said)
 	}
 	out.Info("Both sides need the same sshush version.")
-	return true, out.AsError()
+	return nil, agent.Backend{}, true, out.AsError()
 }
 
-// agentAnswers reports whether an agent completes a round trip on socketPath.
-// Connecting is not enough to tell: a relay accepts the connection whether or
-// not anything is behind it.
-func agentAnswers(socketPath string) bool {
+// probeAgent opens a session on socketPath and asks the agent what it is. It
+// reports ok, and leaves the session open for the caller, only when the agent
+// answered. Connecting is not enough to tell: a relay accepts the connection
+// whether or not anything is behind it.
+func probeAgent(socketPath string) (session *agent.Session, backend agent.Backend, ok bool) {
 	session, err := agent.Open(socketPath)
 	if err != nil {
-		return false
+		return nil, agent.Backend{}, false
 	}
-	defer session.Close()
-	_, err = session.Backend()
-	return err == nil
+	backend, err = session.Backend()
+	if err != nil {
+		_ = session.Close()
+		return nil, agent.Backend{}, false
+	}
+	return session, backend, true
 }
 
 // promptUnlock asks for the vault's passphrase and unlocks the agent behind
