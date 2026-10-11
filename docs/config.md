@@ -93,7 +93,7 @@ To run the agent from `key_paths` but still point `sshush vault list` (and other
 
 ### Migration from the `[agent].vault` boolean (breaking)
 
-Older releases used `[agent].vault = true/false` plus (later) a separate `[agent].external = true/false`. Both were replaced by a single `[agent].type` string so the three backend modes are mutually exclusive by construction instead of by validation.
+Older releases used `[agent].vault = true/false` plus (later) a separate `[agent].external = true/false`. Both were replaced by a single `[agent].type` string so the backend modes are mutually exclusive by construction instead of by validation. (`"windows"` was added to it later; it never had a boolean.)
 
 | Old | New |
 |-----|-----|
@@ -120,10 +120,21 @@ flowchart TD
     dResolve[ResolveDaemonConfigPath]
     dLoad[LoadConfig]
     dCheck[CheckAlreadyRunning]
-    dRun[RunDaemon]
-    dStart --> dResolve --> dLoad --> dCheck --> dRun
+    dRun[RunDaemonOnly]
+    dType{"[agent].type"}
+    dKeys["keys: a keyring loaded from key_paths"]
+    dVault["vault: the vault at vault_path, locked"]
+    dWindows["windows: no keys, relay each connection to sshush.exe"]
+    dExternal["external: refuse, the agent is someone else's"]
+    dStart --> dResolve --> dLoad --> dCheck --> dRun --> dType
+    dType --> dKeys
+    dType --> dVault
+    dType --> dWindows
+    dType --> dExternal
   end
 ```
+
+The CLI and the daemon each read the file for themselves: `sshush start` passes the daemon the config's path, not its contents. What the daemon then serves on `socket_path` is decided by `[agent].type` alone. For where a connection goes after that, and how `"windows"` reaches the other side, see [Architecture](architecture.md#how-the-pieces-connect).
 
 See also: [Setup](setup.md) | [TUI](tui.md)
 
@@ -466,3 +477,8 @@ Set theme from the CLI: `sshush theme show`, `sshush theme list`, `sshush theme 
 - Agent state is reset to match the config file
 
 If `[agent].socket_path` changes in config, `reload` restarts the daemon with the new socket.
+
+All of that is for an agent this config describes, `type = "keys"` or `"vault"`. Where the agent lives somewhere else, `key_paths` says nothing about what it should hold, and reconciling against it would remove every key the agent has, which from a vault is deleting them. So there reload leaves the keys alone:
+
+- **`type = "windows"`**: restarts the relay in the distro, so it picks up `socket_path` and `windows_sshush`. The agent on Windows is reloaded from Windows.
+- **`type = "external"`**: refuses, whether or not the agent answers.

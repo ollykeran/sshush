@@ -131,6 +131,8 @@ From then on the distro and PowerShell are two views of the same agent:
 
 A Unix socket does not reach out of WSL and a named pipe does not reach in, but a Linux process can start a Windows one and talk to it over its input and output. For each connection to `socket_path`, the daemon in the distro runs `sshush.exe relay`, which connects that input and output to the agent's pipe as you, so the pipe's access list is satisfied without loosening it. That costs one short-lived Windows process per connection, about 70 ms on the machine this was measured on.
 
+[Architecture](architecture.md#one-agent-for-windows-and-wsl) has this as a diagram, along with what `sshush start` does on each side.
+
 The daemon finds `sshush.exe` on `PATH`, which under WSL includes the Windows `PATH`. If you have turned that off, or sshush is not on the Windows `PATH`, say where it is:
 
 ```toml

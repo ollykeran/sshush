@@ -4,7 +4,7 @@
 [![build](https://github.com/ollykeran/sshush/actions/workflows/build.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/build.yml)
 [![lint](https://github.com/ollykeran/sshush/actions/workflows/lint.yml/badge.svg)](https://github.com/ollykeran/sshush/actions/workflows/lint.yml)
 
-OpenSSH compatible agent over a Unix socket (`SSH_AUTH_SOCK`, same agent protocol as `ssh-agent`) with a TUI, themes, and a config file. I wanted the agent to stay out of the way for normal `ssh` use but still be easy to inspect and reload from dotfiles, without piling on shell wrapper scripts. Optional passphrase vault stores derived keys in one file.
+OpenSSH compatible agent over a Unix socket, or a named pipe on Windows (`SSH_AUTH_SOCK`, same agent protocol as `ssh-agent`), with a TUI, themes, and a config file. I wanted the agent to stay out of the way for normal `ssh` use but still be easy to inspect and reload from dotfiles, without piling on shell wrapper scripts. Optional passphrase vault stores derived keys in one file.
 
 ## Compared to `ssh-agent`
 
@@ -38,6 +38,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
+- **Windows and WSL**: runs natively on Windows for `ssh.exe` and PowerShell, and a WSL distro can use that same agent, so one vault and one unlock cover both. See [docs/windows.md](docs/windows.md).
 - **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
 - **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 
@@ -100,7 +101,7 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 - [Config](docs/config.md) – options, reload, flat TOML migration
 - [Vault](docs/vault.md) – optional vault
 - [TUI](docs/tui.md) – TUI structure
-- [Architecture](docs/architecture.md) – packages
+- [Architecture](docs/architecture.md) – packages, how clients reach the agent, the relay between WSL and Windows
 - [Godoc guide](docs/godoc-guide.md) – exported API comments
 - [pkg.go.dev](https://pkg.go.dev/github.com/ollykeran/sshush) – API
 

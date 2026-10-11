@@ -7,7 +7,7 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **cmd/sshush** – CLI entry point
 - **cmd/sshushd** – Daemon entry point (runs the agent)
 - **internal/agent** – SSH agent protocol: serving it over a Unix socket (a named pipe on Windows), and `Session`, the single client entry point for reaching a running agent
-- **internal/cli** – Cobra commands (start, stop, reload, list, add, remove, lock, unlock, selftest, create, edit, export, find, validate, generate, vault, server, theme, tui, completion, version)
+- **internal/cli** – Cobra commands (start, stop, reload, list, add, remove, lock, unlock, selftest, create, edit, export, find, validate, generate, vault, server, relay, theme, tui, completion, version)
 - **internal/config** – Config load, default creation, shell rc setup
 - **internal/clipboard** – Copying text to the system clipboard
 - **internal/editcomment** – Editing a key comment in `$EDITOR` through a temp file
@@ -20,17 +20,47 @@ High-level package layout and data flow. For detailed TUI architecture, see [TUI
 - **internal/runtime** – Config/socket path resolution
 - **internal/server** – The TCP SSH server: public-key auth against a file or the agent, optional password auth against the vault's passphrase, and the shell or remote command each session runs, on a pty or over pipes, all logged to a file
 - **internal/secfile** – Files and directories only the current user can read: a file mode on Unix, an access list on Windows
-- **internal/sshushd** – Daemon start/stop/reload control
+- **internal/sshushd** – Daemon start/stop/reload control, and what the daemon serves for each `[agent].type`
 - **internal/transport** – Dialling and listening on the agent endpoint: a Unix socket, or a named pipe on Windows (see [Windows](windows.md))
 - **internal/style** – Styled terminal output
 - **internal/theme** – Colour theme presets, custom hex validation and merging with the default
-- **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens, and Vault when `[agent].type = "vault"`)
+- **internal/tui** – Bubble Tea TUI (Agent, Create, Edit, Export screens, and Vault when the agent is a vault)
 - **internal/utils** – Path expansion, helpers
 - **internal/vault** – The encrypted vault: on-disk store, `VaultAgent`, and the `sshush-op` vocabulary
 - **internal/vaultops** – The vault operations the CLI and TUI both offer, implemented once
 - **internal/version** – Version string
 
-CLI loads config and starts the daemon; daemon runs the agent on a Unix socket, or on Windows a named pipe. OpenSSH (`ssh`, `ssh-add`) connect via `SSH_AUTH_SOCK`.
+## How the pieces connect
+
+```mermaid
+flowchart LR
+  subgraph clients [Clients]
+    ssh["ssh, git, ssh-add"]
+    cli["sshush CLI and TUI"]
+    srv["sshush server<br/>key check per sign-in"]
+  end
+  sock(["SSH_AUTH_SOCK: a Unix socket,<br/>or a named pipe on Windows"])
+  subgraph daemon [sshushd]
+    listen["agent.ListenAndHandle"]
+    keyring["keys: KDFLockedKeyring"]
+    vault["vault: VaultAgent"]
+    relay["windows: bridge.Windows.Serve"]
+  end
+  file[("vault.json")]
+  win["the agent on Windows"]
+  ssh -- "agent protocol" --> sock
+  cli -- "agent.Session" --> sock
+  srv -- "agent protocol" --> sock
+  sock --> listen
+  listen --> keyring
+  listen --> vault
+  listen --> relay
+  vault --> file
+  relay -. "sshush.exe relay" .-> win
+  cli -. "start, stop, reload" .-> daemon
+```
+
+The CLI loads config and starts the daemon. The daemon listens on one endpoint, a Unix socket or on Windows a named pipe (`internal/transport`), and `[agent].type` decides what answers each connection to it: a keyring loaded from `key_paths`, the vault, or, inside WSL, a relay to the agent on Windows ([below](#one-agent-for-windows-and-wsl)). Everything that uses keys reaches them the same way, through `SSH_AUTH_SOCK`: OpenSSH (`ssh`, `ssh-add`, `git`) with the plain agent protocol, sshush's own CLI and TUI through `agent.Session`, and the SSH server when it checks a key. `[agent].type = "external"` is the one case with no daemon of sshush's: the socket is somebody else's agent, and sshush is only a client of it.
 
 ## Talking to a running agent
 
@@ -94,12 +124,59 @@ The listing is SSH wire data in which each identity is its own length-prefixed r
 
 `[agent].type = "windows"` is for an sshush inside WSL. Neither a named pipe nor a Unix socket crosses the WSL boundary, but a process does: a Linux process can start a Windows one and talk to it over stdin and stdout. So `sshushd` in the distro listens on its Unix socket as usual and, instead of answering from a keyring, hands each connection to a freshly started `sshush.exe relay` (`internal/bridge`), which copies between its stdio and the Windows agent's pipe. The agent protocol passes through untouched; the Linux daemon holds no key and no unlock.
 
+```mermaid
+flowchart LR
+  subgraph wsl ["WSL distro"]
+    lc["ssh, git, sshush"]
+    us(["Unix socket<br/>[agent].socket_path"])
+    ld["sshushd, type = windows<br/>holds no keys"]
+    lc --> us --> ld
+  end
+  subgraph windows ["Windows"]
+    rl["sshush.exe relay<br/>one per connection"]
+    np(["named pipe, by default<br/>//./pipe/sshush-agent"])
+    wd["sshushd.exe<br/>keyring or vault"]
+    wc["ssh.exe, sshush.exe"]
+    rl --> np --> wd
+    wc --> np
+  end
+  ld == "starts it, then talks over<br/>its stdin and stdout" ==> rl
+```
+
+Each side has one job. In the distro, `bridge.Windows.Serve` starts the relay for a connection and copies bytes until either end closes; `bridge.Find` locates `sshush.exe`, on `PATH` or at `[agent].windows_sshush`. On Windows, `sshush relay` dials the agent's pipe and runs `bridge.Relay` over its own stdin and stdout; it ends as soon as either direction does, because input ending means the client has gone. `relay` skips first-run setup: it is run once per connection, by a program.
+
+Clients on Windows are not part of this. `ssh.exe` and `sshush.exe` connect to the pipe directly, as they would with no WSL at all.
+
 Everything above then applies unchanged, because the client is still talking to an sshush agent: `Backend()` says whether it is a vault, `list-identities` says what it holds. Two things follow from the agent living elsewhere, and the same two hold for `type = "external"`:
 
 - **Config does not own the agent's keys.** `Config.OwnsAgentKeys()` is false, and `reload` never reconciles them: `key_paths` here says nothing about what that agent should hold, so reconciling would remove every key it lists — and from a vault, removing is deleting. For `"windows"`, reload restarts the relay; for `"external"` it refuses.
 - **A relay accepts the connection whether or not anything is behind it.** A connection that goes quiet is therefore the agent being down, not a foreign agent, and is reported as such (`windowsAgentDown` in the CLI, `CodeNoAgent` from `vaultops`).
 
-`sshush start` in the distro starts both halves: the relay, then, if no agent answers through it, `sshush.exe start` on the Windows side. The relay itself never starts the Windows daemon, so `sshush stop` on Windows stays stopped however many clients in WSL go on polling.
+`sshush start` in the distro starts both halves: the relay, then, if no agent answers through it, `sshush.exe start` on the Windows side. From cold on both sides:
+
+```mermaid
+sequenceDiagram
+  participant S as sshush start (WSL)
+  participant D as sshushd (WSL, relay)
+  participant X as sshush.exe (Windows)
+  participant W as sshushd.exe (Windows, agent)
+  S->>D: start it, if nothing listens on socket_path
+  S->>D: is an agent answering? Backend()
+  D->>X: run sshush.exe relay
+  X--xD: no agent on the pipe, exits
+  D--xS: connection closes
+  S->>X: run sshush.exe start
+  X->>W: start the daemon (a vault starts locked)
+  S->>D: Backend() again
+  D->>X: run sshush.exe relay
+  X->>W: connect to the pipe
+  W-->>S: vault, locked
+  S->>W: Unlock(passphrase), by the same route
+```
+
+With the relay or the agent already running, the matching steps are skipped: an agent that answers the first `Backend()` means `sshush.exe start` is never run. The passphrase prompt comes only when this run started one of the halves and the agent is a locked vault, so a new shell that finds everything running is not asked. The daemon's readiness handshake ([below](#daemon-startup)) covers the relay's own socket and nothing more: a relay is ready before anything is behind it, which is why `start` asks for a round trip rather than trusting the connection.
+
+The relay itself never starts the Windows daemon, so `sshush stop` on Windows stays stopped however many clients in WSL go on polling.
 
 Agent state — a vault's master key and session-load sets, a keyring's lock state — lives in the agent process and is shared by every connection it serves (`internal/agent/server.go` hands the same keyring to every `ServeAgent`). How many Sessions a caller opens therefore has no bearing on what the agent reports.
 
@@ -115,7 +192,7 @@ That readiness check is a synchronous handshake, not a poll loop:
 
 1. The parent opens a pipe (`internal/readypipe.New`) and passes the write end to the child as an inherited file descriptor (`exec.Cmd.ExtraFiles`), telling it which fd number to use via the `SSHUSH_READY_FD` environment variable.
 2. The child (`cmd/sshushd/main.go`) picks the pipe up with `readypipe.FromEnv()`. Every failure path (config load, an already-running check, vault/key errors, a listen failure) calls `ready.Fail(err)` with the real error text before exiting.
-3. On success, the child signals readiness with a bare close of the pipe, fired at the exact point the listener comes up: inside `agent.ListenAndServe` (via the `WithReady` option) for the agent socket, and inside `server.Server.ListenAndServe` (via the `Ready` field) for the TCP server.
+3. On success, the child signals readiness with a bare close of the pipe, fired at the exact point the listener comes up: inside `agent.ListenAndHandle` (via the `WithReady` option) for the agent socket, whatever answers its connections, and inside `server.Server.ListenAndServe` (via the `Ready` field) for the TCP server.
 4. The parent blocks on `Parent.Wait`, reading until EOF. No data read means success; data read is the child's real error text, returned verbatim; a 5-second deadline is the fallback for a child that never signals either way. It's a dead man's switch, not the primary mechanism.
 
 Because the child's write end is the only thing keeping the pipe open, an unclean child death (crash, `SIGKILL`) closes it via the kernel automatically, so the parent still unblocks with an EOF-based failure without either side needing extra bookkeeping.

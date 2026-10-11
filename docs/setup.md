@@ -67,12 +67,18 @@ end
 
 This prints `set -gx SSH_AUTH_SOCK '...';` instead of the POSIX `export` line. With fish as your login shell, sshush auto-setup writes exactly this to `~/.config/fish/conf.d/sshush.fish`, so you normally do not need to add it yourself. Delete the contents of that file (but keep the file) if you would rather manage the line in `config.fish`.
 
-The syntax comes from `[agent].shell` in your config, which first-time setup fills in from the shell that ran sshush, so on a fish-first machine plain `sshush start | source` already prints fish syntax. `--shell` overrides the config for one call and accepts `posix` (`sh`, `bash` and `zsh` are aliases) and `fish`; without either, the output is POSIX.
+The syntax comes from `[agent].shell` in your config, which first-time setup fills in from the shell that ran sshush, so on a fish-first machine plain `sshush start | source` already prints fish syntax. `--shell` overrides the config for one call and accepts `posix` (`sh`, `bash` and `zsh` are aliases), `fish` and `powershell` (see [Windows](windows.md)); without either, the output is POSIX.
 
 If you use more than one shell, pass `--shell` explicitly in each shell's startup line (for example `eval $(sshush --shell posix)` in `~/.bashrc`), because `[agent].shell` applies to every caller.
 
 For completions, add `sshush completion fish | source`.
 
 On login, `sshush` will start the daemon if needed and export `SSH_AUTH_SOCK` so `ssh`, `git`, and other tools can use your keys.
+
+## WSL
+
+Inside WSL you can set sshush up as on any other Linux, with its own daemon and its own keys. Nothing above changes.
+
+Or the distro can use the agent that sshush runs on Windows, so both sides share one vault and one unlock. Set `[agent].type = "windows"` in the distro's config and keep the same `eval $(sshush)` line in your shell's startup file: it then starts a relay in the distro, starts sshush on Windows if it is not running, and asks for the vault's passphrase if it is locked. See [Windows: Using it from WSL](windows.md#using-it-from-wsl).
 
 Starting the daemon waits for it to confirm it's actually ready rather than guessing on a fixed delay, so this works reliably even when the shell startup environment is busy (many rc scripts launching at once). If startup does fail, the error shown is the daemon's actual failure reason (bad config, a vault problem, and so on), not a generic timeout. See [Architecture: Daemon startup](architecture.md#daemon-startup) for how this works.
