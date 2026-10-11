@@ -62,12 +62,28 @@ func (w *Windows) command(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 // Serve relays one agent connection to the Windows agent, and returns when
-// either end is done. It closes conn.
+// either end is done or ctx is. It closes conn.
+//
+// The relay is started only once the client has said something. In the agent
+// protocol the client always speaks first, so nothing is lost by waiting, and
+// a great many connections never speak at all: "is something listening?" is
+// asked by connecting and hanging up, and each of those would otherwise cost a
+// Windows process started for nothing.
 //
 // A daemon that is not running on Windows makes the relay exit at once, so the
 // client sees the connection close, the same as it would for a dead socket.
 func (w *Windows) Serve(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	// A client that neither speaks nor leaves must not outlast the daemon.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	first := make([]byte, 4096)
+	n, _ := conn.Read(first)
+	if n == 0 {
+		return
+	}
+
 	cmd := w.command(ctx, "relay")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -83,7 +99,9 @@ func (w *Windows) Serve(ctx context.Context, conn net.Conn) {
 	go func() {
 		// The client hanging up closes the relay's stdin, which is what tells
 		// the Windows process to exit.
-		_, _ = io.Copy(stdin, conn)
+		if _, err := stdin.Write(first[:n]); err == nil {
+			_, _ = io.Copy(stdin, conn)
+		}
 		_ = stdin.Close()
 	}()
 	_, _ = io.Copy(conn, stdout)

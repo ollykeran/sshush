@@ -143,7 +143,7 @@ flowchart LR
   ld == "starts it, then talks over<br/>its stdin and stdout" ==> rl
 ```
 
-Each side has one job. In the distro, `bridge.Windows.Serve` starts the relay for a connection and copies bytes until either end closes; `bridge.Find` locates `sshush.exe`, on `PATH` or at `[agent].windows_sshush`. On Windows, `sshush relay` dials the agent's pipe and runs `bridge.Relay` over its own stdin and stdout; it ends as soon as either direction does, because input ending means the client has gone. `relay` skips first-run setup: it is run once per connection, by a program.
+Each side has one job. In the distro, `bridge.Windows.Serve` waits for a connection's first bytes, then starts the relay for it and copies until either end closes; `bridge.Find` locates `sshush.exe`, on `PATH` or at `[agent].windows_sshush`. The wait costs nothing, since in the agent protocol the client always speaks first, and it keeps the many connections that never speak from each starting a Windows process: "is something listening?" (`CheckAlreadyRunning`) is asked by connecting and hanging up. On Windows, `sshush relay` dials the agent's pipe and runs `bridge.Relay` over its own stdin and stdout; it ends as soon as either direction does, because input ending means the client has gone. `relay` skips first-run setup: it is run once per connection, by a program.
 
 Clients on Windows are not part of this. `ssh.exe` and `sshush.exe` connect to the pipe directly, as they would with no WSL at all.
 

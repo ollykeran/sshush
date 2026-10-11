@@ -3,6 +3,8 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/transport"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -26,6 +29,7 @@ const (
 	fakeAgentEnv   = "SSHUSH_BRIDGE_FAKE_AGENT"
 	fakeStartedEnv = "SSHUSH_BRIDGE_FAKE_STARTED" // file "start" creates to show it ran
 	fakeStartFails = "SSHUSH_BRIDGE_FAKE_START_FAILS"
+	fakeLogEnv     = "SSHUSH_BRIDGE_FAKE_LOG" // file each run appends its command to, when set
 )
 
 func TestMain(m *testing.M) {
@@ -38,6 +42,15 @@ func TestMain(m *testing.M) {
 func fakeSSHush(args []string) int {
 	if len(args) == 0 {
 		return 2
+	}
+	if logPath := os.Getenv(fakeLogEnv); logPath != "" {
+		// Written first, so a run is on record however briefly it lives.
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return 3
+		}
+		_, _ = fmt.Fprintln(f, args[0])
+		_ = f.Close()
 	}
 	switch args[0] {
 	case "relay":
@@ -75,6 +88,22 @@ func fakeWindows(t *testing.T, agentSocket string) *Windows {
 		t.Fatal(err)
 	}
 	return &Windows{Path: self}
+}
+
+// logFakeRuns makes every run of the fake sshush.exe leave its command in a
+// file, and returns a function that reads back how many "relay" runs there
+// have been.
+func logFakeRuns(t *testing.T) (relays func() int) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "runs.log")
+	t.Setenv(fakeLogEnv, logPath)
+	return func() int {
+		data, err := os.ReadFile(logPath)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return strings.Count(string(data), "relay\n")
+	}
 }
 
 func socketDir(t *testing.T) string {
@@ -362,5 +391,127 @@ func TestTidy_keepsTheWordsOfABoxedColouredError(t *testing.T) {
 	}
 	if got := tidy(" \r\n\n"); got != "" {
 		t.Fatalf("tidy of nothing: want empty, got %q", got)
+	}
+}
+
+// TestServe_aConnectionThatSaysNothingStartsNoRelay: "is something listening?"
+// is asked by connecting and hanging up, and sshush asks it often. Each one must
+// not cost a Windows process. Serve returns only once any process it started
+// has exited, so the count is settled by then.
+func TestServe_aConnectionThatSaysNothingStartsNoRelay(t *testing.T) {
+	dir := socketDir(t)
+	windows := fakeWindows(t, filepath.Join(dir, "no-agent-here.sock"))
+	relays := logFakeRuns(t)
+
+	for i := 0; i < 3; i++ {
+		client, server := net.Pipe()
+		served := make(chan struct{})
+		go func() {
+			windows.Serve(context.Background(), server)
+			close(served)
+		}()
+		_ = client.Close()
+		select {
+		case <-served:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Serve did not return for a connection that said nothing")
+		}
+	}
+	if got := relays(); got != 0 {
+		t.Fatalf("relay processes started for 3 silent connections: want 0, got %d", got)
+	}
+}
+
+// TestServe_oneRelayPerConnectionThatSpeaks is the other half: waiting for the
+// client to speak must not lose what it said, nor start more than one relay.
+func TestServe_oneRelayPerConnectionThatSpeaks(t *testing.T) {
+	dir := socketDir(t)
+	agentSocket := filepath.Join(dir, "agent.sock")
+	keyring := sshagent.NewKeyring()
+	serve(t, agentSocket, func(_ context.Context, conn net.Conn) {
+		_ = sshagent.ServeAgent(keyring, conn)
+	})
+	windows := fakeWindows(t, agentSocket)
+	relays := logFakeRuns(t)
+	bridgeSocket := filepath.Join(dir, "bridge.sock")
+	serve(t, bridgeSocket, windows.Serve)
+
+	session, err := agent.Open(bridgeSocket)
+	if err != nil {
+		t.Fatalf("open the bridge socket: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := session.List(); err != nil {
+			t.Fatalf("list %d: %v", i, err)
+		}
+	}
+	_ = session.Close()
+	if got := relays(); got != 1 {
+		t.Fatalf("relay processes for one connection carrying 3 requests: want 1, got %d", got)
+	}
+}
+
+// TestServe_carriesARequestLargerThanItsFirstRead: the first read is only a
+// look at whether the client has anything to say. A request that does not fit
+// in it has to arrive whole and in order all the same, and a signature is the
+// proof, since it covers every byte.
+func TestServe_carriesARequestLargerThanItsFirstRead(t *testing.T) {
+	dir := socketDir(t)
+	agentSocket := filepath.Join(dir, "agent.sock")
+	keyring := sshagent.NewKeyring()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Add(sshagent.AddedKey{PrivateKey: private, Comment: "signs-a-lot"}); err != nil {
+		t.Fatal(err)
+	}
+	serve(t, agentSocket, func(_ context.Context, conn net.Conn) {
+		_ = sshagent.ServeAgent(keyring, conn)
+	})
+	windows := fakeWindows(t, agentSocket)
+	bridgeSocket := filepath.Join(dir, "bridge.sock")
+	serve(t, bridgeSocket, windows.Serve)
+
+	session, err := agent.Open(bridgeSocket)
+	if err != nil {
+		t.Fatalf("open the bridge socket: %v", err)
+	}
+	defer session.Close()
+	sshPublic, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 200_000)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	signature, err := session.Sign(sshPublic, data)
+	if err != nil {
+		t.Fatalf("sign %d bytes through the bridge: %v", len(data), err)
+	}
+	if err := sshPublic.Verify(data, signature); err != nil {
+		t.Fatalf("the signature does not cover what was sent: %v", err)
+	}
+}
+
+// TestServe_returnsWhenTheDaemonStopsOnASilentClient: a client that connects
+// and then neither speaks nor leaves must not hold the daemon open.
+func TestServe_returnsWhenTheDaemonStopsOnASilentClient(t *testing.T) {
+	windows := fakeWindows(t, filepath.Join(socketDir(t), "no-agent-here.sock"))
+	client, server := net.Pipe()
+	defer client.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() {
+		windows.Serve(ctx, server)
+		close(served)
+	}()
+	cancel()
+	select {
+	case <-served:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return when its context ended")
 	}
 }
