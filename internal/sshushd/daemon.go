@@ -34,7 +34,15 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 	if err != nil {
 		return fmt.Errorf("socket path: %w", err)
 	}
-	defer transport.Remove(absSocket)
+	// The socket file is this process's to delete only once it is the one
+	// listening there: an agent that was refused because another already answers
+	// would otherwise take the live agent's socket away on its way out.
+	listening := false
+	defer func() {
+		if listening {
+			transport.Remove(absSocket)
+		}
+	}()
 	var ext sshagent.ExtendedAgent
 	if vaultPath != "" {
 		resolved := vault.ResolveToFile(vaultPath)
@@ -60,13 +68,19 @@ func RunAgent(ctx context.Context, socketPath string, keyPaths []string, vaultPa
 		ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 	}
 	os.Setenv("SSH_AUTH_SOCK", absSocket)
-	return agent.ListenAndServe(ctx, absSocket, ext)
+	return agent.ListenAndServe(ctx, absSocket, ext, agent.WithReady(func() { listening = true }))
 }
 
 // RunDaemonOnly runs the agent daemon in the current process: detaches from terminal,
-// writes pidfile, loads keys (or uses vault when vaultPath is set), and serves on the socket.
-// Call only from the sshushd binary. Removes pidfile and socket on exit.
-// ready, if non-nil, is signaled once the socket is accepting connections.
+// loads keys (or uses vault when vaultPath is set), and serves on the socket.
+// Call only from the sshushd binary.
+//
+// The pidfile is written once this process is the one listening on the socket,
+// and it and the socket are removed on exit only in that case. A daemon that
+// finds another already answering there returns an error and leaves both alone:
+// they belong to the daemon that is running.
+// ready, if non-nil, is signaled once the socket is accepting connections and
+// the pidfile exists.
 func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
 	if err := agentDaemonSupported(cfg); err != nil {
 		return err
@@ -79,17 +93,42 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	if err := detachProcess(); err != nil {
 		return err
 	}
-	if pidFilePath != "" {
-		if err := os.WriteFile(pidFilePath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644); err != nil {
-			return fmt.Errorf("write pidfile: %w", err)
-		}
-		defer os.Remove(pidFilePath)
-	}
-	defer transport.Remove(socketPath)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, release := withStopRequest(ctx)
 	defer release()
+
+	// Set by listening, below, which runs on this goroutine: no locking needed.
+	var (
+		ownsSocket  bool
+		ownsPidFile bool
+		pidFileErr  error
+	)
+	defer func() {
+		if ownsPidFile {
+			_ = os.Remove(pidFilePath)
+		}
+		if ownsSocket {
+			transport.Remove(socketPath)
+		}
+	}()
+	// listening runs once the socket is this daemon's. Only then is the pidfile
+	// written: before that, another daemon may be the one answering, and its
+	// pidfile is what `sshush stop` reads to find it. The parent is told last,
+	// because `sshush start` may read the pidfile as soon as it hears.
+	listening := func() {
+		ownsSocket = true
+		if pidFilePath != "" {
+			if err := writePidFile(pidFilePath); err != nil {
+				// Stop serving: a daemon nobody can find to stop is worse than none.
+				pidFileErr = err
+				stop()
+				return
+			}
+			ownsPidFile = true
+		}
+		ready.Ready()
+	}
 
 	var handle func(net.Conn)
 	if cfg.RelaysToWindows() {
@@ -126,12 +165,24 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		handle = func(conn net.Conn) { _ = sshagent.ServeAgent(ext, conn) }
 	}
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
-	err = agent.ListenAndHandle(ctx, socketPath, handle, agent.WithReady(ready.Ready))
+	err = agent.ListenAndHandle(ctx, socketPath, handle, agent.WithReady(listening))
+	if pidFileErr != nil {
+		return pidFileErr
+	}
 	if err != nil {
 		if errors.Is(err, agent.ErrAlreadyRunning) {
 			return fmt.Errorf("agent already running at %s", utils.DisplayPath(socketPath))
 		}
 		return err
+	}
+	return nil
+}
+
+// writePidFile records this process's pid at path, for `sshush stop` and
+// `sshush status` to find the daemon by.
+func writePidFile(path string) error {
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644); err != nil {
+		return fmt.Errorf("write pidfile: %w", err)
 	}
 	return nil
 }
@@ -153,10 +204,15 @@ func agentDaemonSupported(cfg config.Config) error {
 	return nil
 }
 
-// RunServerOnly runs the TCP SSH server daemon in the current process: detaches, writes pidfile,
+// RunServerOnly runs the TCP SSH server daemon in the current process: detaches
 // and runs the server (connecting to the agent socket for auth when [server].authorized_keys is not set).
-// Call only from the sshushd binary when invoked with --server. Removes pidfile on exit.
-// ready, if non-nil, is signaled once the listener is accepting connections.
+// Call only from the sshushd binary when invoked with --server.
+//
+// As with RunDaemonOnly, the pidfile is written once this process holds the
+// port and removed on exit only then: a second server that finds the port taken
+// must not replace, then delete, the pidfile of the one that has it.
+// ready, if non-nil, is signaled once the listener is accepting connections and
+// the pidfile exists.
 func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child) error {
 	if err := serverSupported(); err != nil {
 		return err
@@ -218,12 +274,6 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	if err := detachProcess(); err != nil {
 		return err
 	}
-	if pidFilePath != "" {
-		if err := os.WriteFile(pidFilePath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644); err != nil {
-			return fmt.Errorf("write pidfile: %w", err)
-		}
-		defer os.Remove(pidFilePath)
-	}
 
 	starting := []any{"version", version.Line("sshushd"), "pid", os.Getpid()}
 	if cfg.ServerAuthorizedKeys != "" {
@@ -243,7 +293,28 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		Shell:       cfg.ServerShell,
 		Passwords:   passwords,
 		Log:         logger,
-		Ready:       ready.Ready,
+	}
+	// Set by srv.Ready, which ListenAndServe calls on this goroutine.
+	var (
+		ownsPidFile bool
+		pidFileErr  error
+	)
+	defer func() {
+		if ownsPidFile {
+			_ = os.Remove(pidFilePath)
+		}
+	}()
+	srv.Ready = func() {
+		if pidFilePath != "" {
+			if err := writePidFile(pidFilePath); err != nil {
+				// Closing here makes ListenAndServe return instead of serving.
+				pidFileErr = err
+				_ = srv.Close()
+				return
+			}
+			ownsPidFile = true
+		}
+		ready.Ready()
 	}
 
 	// SIGTERM is how `sshush server stop` asks the server to go. Catching it, rather
@@ -257,7 +328,12 @@ func RunServerOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 		_ = srv.Close()
 	}()
 
-	if err := srv.ListenAndServe(); err != nil {
+	err = srv.ListenAndServe()
+	if err == nil {
+		// A server closed for want of a pidfile returns nil like any other close.
+		err = pidFileErr
+	}
+	if err != nil {
 		logger.Error("server failed", "err", err)
 		return err
 	}

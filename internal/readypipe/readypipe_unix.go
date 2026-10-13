@@ -52,6 +52,12 @@ func (p *Parent) CloseWrite() {
 	p.w = nil
 }
 
+// Started does nothing on Unix: once CloseWrite has run, the child holds the
+// only write end, so its death already reaches Wait as EOF. The child is
+// deliberately not waited on. It exists so callers are the same on every
+// platform; Windows needs to be told (see the Windows Parent).
+func (p *Parent) Started(*exec.Cmd) {}
+
 // Close closes both ends of the pipe. Safe to call more than once and after
 // CloseWrite. Intended as a defer'd safety net.
 func (p *Parent) Close() {

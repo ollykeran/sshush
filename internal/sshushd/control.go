@@ -55,6 +55,7 @@ func StartDaemon(configPath, socketPath string) error {
 		return fmt.Errorf("sshushd: start failed: %w", err)
 	}
 	rp.CloseWrite()
+	rp.Started(child)
 
 	if err := rp.Wait(readyTimeout); err != nil {
 		return fmt.Errorf("sshushd: %w", err)
@@ -107,6 +108,7 @@ func StartServerDaemon(configPath string, port int) error {
 		return fmt.Errorf("sshushd: start server failed: %w", err)
 	}
 	rp.CloseWrite()
+	rp.Started(child)
 
 	if err := rp.Wait(readyTimeout); err != nil {
 		return fmt.Errorf("sshushd: %w", err)

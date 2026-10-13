@@ -22,7 +22,16 @@ type Parent struct {
 	name     string
 	l        net.Listener
 	accepted chan accepted
+	// exited receives the child's exit once Started has been told about it. Nil
+	// until then, so a Wait without a child simply never hears of one.
+	exited chan error
 }
+
+// exitGrace is how long Wait goes on looking for a connection from a child it
+// has just seen exit. A child that connected, wrote its error and exited can
+// have its exit noticed before its connection is handed over by Accept, and
+// what it wrote is the better thing to report.
+const exitGrace = 500 * time.Millisecond
 
 // accepted is the outcome of waiting for the child to connect.
 type accepted struct {
@@ -61,6 +70,24 @@ func (p *Parent) Attach(cmd *exec.Cmd) {
 // so callers are the same on every platform.
 func (p *Parent) CloseWrite() {}
 
+// Started tells the parent which process the child is. Call it once, right
+// after cmd.Start() succeeds and before Wait.
+//
+// A named pipe says nothing about a child that never connects to it: unlike the
+// inherited pipe on Unix, there is no end that closes when the process dies. So
+// the process itself is watched, and Wait returns as soon as it has gone
+// instead of sitting out the timeout. Waiting on the process takes nothing from
+// a daemon that does start: it was created detached, and stays so. The watch
+// lasts until the daemon exits or this process does, whichever is first.
+func (p *Parent) Started(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil || p.exited != nil {
+		return
+	}
+	exited := make(chan error, 1)
+	p.exited = exited
+	go func() { exited <- cmd.Wait() }()
+}
+
 // Close stops listening. Safe to call more than once. Intended as a defer'd
 // safety net.
 func (p *Parent) Close() {
@@ -80,8 +107,9 @@ func (p *Parent) Close() {
 //
 // A connection closed with no data written means success. One closed after
 // data means the child wrote its real error text; that text becomes the
-// returned error. A timeout means the child neither succeeded nor failed
-// within the window — including a child that died before it could connect.
+// returned error. A child that exits without ever connecting is reported as
+// such, at once, when Started was told about it. A timeout means the child
+// neither succeeded nor failed within the window.
 func (p *Parent) Wait(timeout time.Duration) error {
 	if p.l == nil {
 		return errors.New("readypipe: already closed")
@@ -89,24 +117,38 @@ func (p *Parent) Wait(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	notReady := fmt.Errorf("started but not ready after %s", timeout)
 
-	var conn net.Conn
+	var a accepted
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case a := <-p.accepted:
-		// Hand the result back so Close, which drains it, still finds one.
-		p.accepted <- accepted{}
-		if a.err != nil {
-			return fmt.Errorf("readypipe: accept: %w", a.err)
+	case a = <-p.accepted:
+	case exit := <-p.exited:
+		// The exit alone does not mean the child said nothing: see exitGrace.
+		// When both are there to be had, the connection wins.
+		grace := time.NewTimer(exitGrace)
+		defer grace.Stop()
+		select {
+		case a = <-p.accepted:
+		case <-grace.C:
+			p.Close()
+			return exitedEarly(exit)
+		case <-timer.C:
+			p.Close()
+			return exitedEarly(exit)
 		}
-		if a.conn == nil {
-			return errors.New("readypipe: already waited")
-		}
-		conn = a.conn
 	case <-timer.C:
 		p.Close()
 		return notReady
 	}
+	// Hand the result back so Close, which drains it, still finds one.
+	p.accepted <- accepted{}
+	if a.err != nil {
+		return fmt.Errorf("readypipe: accept: %w", a.err)
+	}
+	if a.conn == nil {
+		return errors.New("readypipe: already waited")
+	}
+	conn := a.conn
 	defer conn.Close()
 
 	if err := conn.SetReadDeadline(deadline); err != nil {
@@ -123,6 +165,17 @@ func (p *Parent) Wait(timeout time.Duration) error {
 		return errors.New(string(data))
 	}
 	return nil
+}
+
+// exitedEarly is the error for a child that exited without connecting. exit is
+// what waiting on the process returned: nil for a clean exit, which this early
+// is no less of a failure.
+func exitedEarly(exit error) error {
+	status := "exit status 0"
+	if exit != nil {
+		status = exit.Error()
+	}
+	return fmt.Errorf("daemon exited before it was ready (%s)", status)
 }
 
 // FromEnv looks for SSHUSH_READY_PIPE in the environment and returns a Child

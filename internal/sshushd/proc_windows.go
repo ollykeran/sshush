@@ -110,9 +110,18 @@ func withStopRequest(ctx context.Context) (context.Context, func()) {
 			continue
 		}
 		// Manual reset, initially unset.
-		if h, err := windows.CreateEvent(nil, 1, 0, ptr); err == nil {
+		h, err := windows.CreateEvent(nil, 1, 0, ptr)
+		if err == nil {
 			event = h
 			break
+		}
+		// A name that is already taken still comes back as a handle, to the
+		// existing event, along with ERROR_ALREADY_EXISTS. An event under this
+		// process's pid that it did not create is somebody else's: whoever made
+		// it decides who may set it, so it is no stop request to trust. Close it
+		// rather than leak it, and try the next name.
+		if h != 0 {
+			_ = windows.CloseHandle(h)
 		}
 	}
 	if event == 0 {
