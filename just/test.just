@@ -45,7 +45,32 @@ e2e:
       *) echo "Unsupported platform" >&2; exit 1 ;;
     esac
     just build "$ARCH"
-    SSHUSH_E2E_BIN_DIR="$(pwd)/{{ build_dir }}/${ARCH}" just _dox ./test/e2e/... -race
+    # "just build linux" writes to linux-amd64; the darwin targets are named for their directories.
+    BIN_DIR="$ARCH"
+    if [ "$ARCH" = "linux" ]; then BIN_DIR="linux-amd64"; fi
+    SSHUSH_E2E_BIN_DIR="$(pwd)/{{ build_dir }}/${BIN_DIR}" just _dox ./test/e2e/... -race
+
+# Each test gives both sides a config, pipe and pidfile of their own, so the
+# agent you are using is left alone. The checkout has to be on a Windows drive
+# (/mnt/c/...): Windows runs the sshush.exe built there.
+# Run the WSL interop e2e tests against a real sshush.exe (inside a WSL distro only)
+e2e-wsl:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; then
+      echo "just e2e-wsl runs inside a WSL distro, with Windows interop on" >&2
+      exit 1
+    fi
+    case "$(pwd)" in
+      /mnt/*) ;;
+      *) echo "just e2e-wsl needs the checkout on a Windows drive (/mnt/c/...), so Windows can run the sshush.exe it builds" >&2; exit 1 ;;
+    esac
+    just build linux
+    just build windows
+    SSHUSH_E2E_WSL=1 \
+    SSHUSH_E2E_BIN_DIR="$(pwd)/{{ build_dir }}/linux-amd64" \
+    SSHUSH_E2E_WINDOWS_BIN_DIR="$(pwd)/{{ build_dir }}/windows-amd64" \
+      just _dox ./test/e2e/... -run '^TestE2E_WSL' -count=1
 
 # Run Go benchmarks (optional: package, count)
 bench pkg="./..." count="1":
