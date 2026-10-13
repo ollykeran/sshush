@@ -6,13 +6,24 @@
 package transport
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 )
 
-// Dial connects to the agent listening at path.
+// ErrForeignPipe is returned by Dial when the named pipe at path exists but
+// belongs to some other account on the machine. A pipe name is machine-wide, so
+// whoever creates it first serves it, and what a client sends an agent includes
+// the vault passphrase and private keys: Dial hangs up before anything is
+// written rather than hand those over. It is not "nothing is running": the name
+// is taken, so listening on it fails as well, and callers that go on to listen
+// after a failed Dial should report this error instead of the one from Listen.
+var ErrForeignPipe = errors.New("named pipe is served by another account, so sshush will not send secrets to it")
+
+// Dial connects to the agent listening at path. On Windows it refuses a pipe
+// that another account is serving, with an error that wraps [ErrForeignPipe].
 func Dial(path string) (net.Conn, error) {
 	if pipe, ok := pipePath(path); ok {
 		return dialPipe(pipe)

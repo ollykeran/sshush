@@ -59,9 +59,16 @@ func ListenAndHandle(ctx context.Context, socketPath string, handle func(net.Con
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if conn, err := transport.Dial(socketPath); err == nil {
+	conn, err := transport.Dial(socketPath)
+	if err == nil {
 		conn.Close()
 		return &errStyled{err: ErrAlreadyRunning, styled: style.Err(ErrAlreadyRunning.Error())}
+	}
+	// A pipe some other account got to first is not ours to replace, and
+	// listening on its name would only fail with "access is denied", which
+	// says nothing about why. Say what is actually in the way.
+	if errors.Is(err, transport.ErrForeignPipe) {
+		return fmt.Errorf("agent: cannot listen on %s: %w", socketPath, err)
 	}
 	listener, err := transport.Listen(socketPath)
 	if err != nil {
