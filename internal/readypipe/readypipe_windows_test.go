@@ -121,9 +121,12 @@ func TestHandshake_ChildFailsThenExits(t *testing.T) {
 			t.Fatal(err)
 		}
 		startChild(t, p, "fail")
-		// Let the child finish first, so the exit is certainly there for Wait
-		// to see alongside the connection: the case that could go wrong.
-		for deadline := time.Now().Add(time.Minute); len(p.exited) == 0 && time.Now().Before(deadline); {
+		// Give the child a moment to finish first, so that where it can, the
+		// exit is there for Wait to see alongside the connection: the case
+		// that could go wrong. It is only a moment because the pipe has no
+		// buffer: the child's write does not complete, and so the child does
+		// not exit, until Wait reads it.
+		for deadline := time.Now().Add(200 * time.Millisecond); len(p.exited) == 0 && time.Now().Before(deadline); {
 			time.Sleep(10 * time.Millisecond)
 		}
 		err = p.Wait(2 * time.Minute)
