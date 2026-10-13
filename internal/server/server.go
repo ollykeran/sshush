@@ -49,6 +49,7 @@ type Server struct {
 
 	mu      sync.Mutex
 	serving *gliderlabs.Server // set once listening
+	ln      net.Listener       // the listener serving accepts on
 	closed  bool
 
 	// pending finds a connection's log state by remote address, for the one
@@ -115,6 +116,7 @@ func (s *Server) ListenAndServe() error {
 		return nil
 	}
 	s.serving = serving
+	s.ln = ln
 	s.mu.Unlock()
 
 	listening := append([]any{"addr", ln.Addr().String()}, hostKey...)
@@ -125,7 +127,12 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	err = serving.Serve(ln)
-	if errors.Is(err, gliderlabs.ErrServerClosed) {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	// After Close, whatever Serve reports is the listener going away: it only
+	// says ErrServerClosed itself once it has started accepting.
+	if closed || errors.Is(err, gliderlabs.ErrServerClosed) {
 		s.waitForSessions(shellKillGrace + time.Second)
 		return nil
 	}
@@ -139,12 +146,17 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) Close() error {
 	s.mu.Lock()
 	s.closed = true
-	serving := s.serving
+	serving, ln := s.serving, s.ln
 	s.mu.Unlock()
 	if serving == nil {
 		return nil
 	}
-	return serving.Close()
+	err := serving.Close()
+	// serving only closes a listener it has started accepting on. A Close that
+	// lands between listening and that would leave Serve accepting for good,
+	// so the listener is closed here as well; a second close is harmless.
+	_ = ln.Close()
+	return err
 }
 
 // waitForSessions gives the sessions Close hung up on up to limit to finish.

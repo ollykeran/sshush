@@ -4,6 +4,7 @@ package editortest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -43,8 +44,20 @@ func Script(t *testing.T, dir string, exitCode int, lines ...string) string {
 		b.WriteString("exit " + strconv.Itoa(exitCode) + "\n")
 	}
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	// A child writes the script, so this process never has it open for writing.
+	// If it did, a test running in parallel could fork while the file was open,
+	// its child would hold the descriptor until it exec'd, and running the
+	// script in that moment fails with "text file busy".
+	write := exec.Command("sh", "-c", `cat > "$0" && chmod 755 "$0"`, path)
+	write.Stdin = strings.NewReader(b.String())
+	if out, err := write.CombinedOutput(); err != nil {
+		t.Fatalf("write %s: %v: %s", path, err, out)
 	}
 	return path
 }

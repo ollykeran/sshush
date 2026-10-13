@@ -39,16 +39,27 @@ func parentProcessName() string {
 // asked for rather than assumed, since OneDrive commonly moves it — unless the
 // environment points the home directory somewhere other than the account's own
 // (as tests do), when the profile is looked for under that home instead.
+//
+// Windows is asked where the folders are, not whether they exist: a Documents
+// folder that is not there yet is still where the profile would go, and an
+// account without one must not lose the PowerShell setup over it.
 func powerShellProfilePath(parentName string) (string, bool) {
-	documents, err := windows.KnownFolderPath(windows.FOLDERID_Documents, 0)
-	if err != nil || documents == "" {
-		return "", false
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		account, err := windows.KnownFolderPath(windows.FOLDERID_Profile, 0)
-		if err == nil && !strings.EqualFold(filepath.Clean(home), filepath.Clean(account)) {
-			documents = filepath.Join(home, "Documents")
+	home, _ := os.UserHomeDir()
+	account, err := windows.KnownFolderPath(windows.FOLDERID_Profile, windows.KF_FLAG_DONT_VERIFY)
+	ownHome := err == nil && strings.EqualFold(filepath.Clean(home), filepath.Clean(account))
+
+	var documents string
+	if home == "" || ownHome {
+		documents, err = windows.KnownFolderPath(windows.FOLDERID_Documents, windows.KF_FLAG_DONT_VERIFY)
+		if err != nil {
+			documents = ""
 		}
+	}
+	if documents == "" {
+		if home == "" {
+			return "", false
+		}
+		documents = filepath.Join(home, "Documents")
 	}
 	dir := "WindowsPowerShell"
 	if strings.HasPrefix(strings.ToLower(filepath.Base(parentName)), "pwsh") {
