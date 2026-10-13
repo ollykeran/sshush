@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/platform"
@@ -490,6 +492,289 @@ func TestSetupPowerShellProfile(t *testing.T) {
 	})
 }
 
+// utf16Bytes encodes text as UTF-16 in the given byte order behind bom, the way
+// Windows PowerShell 5.1 writes a profile made with ">" or Out-File.
+func utf16Bytes(bom []byte, order binary.AppendByteOrder, text string) []byte {
+	out := append([]byte{}, bom...)
+	for _, u := range utf16.Encode([]rune(text)) {
+		out = order.AppendUint16(out, u)
+	}
+	return out
+}
+
+// TestSetupPowerShellProfile_encodings checks a profile is added to in the
+// encoding it is already in: UTF-8 appended to UTF-16 is a file PowerShell
+// fails to parse in every new window.
+func TestSetupPowerShellProfile_encodings(t *testing.T) {
+	const header = "# sshush: start agent in new shells\n"
+	write := func(t *testing.T, content []byte) platform.ShellSetup {
+		t.Helper()
+		s := platform.ShellSetup{
+			RcPath:     filepath.Join(t.TempDir(), "Microsoft.PowerShell_profile.ps1"),
+			Snippet:    platform.PowerShellSnippet,
+			PowerShell: true,
+		}
+		if err := os.WriteFile(s.RcPath, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	read := func(t *testing.T, s platform.ShellSetup) []byte {
+		t.Helper()
+		data, err := os.ReadFile(s.RcPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	crlf := func(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
+
+	appended := []struct {
+		name    string
+		content []byte
+		want    []byte
+	}{
+		{
+			"UTF-16LE with BOM and CRLF",
+			utf16Bytes(bomUTF16LE, binary.LittleEndian, "Set-Alias ll ls\r\n"),
+			utf16Bytes(bomUTF16LE, binary.LittleEndian, "Set-Alias ll ls\r\n"+crlf(header+platform.PowerShellSnippet)),
+		},
+		{
+			"UTF-16LE with BOM, no final newline, beyond the BMP",
+			utf16Bytes(bomUTF16LE, binary.LittleEndian, "$emoji = '\U0001F511'"),
+			utf16Bytes(bomUTF16LE, binary.LittleEndian, "$emoji = '\U0001F511'\n"+header+platform.PowerShellSnippet),
+		},
+		{
+			"UTF-16BE with BOM",
+			utf16Bytes(bomUTF16BE, binary.BigEndian, "Set-Alias ll ls\n"),
+			utf16Bytes(bomUTF16BE, binary.BigEndian, "Set-Alias ll ls\n"+header+platform.PowerShellSnippet),
+		},
+		{
+			"UTF-16LE BOM and nothing else",
+			bomUTF16LE,
+			utf16Bytes(bomUTF16LE, binary.LittleEndian, header+platform.PowerShellSnippet),
+		},
+		{
+			"UTF-8 with BOM",
+			append(append([]byte{}, bomUTF8...), "Set-Alias café ls\n"...),
+			append(append([]byte{}, bomUTF8...), "Set-Alias café ls\n"+header+platform.PowerShellSnippet...),
+		},
+		{
+			"UTF-8 without BOM",
+			[]byte("Set-Alias café ls\n"),
+			[]byte("Set-Alias café ls\n" + header + platform.PowerShellSnippet),
+		},
+		{
+			"UTF-8 with CRLF and no final newline",
+			[]byte("Set-Alias a b\r\nSet-Alias ll ls"),
+			[]byte("Set-Alias a b\r\nSet-Alias ll ls\r\n" + crlf(header+platform.PowerShellSnippet)),
+		},
+		{
+			"empty file",
+			nil,
+			[]byte(header + platform.PowerShellSnippet),
+		},
+	}
+	for _, tt := range appended {
+		t.Run("appended to: "+tt.name, func(t *testing.T) {
+			s := write(t, tt.content)
+			var hint bytes.Buffer
+			setupPowerShellProfile(s, true, &hint)
+			got := read(t, s)
+			if !bytes.Equal(got, tt.want) {
+				t.Fatalf("profile bytes:\n got %q\nwant %q", got, tt.want)
+			}
+			// What was written has to be found again, or every run adds another.
+			setupPowerShellProfile(s, false, &hint)
+			if again := read(t, s); !bytes.Equal(again, got) {
+				t.Fatalf("profile changed on the second run:\n%q", again)
+			}
+			if hint.Len() != 0 {
+				t.Fatalf("expected no hint, got %q", hint.String())
+			}
+		})
+	}
+
+	t.Run("UTF-16LE profile decodes back to the expected text", func(t *testing.T) {
+		s := write(t, utf16Bytes(bomUTF16LE, binary.LittleEndian, "Set-Alias ll ls\r\n"))
+		setupPowerShellProfile(s, true, &bytes.Buffer{})
+		text, enc, ok := decodeTextFile(read(t, s))
+		want := "Set-Alias ll ls\r\n" + crlf(header+platform.PowerShellSnippet)
+		if !ok || enc != encodingUTF16LE || text != want {
+			t.Fatalf("decoded %q (encoding %d, ok %v), want %q as UTF-16LE", text, enc, ok, want)
+		}
+	})
+
+	t.Run("UTF-16LE profile that already starts sshush is left alone", func(t *testing.T) {
+		own := utf16Bytes(bomUTF16LE, binary.LittleEndian, "Set-Alias ll ls\r\nsshush start --shell powershell | Invoke-Expression\r\n")
+		s := write(t, own)
+		var hint bytes.Buffer
+		setupPowerShellProfile(s, true, &hint)
+		if got := read(t, s); !bytes.Equal(got, own) {
+			t.Fatalf("profile changed:\n%q", got)
+		}
+		if hint.Len() != 0 {
+			t.Fatalf("expected no hint, got %q", hint.String())
+		}
+	})
+
+	undecodable := []struct {
+		name    string
+		content []byte
+	}{
+		{"UTF-16LE with an odd byte count", append(utf16Bytes(bomUTF16LE, binary.LittleEndian, "Set-Alias ll ls\n"), 0x41)},
+		{"UTF-16LE with an unpaired surrogate", append(append([]byte{}, bomUTF16LE...), 0x41, 0x00, 0x00, 0xD8, 0x42, 0x00)},
+		{"invalid UTF-8", []byte("Set-Alias ll ls\n\xff\xfe\n")},
+		{"invalid UTF-8 after a BOM", append(append([]byte{}, bomUTF8...), 0xC3, 0x28)},
+		{"UTF-16LE without a BOM", utf16Bytes(nil, binary.LittleEndian, "Set-Alias ll ls\n")},
+		{"UTF-32LE", []byte{0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00}},
+	}
+	for _, tt := range undecodable {
+		t.Run("left alone: "+tt.name, func(t *testing.T) {
+			s := write(t, tt.content)
+			var hint bytes.Buffer
+			setupPowerShellProfile(s, true, &hint)
+			if got := read(t, s); !bytes.Equal(got, tt.content) {
+				t.Fatalf("profile changed:\n%q", got)
+			}
+			if !strings.Contains(hint.String(), "Invoke-Expression") || !strings.Contains(hint.String(), s.RcPath) {
+				t.Fatalf("expected a hint naming the line and the file, got %q", hint.String())
+			}
+
+			hint.Reset()
+			setupPowerShellProfile(s, false, &hint)
+			if got := read(t, s); !bytes.Equal(got, tt.content) {
+				t.Fatalf("profile changed after the first run:\n%q", got)
+			}
+			if hint.Len() != 0 {
+				t.Fatalf("expected no hint after the first run, got %q", hint.String())
+			}
+		})
+	}
+}
+
+// TestSetupSSHIdentityAgent_otherAgent checks ssh is not taken away from an
+// agent that is already in use: the block is shown, not written.
+func TestSetupSSHIdentityAgent_otherAgent(t *testing.T) {
+	const pipe = platform.WindowsPipeName
+	const block = "Host *\n    IdentityAgent //./pipe/sshush-agent\n"
+	const own = "Host work\n    User me\n"
+
+	run := func(t *testing.T, other otherSSHAgent, withConfig bool) (config string, exists bool, note string) {
+		t.Helper()
+		sshDir := t.TempDir()
+		path := filepath.Join(sshDir, "config")
+		if withConfig {
+			if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var out bytes.Buffer
+		setupSSHIdentityAgent(sshDir, pipe, other, &out)
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return string(data), err == nil, out.String()
+	}
+
+	skipped := []struct {
+		name     string
+		other    otherSSHAgent
+		wantNote string // what names the signal in the hint
+	}{
+		{"service running", otherSSHAgent{ServiceRunning: true}, "OpenSSH Authentication Agent"},
+		{"SSH_AUTH_SOCK in the environment", otherSSHAgent{EnvAuthSock: `\\.\pipe\openssh-ssh-agent`}, `SSH_AUTH_SOCK is set to \\.\pipe\openssh-ssh-agent`},
+		{"SSH_AUTH_SOCK of a Git Bash agent", otherSSHAgent{EnvAuthSock: "/tmp/ssh-XXXXabcdef/agent.1234"}, "/tmp/ssh-XXXXabcdef/agent.1234"},
+		{"SSH_AUTH_SOCK for new processes", otherSSHAgent{PersistedAuthSock: `\\.\pipe\gpg-agent`}, `\\.\pipe\gpg-agent for new programs`},
+		{"persisted differs while the environment has sshush's pipe", otherSSHAgent{EnvAuthSock: pipe, PersistedAuthSock: `\\.\pipe\gpg-agent`}, "gpg-agent for new programs"},
+	}
+	for _, tt := range skipped {
+		for _, withConfig := range []bool{false, true} {
+			name := tt.name + ", no config"
+			if withConfig {
+				name = tt.name + ", existing config"
+			}
+			t.Run("skipped: "+name, func(t *testing.T) {
+				config, exists, note := run(t, tt.other, withConfig)
+				if withConfig && config != own {
+					t.Fatalf("config changed:\n%s", config)
+				}
+				if !withConfig && exists {
+					t.Fatalf("config must not be created, got:\n%s", config)
+				}
+				for _, want := range []string{"Another ssh agent appears to be in use", tt.wantNote, "left alone", "  Host *\n      IdentityAgent //./pipe/sshush-agent\n"} {
+					if !strings.Contains(note, want) {
+						t.Errorf("hint lacks %q:\n%s", want, note)
+					}
+				}
+				if strings.Contains(note, "Added IdentityAgent") {
+					t.Errorf("hint claims the block was added:\n%s", note)
+				}
+			})
+		}
+	}
+
+	t.Run("each signal seen is named", func(t *testing.T) {
+		_, _, note := run(t, otherSSHAgent{ServiceRunning: true, EnvAuthSock: "/tmp/agent.sock", PersistedAuthSock: "/tmp/agent.sock"}, true)
+		if !strings.Contains(note, "service is running") || strings.Count(note, "/tmp/agent.sock") != 1 {
+			t.Fatalf("expected the service and the socket, the socket once:\n%s", note)
+		}
+	})
+
+	written := []struct {
+		name  string
+		other otherSSHAgent
+	}{
+		{"no signal", otherSSHAgent{}},
+		{"SSH_AUTH_SOCK is sshush's pipe", otherSSHAgent{EnvAuthSock: pipe, PersistedAuthSock: pipe}},
+		{"sshush's pipe in forward slashes", otherSSHAgent{EnvAuthSock: "//./pipe/sshush-agent"}},
+		{"sshush's pipe in another case", otherSSHAgent{PersistedAuthSock: `\\.\PIPE\SSHUSH-Agent`}},
+		{"sshush's pipe with mixed slashes and spaces", otherSSHAgent{EnvAuthSock: ` \\./pipe/sshush-agent `}},
+		{"blank SSH_AUTH_SOCK", otherSSHAgent{EnvAuthSock: "  ", PersistedAuthSock: ""}},
+	}
+	for _, tt := range written {
+		t.Run("written: "+tt.name, func(t *testing.T) {
+			config, _, note := run(t, tt.other, true)
+			if !strings.HasPrefix(config, own) || strings.Count(config, block) != 1 {
+				t.Fatalf("expected the block after the existing content, got:\n%s", config)
+			}
+			if !strings.Contains(note, "Added IdentityAgent") || strings.Contains(note, "Another ssh agent") {
+				t.Fatalf("unexpected note: %q", note)
+			}
+		})
+	}
+
+	t.Run("an IdentityAgent already set stays silent whatever else is seen", func(t *testing.T) {
+		sshDir := t.TempDir()
+		path := filepath.Join(sshDir, "config")
+		const set = "Host *\n    IdentityAgent none\n"
+		if err := os.WriteFile(path, []byte(set), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var note bytes.Buffer
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{ServiceRunning: true, EnvAuthSock: "/tmp/agent.sock"}, &note)
+		if data, _ := os.ReadFile(path); string(data) != set {
+			t.Fatalf("config changed:\n%s", data)
+		}
+		if note.Len() != 0 {
+			t.Fatalf("expected no note, got %q", note.String())
+		}
+	})
+
+	t.Run("no .ssh directory stays silent whatever else is seen", func(t *testing.T) {
+		sshDir := filepath.Join(t.TempDir(), ".ssh")
+		var note bytes.Buffer
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{ServiceRunning: true}, &note)
+		if _, err := os.Stat(sshDir); !os.IsNotExist(err) {
+			t.Fatalf(".ssh must not be created, stat err = %v", err)
+		}
+		if note.Len() != 0 {
+			t.Fatalf("expected no note, got %q", note.String())
+		}
+	})
+}
+
 func TestSetupSSHIdentityAgent(t *testing.T) {
 	const pipe = platform.WindowsPipeName
 	const block = "Host *\n    IdentityAgent //./pipe/sshush-agent\n"
@@ -497,7 +782,7 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 	t.Run("no .ssh directory: nothing created", func(t *testing.T) {
 		sshDir := filepath.Join(t.TempDir(), ".ssh")
 		var note bytes.Buffer
-		setupSSHIdentityAgent(sshDir, pipe, &note)
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &note)
 		if _, err := os.Stat(sshDir); !os.IsNotExist(err) {
 			t.Fatalf(".ssh must not be created, stat err = %v", err)
 		}
@@ -509,7 +794,7 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 	t.Run("no config: created with the pipe in forward slashes", func(t *testing.T) {
 		sshDir := t.TempDir()
 		var note bytes.Buffer
-		setupSSHIdentityAgent(sshDir, pipe, &note)
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &note)
 		data, err := os.ReadFile(filepath.Join(sshDir, "config"))
 		if err != nil {
 			t.Fatal(err)
@@ -529,8 +814,8 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 		if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
-		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &bytes.Buffer{})
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &bytes.Buffer{})
 		data, _ := os.ReadFile(path)
 		got := string(data)
 		if !strings.HasPrefix(got, own+"\n\n") || strings.Count(got, block) != 1 {
@@ -548,7 +833,7 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 			if err := os.WriteFile(path, []byte(own), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+			setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &bytes.Buffer{})
 			data, _ := os.ReadFile(path)
 			if string(data) != own {
 				t.Fatalf("config changed:\n%s", data)
@@ -562,7 +847,7 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 		if err := os.WriteFile(path, []byte("# IdentityAgent none\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		setupSSHIdentityAgent(sshDir, pipe, &bytes.Buffer{})
+		setupSSHIdentityAgent(sshDir, pipe, otherSSHAgent{}, &bytes.Buffer{})
 		data, _ := os.ReadFile(path)
 		if !strings.HasSuffix(string(data), block) {
 			t.Fatalf("expected the block to be added, got:\n%s", data)

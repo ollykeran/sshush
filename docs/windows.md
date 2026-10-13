@@ -35,7 +35,7 @@ To do that in every new PowerShell window, add this line to your profile (`notep
 if (Get-Command sshush -ErrorAction SilentlyContinue) { sshush start --shell powershell | Invoke-Expression }
 ```
 
-If your profile already exists, sshush adds the line for you the first time it runs. It never creates a profile: PowerShell's default execution policy refuses to run profile scripts, and a profile it refuses means an error in every new window. If you do not have one yet, sshush prints the line once and leaves the rest to you.
+If your profile already exists, sshush adds the line for you the first time it runs, in the encoding and with the line endings the file already has (Windows PowerShell saves profiles as UTF-16 when they are made with `>` or `Out-File`); a profile it cannot read as text is left alone, and the line is printed instead. It never creates a profile: PowerShell's default execution policy refuses to run profile scripts, and a profile it refuses means an error in every new window. If you do not have one yet, sshush prints the line once and leaves the rest to you.
 
 ## The agent's named pipe
 
@@ -62,6 +62,13 @@ That covers a pipe sshush is serving. The name, though, belongs to whichever acc
   ```
 
   sshush adds this block for you the first time it runs, if you have a `~\.ssh` folder and its `config` does not set `IdentityAgent` already. It is written once, for the default pipe: if you change `socket_path` later, change it here too.
+
+  It does not add it when another agent looks to be in use, since `IdentityAgent` would take `ssh` away from that agent. That means either of:
+
+  - the Windows "OpenSSH Authentication Agent" service (`ssh-agent`) is running;
+  - `SSH_AUTH_SOCK` is already set to something other than sshush's pipe, in the shell sshush was run from or for new programs (`setx`, System Properties).
+
+  sshush then says which it saw, leaves `~\.ssh\config` alone and prints the block for you to add yourself. The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the block applies to it as well.
 
 - Set `socket_path = '\\.\pipe\openssh-ssh-agent'`. That is the pipe `ssh.exe` uses when `SSH_AUTH_SOCK` is unset, so everything finds sshush with no setup at all. It only works while the Windows "OpenSSH Authentication Agent" service is stopped, since the two cannot share the name.
 
