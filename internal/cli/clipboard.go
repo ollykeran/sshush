@@ -6,3 +6,9 @@ import "github.com/ollykeran/sshush/internal/clipboard"
 func CopyToClipboard(text string) error {
 	return clipboard.Copy(text)
 }
+
+// CopySecretToClipboard is CopyToClipboard for something that must not linger:
+// on Windows it is kept out of clipboard history and cloud sync.
+func CopySecretToClipboard(text string) error {
+	return clipboard.CopySecret(text)
+}

@@ -39,21 +39,14 @@ func EnsureHostKey(path string) (created bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	// O_EXCL rather than a plain create: two servers starting at once must not
-	// each write a key and hand out different identities.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
+	// WriteNewFile rather than WriteFile: two servers starting at once must not
+	// each write a key and hand out different identities, so the loser of that
+	// race takes the winner's key. It also creates the file already private,
+	// which on Windows a mode alone would not do.
+	if err := secfile.WriteNewFile(path, keyPEM); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, checkHostKey(path)
 		}
-		return false, fmt.Errorf("server: write host key %s: %w", path, err)
-	}
-	defer f.Close()
-	// Private before the key goes in; on Windows the mode above does not do it.
-	if err := secfile.Restrict(path); err != nil {
-		return false, fmt.Errorf("server: write host key %s: %w", path, err)
-	}
-	if _, err := f.Write(keyPEM); err != nil {
 		return false, fmt.Errorf("server: write host key %s: %w", path, err)
 	}
 	return true, nil

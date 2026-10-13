@@ -1,6 +1,7 @@
 package secfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,6 +45,21 @@ func TestWriteFile_closesAnExistingOpenFile(t *testing.T) {
 	mustBePrivate(t, path)
 	if got, _ := os.ReadFile(path); string(got) != "new" {
 		t.Fatalf("read back %q, want the old content replaced", got)
+	}
+}
+
+func TestWriteNewFile_isPrivateAndRefusesToReplace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := WriteNewFile(path, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	mustBePrivate(t, path)
+	err := WriteNewFile(path, []byte("second"))
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("second write: got %v, want os.ErrExist", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "first" {
+		t.Fatalf("read back %q, want the first content left alone", got)
 	}
 }
 

@@ -102,7 +102,7 @@ $env:EDITOR = '"C:\Program Files\Notepad++\notepad++.exe" -multiInst -nosession'
 
 The editor has to stay in the foreground until you close the file. For VS Code that is `code --wait`.
 
-Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install.
+Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install. The recovery phrase that `sshush vault init` copies is marked so that Windows keeps it out of clipboard history (Win+V) and does not sync it to your other devices; a clipboard manager that ignores those marks can still record it.
 
 ## Stopping the daemon
 

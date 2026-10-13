@@ -130,7 +130,9 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 	out.Spacer().
 		Info("Store this phrase offline; it is not saved anywhere else.")
 	out.Success("Also written to " + utils.DisplayPath(res.RecoveryFile) + " (readable only by you)")
-	if err := CopyToClipboard(res.Mnemonic); err == nil {
+	// The secret variant: the phrase is the whole vault, and on Windows an
+	// ordinary copy would sit in clipboard history and sync to other devices.
+	if err := CopySecretToClipboard(res.Mnemonic); err == nil {
 		out.Success("Copied to clipboard.")
 	}
 	fmt.Fprintln(os.Stderr, style.BoxWithMaxWidth(out.String(), 72))

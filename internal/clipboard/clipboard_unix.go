@@ -27,3 +27,7 @@ func copyText(text string) error {
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }
+
+func copySecret(text string) error {
+	return copyText(text)
+}
