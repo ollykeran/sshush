@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - uses: Vampire/setup-wsl@v7
+      - uses: Vampire/setup-wsl@614202866847d986a4f737ae6020b760283d3f5a # v7.1.1
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
@@ -47,12 +47,20 @@ jobs:
       - name: Run the interop tests inside the distro
         shell: wsl-bash {0}
         run: |
+          # Set here rather than trusting the defaults of the wsl-bash wrapper:
+          # pipefail is what lets a failing test binary through the tee.
+          set -euo pipefail
           export SSHUSH_E2E_WSL=1
           export SSHUSH_E2E_BIN_DIR="$PWD/build/linux-amd64"
           export SSHUSH_E2E_WINDOWS_BIN_DIR="$PWD/build/windows-amd64"
-          "$SSHUSH_E2E_BIN_DIR/e2e.test" -test.run '^TestE2E_WSL' -test.v -test.timeout 5m | tee /tmp/wsl-e2e.log
+          log=/tmp/wsl-e2e.log
+          "$SSHUSH_E2E_BIN_DIR/e2e.test" -test.run '^TestE2E_WSL' -test.v -test.timeout 5m | tee "$log"
+          if grep -q -- '--- FAIL' "$log"; then
+            echo "a WSL interop test failed" >&2
+            exit 1
+          fi
           # A skip here would be a green job that crossed no boundary.
-          if ! grep -q -- '--- PASS: TestE2E_WSL' /tmp/wsl-e2e.log || grep -q -- '--- SKIP' /tmp/wsl-e2e.log; then
+          if ! grep -q -- '--- PASS: TestE2E_WSL' "$log" || grep -q -- '--- SKIP' "$log"; then
             echo "the WSL interop tests did not all run" >&2
             exit 1
           fi
