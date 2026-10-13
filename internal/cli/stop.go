@@ -37,6 +37,10 @@ func runStop(cmd *cobra.Command, _ []string) error {
 		}
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	style.NewOutput().Success("sshushd stopped").Print()
+	out := style.NewOutput().Success("sshushd stopped")
+	if cfg := configFrom(cmd); cfg != nil && cfg.RelaysToWindows() {
+		out.Info("That was the relay. The sshush agent on Windows is still running; stop it there with 'sshush stop'.")
+	}
+	out.Print()
 	return nil
 }

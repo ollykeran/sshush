@@ -2,6 +2,7 @@ package platform
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -18,6 +19,9 @@ func TestConfigDir_respectsXDG_CONFIG_HOME(t *testing.T) {
 }
 
 func TestRuntimeDataDir_fallsBackToConfigDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -40,6 +44,9 @@ func TestRuntimeDataDir_prefersXDG_RUNTIME_DIR(t *testing.T) {
 }
 
 func TestDefaultSocketPath_absoluteWithoutXDG(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", "")
@@ -61,6 +68,9 @@ func TestServerHostKeyPath_usesTheConfiguredPath(t *testing.T) {
 }
 
 func TestServerHostKeyPath_fallsBackToTheConfigDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", "")

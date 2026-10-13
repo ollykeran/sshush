@@ -75,7 +75,8 @@ func readPassphrase(prompt string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cli: read passphrase from stdin: %w", err)
 	}
-	return []byte(strings.TrimSuffix(line, "\n")), nil
+	// A line piped from PowerShell ends in CRLF; the CR is not part of the passphrase.
+	return []byte(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")), nil
 }
 
 // passphraseModel is a Bubble Tea model for a single passphrase prompt with styled box.

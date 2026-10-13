@@ -4,10 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
 func TestLoad(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	cases := []struct {
 		name           string
 		wantKeyPaths   []string

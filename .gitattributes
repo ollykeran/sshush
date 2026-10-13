@@ -1,0 +1,3 @@
+# LF everywhere, whatever core.autocrlf says: templates are embedded into the
+# binary as checked out, and tests compare them line by line.
+* text=auto eol=lf

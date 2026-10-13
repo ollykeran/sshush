@@ -35,6 +35,9 @@ func runLock(cmd *cobra.Command, _ []string) error {
 	defer session.Close()
 	backend, err := session.Backend()
 	if err != nil {
+		if down := windowsAgentDown(cfg); down != nil {
+			return down
+		}
 		return style.NewOutput().Error("cannot connect to agent (is sshush running?)").AsError()
 	}
 	switch backend.Mode {

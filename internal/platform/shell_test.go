@@ -2,10 +2,14 @@ package platform
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestShellRcPathForAutoSetup_zsh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/bin/zsh")
@@ -21,6 +25,9 @@ func TestShellRcPathForAutoSetup_zsh(t *testing.T) {
 }
 
 func TestShellRcPathForAutoSetup_bash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/usr/bin/bash")
@@ -36,6 +43,9 @@ func TestShellRcPathForAutoSetup_bash(t *testing.T) {
 }
 
 func TestShellSetupForAutoSetup_fish(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("SHELL", "/usr/bin/fish")
@@ -55,6 +65,9 @@ func TestShellSetupForAutoSetup_fish(t *testing.T) {
 }
 
 func TestShellSetupForAutoSetup_fishXDGConfigHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	tmp := t.TempDir()
 	xdg := filepath.Join(tmp, "xdg")
 	t.Setenv("HOME", tmp)
@@ -72,6 +85,9 @@ func TestShellSetupForAutoSetup_fishXDGConfigHome(t *testing.T) {
 }
 
 func TestShellSetupForAutoSetup_bashSnippet(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shells; Windows sets up a PowerShell profile")
+	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/usr/bin/bash")
 
@@ -94,6 +110,9 @@ func TestAuthSockLine(t *testing.T) {
 		{"zsh alias", "ZSH", "/tmp/a.sock", "export SSH_AUTH_SOCK='/tmp/a.sock'"},
 		{"posix quote", "posix", "/tmp/o'neil/a.sock", `export SSH_AUTH_SOCK='/tmp/o'\''neil/a.sock'`},
 		{"fish", "fish", "/run/user/1000/sshush.sock", "set -gx SSH_AUTH_SOCK '/run/user/1000/sshush.sock';"},
+		{"powershell pipe", "powershell", `\\.\pipe\sshush-agent`, `$env:SSH_AUTH_SOCK = '\\.\pipe\sshush-agent'`},
+		{"pwsh alias", "pwsh", `\\.\pipe\sshush-agent`, `$env:SSH_AUTH_SOCK = '\\.\pipe\sshush-agent'`},
+		{"powershell quote", "powershell", `C:\o'neil\a.sock`, `$env:SSH_AUTH_SOCK = 'C:\o''neil\a.sock'`},
 		{"fish quote and backslash", "fish", `/tmp/o'neil\a.sock`, `set -gx SSH_AUTH_SOCK '/tmp/o\'neil\\a.sock';`},
 	}
 	for _, tt := range tests {
@@ -110,7 +129,7 @@ func TestAuthSockLine(t *testing.T) {
 }
 
 func TestAuthSockLine_unsupportedShell(t *testing.T) {
-	if _, err := AuthSockLine("powershell", "/tmp/a.sock"); err == nil {
+	if _, err := AuthSockLine("nushell", "/tmp/a.sock"); err == nil {
 		t.Fatal("expected error for unsupported shell")
 	}
 }
@@ -124,8 +143,12 @@ func TestDetectShell(t *testing.T) {
 		{"login shell dash prefix", "-zsh", "", "zsh"},
 		{"non-shell parent falls back to SHELL", "go", "/usr/bin/fish", "fish"},
 		{"dash is posix", "dash", "", "posix"},
-		{"nothing known", "systemd", "/usr/bin/nu", "posix"},
-		{"empty", "", "", "posix"},
+		{"windows powershell", "powershell.exe", "", "powershell"},
+		{"powershell 7", "pwsh.exe", "", "powershell"},
+		{"git bash on windows", "bash.exe", `C:\Program Files\Git\usr\bin\bash.exe`, "bash"},
+		{"windows path in SHELL", "cmd.exe", `C:\Program Files\Git\usr\bin\bash.exe`, "bash"},
+		{"nothing known", "systemd", "/usr/bin/nu", fallbackShell},
+		{"empty", "", "", fallbackShell},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -155,6 +178,27 @@ func TestFishConfigStartsAgent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := FishConfigStartsAgent(tt.content); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPowerShellProfileStartsAgent(t *testing.T) {
+	tests := []struct {
+		name, content string
+		want          bool
+	}{
+		{"empty", "", false},
+		{"our snippet", PowerShellSnippet, true},
+		{"iex alias", "sshush | iex\n", true},
+		{"commented out", "# sshush start --shell powershell | Invoke-Expression\n", false},
+		{"unrelated mention", "Set-Alias s sshush\n", false},
+		{"unrelated Invoke-Expression", "starship init powershell | Invoke-Expression\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PowerShellProfileStartsAgent(tt.content); got != tt.want {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})

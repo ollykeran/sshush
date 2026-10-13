@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/editcomment/editortest"
 	"github.com/ollykeran/sshush/internal/vault"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -53,10 +54,13 @@ func writeTestKey(t *testing.T, dir, filename, comment string) string {
 // under /var/folders/... often exceeds that).
 func unixSocketTempDir(t *testing.T) string {
 	t.Helper()
+	base := "/tmp"
 	if runtime.GOOS == "windows" {
-		return t.TempDir()
+		// %TEMP%, not t.TempDir(): that adds the test's name, and Windows has the
+		// same limit on a socket path's length.
+		base = ""
 	}
-	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	dir, err := os.MkdirTemp(base, "sshush-a-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,37 +152,33 @@ func startTestVaultAgent(t *testing.T, passphrase []byte) (socketPath string, st
 	return socketPath, store, sshagent.NewClient(conn)
 }
 
-// writeFakeEditor creates a shell script at dir/name that writes newComment
-// into its first argument file. Returns the script path.
+// writeFakeEditor creates an editor script that replaces the file's content
+// with newComment. name is unused; it is kept so call sites say what the editor is for.
 func writeFakeEditor(t *testing.T, dir, name, newComment string) string {
 	t.Helper()
-	script := "#!/bin/sh\nprintf '%s' '" + newComment + "' > \"$1\"\n"
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return editortest.Script(t, editorDir(t, dir, name), 0, newComment)
 }
 
-// writeNoOpEditor creates a shell script that exits 0 without modifying the file.
-// Simulates user exiting the editor without saving.
+// writeNoOpEditor creates an editor script that exits 0 without modifying the
+// file. Simulates user exiting the editor without saving.
 func writeNoOpEditor(t *testing.T, dir, name string) string {
 	t.Helper()
-	script := "#!/bin/sh\nexit 0\n"
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return editortest.Script(t, editorDir(t, dir, name), 0)
 }
 
-// writeFailingEditor creates a shell script that exits with code 1.
+// writeFailingEditor creates an editor script that exits with code 1.
 func writeFailingEditor(t *testing.T, dir, name string) string {
 	t.Helper()
-	script := "#!/bin/sh\nexit 1\n"
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	return editortest.Script(t, editorDir(t, dir, name), 1)
+}
+
+// editorDir gives each named editor a directory of its own under dir, since
+// editortest.Script always writes the same file name.
+func editorDir(t *testing.T, dir, name string) string {
+	t.Helper()
+	d := filepath.Join(dir, name+".d")
+	if err := os.MkdirAll(d, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	return d
 }

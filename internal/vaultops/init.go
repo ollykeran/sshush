@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/secfile"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 )
@@ -11,9 +12,9 @@ import (
 // InitOptions controls what Init does beyond creating the vault.
 type InitOptions struct {
 	// Recovery generates a 24-word BIP-39 recovery phrase, enables recovery on
-	// the vault, and writes recovery.txt (mode 0600) beside the vault file.
+	// the vault, and writes recovery.txt (readable only by you) beside the vault file.
 	Recovery bool
-	// RecoveryFile, when set, receives a second copy of the phrase (mode 0600).
+	// RecoveryFile, when set, receives a second copy of the phrase (readable only by you).
 	// It is ignored when Recovery is false.
 	RecoveryFile string
 }
@@ -78,7 +79,7 @@ func Init(env Env, passphrase []byte, opts InitOptions) (InitResult, error) {
 		return res, &OpError{Code: CodeLocalIO, Msg: "enable recovery: " + err.Error(), Err: err}
 	}
 	recoveryTxt := filepath.Join(filepath.Dir(path), "recovery.txt")
-	if err := os.WriteFile(recoveryTxt, []byte(mnemonic+"\n"), 0600); err != nil {
+	if err := secfile.WriteFile(recoveryTxt, []byte(mnemonic+"\n")); err != nil {
 		return res, &OpError{Code: CodeLocalIO, Msg: "write recovery.txt: " + err.Error(), Err: err}
 	}
 	res.Mnemonic = mnemonic
@@ -86,7 +87,7 @@ func Init(env Env, passphrase []byte, opts InitOptions) (InitResult, error) {
 
 	if opts.RecoveryFile != "" {
 		extra := utils.ExpandHomeDirectory(opts.RecoveryFile)
-		if err := os.WriteFile(extra, []byte(mnemonic+"\n"), 0600); err != nil {
+		if err := secfile.WriteFile(extra, []byte(mnemonic+"\n")); err != nil {
 			return res, &OpError{Code: CodeLocalIO, Msg: "write recovery file: " + err.Error(), Err: err}
 		}
 		res.ExtraFile = extra

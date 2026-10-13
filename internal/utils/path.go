@@ -22,7 +22,7 @@ func ExpandHomeDirectory(path string) string {
 	if path == "~" {
 		return homeDir
 	}
-	if strings.HasPrefix(path, "~/") {
+	if strings.HasPrefix(path, "~/") || (filepath.Separator == '\\' && strings.HasPrefix(path, `~\`)) {
 		return filepath.Join(homeDir, path[2:])
 	}
 	return path

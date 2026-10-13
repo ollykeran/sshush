@@ -20,3 +20,12 @@ func e2eWorkDir(t *testing.T) string {
 	t.Cleanup(func() { _ = os.RemoveAll(d) })
 	return d
 }
+
+// exeName returns a binary's file name on this platform: Windows runs a file
+// only if its name says it is a program.
+func exeName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}

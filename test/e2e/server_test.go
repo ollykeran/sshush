@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,13 @@ import (
 )
 
 // writeE2EConfigWithServer writes a TOML config like writeE2EConfig plus optional [server] fields.
+// It skips the test on Windows, where the SSH server refuses to start: every
+// server test begins by writing its config here.
 func writeE2EConfigWithServer(t *testing.T, dir, socketPath, vaultPath string, keyPaths []string, serverPort int, authorizedKeysPath, hostKeyPath string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the SSH server is not supported on Windows")
+	}
 	configPath := filepath.Join(dir, "config.toml")
 	var b strings.Builder
 	b.WriteString("[agent]\n")

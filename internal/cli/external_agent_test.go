@@ -4,10 +4,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -76,7 +79,7 @@ func TestExternalMode_ReloadErrorsOnRestartNeeded(t *testing.T) {
 	// must declare external = true and point at an unreachable socket to force
 	// the needsRestart branch.
 	unreachableSocket := filepath.Join(t.TempDir(), "no-agent-here.sock")
-	configPath := writeConfigFile(t, "[agent]\nsocket_path = \""+unreachableSocket+"\"\nkey_paths = []\ntype = \"external\"\n")
+	configPath := writeConfigFile(t, "[agent]\nsocket_path = \""+filepath.ToSlash(unreachableSocket)+"\"\nkey_paths = []\ntype = \"external\"\n")
 	cmd := cmdWithConfigFlag(configPath)
 
 	// Ensure SSH_AUTH_SOCK fallback doesn't accidentally succeed.
@@ -105,6 +108,9 @@ func TestLoadMergedConfig_externalFallsBackToSSHAuthSock(t *testing.T) {
 }
 
 func TestLoadMergedConfig_externalWithExplicitSocketIgnoresSSHAuthSock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix path layout")
+	}
 	configPath := writeConfigFile(t, "[agent]\ntype = \"external\"\nsocket_path = \"/tmp/configured.sock\"\n")
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/some-other-agent.sock")
 
@@ -191,4 +197,56 @@ func TestServerHint_ForSSHushOwnAgentOffersStart(t *testing.T) {
 	if !strings.Contains(hint, "sshush start") {
 		t.Errorf("hint should point at 'sshush start', got: %q", hint)
 	}
+}
+
+// TestExternalMode_ReloadLeavesTheAgentsKeysAlone guards against reload
+// reconciling an agent sshush does not own. key_paths says nothing about what
+// such an agent should hold, so reconciling against it removed every key the
+// agent listed, and for a vault-backed sshushd a removal is a deletion from
+// the vault.
+func TestExternalMode_ReloadLeavesTheAgentsKeysAlone(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+
+	t.Run("keyring agent", func(t *testing.T) {
+		socketPath, client := startTestAgent(t)
+		keyPath := writeTestKey(t, t.TempDir(), "id_ed25519", "not-in-config")
+		if err := agent.AddKeyFromPath(client, keyPath); err != nil {
+			t.Fatalf("seed key: %v", err)
+		}
+		configPath := writeConfigFile(t, "[agent]\ntype = \"external\"\nsocket_path = \""+filepath.ToSlash(socketPath)+"\"\n")
+
+		err := runReload(cmdWithConfigFlag(configPath), nil)
+		if err == nil || !strings.Contains(err.Error(), "external") {
+			t.Errorf("want reload to refuse and say why, got: %v", err)
+		}
+		keys, listErr := client.List()
+		if listErr != nil {
+			t.Fatalf("list: %v", listErr)
+		}
+		if len(keys) != 1 {
+			t.Fatalf("keys left in the external agent: want 1, got %d", len(keys))
+		}
+	})
+
+	t.Run("vault agent", func(t *testing.T) {
+		socketPath, store, _ := startTestVaultAgent(t, []byte("reload-external-pass"))
+		keyPath := writeTestKey(t, t.TempDir(), "id_ed25519", "in-the-vault")
+		session, err := agent.Open(socketPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+		if err := vault.AddPrivateKeyFile(session, keyPath, true); err != nil {
+			t.Fatalf("seed identity: %v", err)
+		}
+		configPath := writeConfigFile(t, "[agent]\ntype = \"external\"\nsocket_path = \""+filepath.ToSlash(socketPath)+"\"\n")
+
+		err = runReload(cmdWithConfigFlag(configPath), nil)
+		if err == nil || !strings.Contains(err.Error(), "external") {
+			t.Errorf("want reload to refuse and say why, got: %v", err)
+		}
+		if left := store.AllIdentities(); len(left) != 1 {
+			t.Fatalf("identities left in the vault: want 1, got %d", len(left))
+		}
+	})
 }

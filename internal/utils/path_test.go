@@ -66,7 +66,7 @@ func TestContractHomeDirectory(t *testing.T) {
 	}{
 		{"home directory", "~/id_rsa", "~/id_rsa"},
 		{"relative path", "./id_rsa", "./id_rsa"},
-		{"absolute path", filepath.Join(homeDir, "id_rsa"), "~/id_rsa"},
+		{"absolute path", filepath.Join(homeDir, "id_rsa"), filepath.Join("~", "id_rsa")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

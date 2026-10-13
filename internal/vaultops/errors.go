@@ -46,6 +46,9 @@ const (
 	CodeAgentFailed
 	// CodeLocalIO means reading or writing a local file failed.
 	CodeLocalIO
+	// CodeAgentTooOld means the vault agent predates an operation the verb
+	// needs, and there is no vault file here to make up for it.
+	CodeAgentTooOld
 )
 
 // OpError is a vault operation failure phrased once, for both front ends. Msg

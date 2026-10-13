@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"text/template"
 
@@ -94,7 +96,9 @@ func keyPathsToTOMLArray(keyPaths []string) string {
 		if strings.HasPrefix(p, home) {
 			p = "~" + strings.TrimPrefix(p, home)
 		}
-		quoted[i] = `"` + p + `"`
+		// Forward slashes: a backslash starts an escape in a TOML string, and
+		// Windows takes either separator.
+		quoted[i] = `"` + filepath.ToSlash(p) + `"`
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
@@ -203,12 +207,21 @@ func AddEvalToShell() error {
 func SetupConfig() {
 	expanded := platform.DefaultConfigPath()
 
+	firstRun := false
 	if _, err := os.Stat(expanded); os.IsNotExist(err) {
-		_ = CreateDefaultConfig()
+		firstRun = CreateDefaultConfig() == nil
+	}
+	if firstRun && goruntime.GOOS == "windows" {
+		// The config just written names the default pipe, so that is the one to point ssh at.
+		setupSSHIdentityAgent(utils.ExpandHomeDirectory("~/.ssh"), platform.DefaultSocketPath(), detectOtherSSHAgent(), os.Stderr)
 	}
 
 	setup, ok := platform.ShellSetupForAutoSetup()
 	if !ok {
+		return
+	}
+	if setup.PowerShell {
+		setupPowerShellProfile(setup, firstRun, os.Stderr)
 		return
 	}
 	if setup.Fish {
@@ -232,4 +245,168 @@ func SetupConfig() {
 		return
 	}
 	_ = AddEvalToShell()
+}
+
+// setupPowerShellProfile adds the agent startup line to an existing PowerShell
+// profile that does not start sshush yet. It never creates the profile (see
+// platform.ShellSetup.PowerShell); when there is none it says, once — on the run
+// that created the config — what to add, and leaves the choice to the user.
+//
+// The profile is read and added to in its own encoding and with its own line
+// ending (see textEncoding for why that cannot be assumed to be UTF-8). One
+// that does not decode cleanly is treated like one that is missing: sshush
+// cannot tell whether it already starts the agent, and anything appended could
+// break it, so it is left alone and the line is shown instead.
+func setupPowerShellProfile(setup platform.ShellSetup, firstRun bool, hint io.Writer) {
+	content, err := os.ReadFile(setup.RcPath)
+	if os.IsNotExist(err) {
+		if firstRun {
+			fmt.Fprintln(hint, "To start sshush in new PowerShell windows, add this line to "+setup.RcPath+":")
+			fmt.Fprint(hint, "  "+setup.Snippet)
+		}
+		return
+	}
+	if err != nil {
+		return
+	}
+	text, enc, ok := decodeTextFile(content)
+	if !ok {
+		if firstRun {
+			fmt.Fprintln(hint, "Could not read "+setup.RcPath+" as UTF-8 or UTF-16 text, so it was left alone.")
+			fmt.Fprintln(hint, "To start sshush in new PowerShell windows, add this line to it:")
+			fmt.Fprint(hint, "  "+setup.Snippet)
+		}
+		return
+	}
+	if platform.PowerShellProfileStartsAgent(text) {
+		return
+	}
+	addition := "# sshush: start agent in new shells\n" + setup.Snippet
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		addition = "\n" + addition
+	}
+	if strings.Contains(text, "\r\n") {
+		addition = strings.ReplaceAll(addition, "\n", "\r\n")
+	}
+	f, err := os.OpenFile(setup.RcPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(encodeText(addition, enc))
+}
+
+// opensshAgentService is the service name of Windows' own agent, shown in the
+// Services list as "OpenSSH Authentication Agent".
+const opensshAgentService = "ssh-agent"
+
+// otherSSHAgent is what was seen on this machine that suggests ssh already
+// talks to an agent other than sshush. It is gathered by the caller and passed
+// to setupSSHIdentityAgent, which keeps that function free of Windows calls.
+type otherSSHAgent struct {
+	// ServiceRunning is true when Windows' "OpenSSH Authentication Agent"
+	// service is running: the agent ssh.exe uses when nothing says otherwise.
+	ServiceRunning bool
+	// EnvAuthSock is SSH_AUTH_SOCK in this process's environment.
+	EnvAuthSock string
+	// PersistedAuthSock is the SSH_AUTH_SOCK new processes are given (see
+	// platform.PersistedEnv), which a window opened before it was set lacks.
+	PersistedAuthSock string
+}
+
+// detectOtherSSHAgent looks for the signs of another agent. It is a variable so
+// tests of SetupConfig do not depend on what the machine running them has.
+var detectOtherSSHAgent = func() otherSSHAgent {
+	persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
+	return otherSSHAgent{
+		ServiceRunning:    platform.WindowsServiceRunning(opensshAgentService),
+		EnvAuthSock:       os.Getenv("SSH_AUTH_SOCK"),
+		PersistedAuthSock: persisted,
+	}
+}
+
+// signals describes what in o points at an agent other than the one on pipe,
+// one phrase per sign, for the hint. SSH_AUTH_SOCK naming sshush's own pipe is
+// not a sign of anything: it is what the PowerShell profile line sets.
+func (o otherSSHAgent) signals(pipe string) []string {
+	var seen []string
+	if o.ServiceRunning {
+		seen = append(seen, `the Windows "OpenSSH Authentication Agent" service is running`)
+	}
+	env, persisted := strings.TrimSpace(o.EnvAuthSock), strings.TrimSpace(o.PersistedAuthSock)
+	if env != "" && !samePipe(env, pipe) {
+		seen = append(seen, "SSH_AUTH_SOCK is set to "+env)
+	}
+	if persisted != "" && !samePipe(persisted, pipe) && persisted != env {
+		seen = append(seen, "SSH_AUTH_SOCK is set to "+persisted+" for new programs")
+	}
+	return seen
+}
+
+// samePipe reports whether a and b name the same pipe. Windows ignores case in
+// pipe names and takes either slash, and ssh's config needs forward ones, so
+// the one pipe is commonly written several ways.
+func samePipe(a, b string) bool {
+	norm := func(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), "/", `\`) }
+	return strings.EqualFold(norm(a), norm(b))
+}
+
+// setupSSHIdentityAgent names the agent's pipe in sshDir's config file, so ssh
+// finds sshush even where SSH_AUTH_SOCK is not set (cmd, Git, a shell with no
+// profile). It does nothing without an existing sshDir, and leaves alone a
+// config that already sets IdentityAgent anywhere: that is the user's choice of
+// agent. The block goes last, where ssh reads it after every more specific Host.
+//
+// A config without IdentityAgent is not proof that no agent was chosen, though:
+// ssh.exe finds Windows' own agent with no configuration at all, and any agent
+// can be named by SSH_AUTH_SOCK. IdentityAgent overrides both, so writing it
+// would quietly take ssh away from an agent that is working. When other shows
+// either sign, the config is left alone and the block is printed for the user
+// to add if sshush is the agent they want.
+func setupSSHIdentityAgent(sshDir, pipe string, other otherSSHAgent, note io.Writer) {
+	if st, err := os.Stat(sshDir); err != nil || !st.IsDir() {
+		return
+	}
+	path := filepath.Join(sshDir, "config")
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return
+	}
+	if sshConfigSetsIdentityAgent(string(content)) {
+		return
+	}
+	// Forward slashes: ssh treats a backslash in its config as an escape.
+	block := "Host *\n    IdentityAgent " + strings.ReplaceAll(pipe, `\`, "/") + "\n"
+	if seen := other.signals(pipe); len(seen) > 0 {
+		fmt.Fprintln(note, "Another ssh agent appears to be in use ("+strings.Join(seen, "; ")+"), so "+utils.DisplayPath(path)+" was left alone.")
+		fmt.Fprintln(note, "To have ssh use sshush instead, add this to that file:")
+		fmt.Fprint(note, "  "+strings.ReplaceAll(strings.TrimSuffix(block, "\n"), "\n", "\n  ")+"\n")
+		return
+	}
+	addition := "# sshush: use the sshush agent\n" + block
+	if len(content) > 0 {
+		if content[len(content)-1] != '\n' {
+			addition = "\n" + addition
+		}
+		addition = "\n" + addition
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(addition); err == nil {
+		fmt.Fprintln(note, "Added IdentityAgent for sshush to "+utils.DisplayPath(path))
+	}
+}
+
+// sshConfigSetsIdentityAgent reports whether ssh config content has an
+// IdentityAgent line that is not commented out.
+func sshConfigSetsIdentityAgent(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "identityagent") {
+			return true
+		}
+	}
+	return false
 }

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 // EnsureHostKey makes path usable as the server's host key, generating a new
@@ -30,24 +32,21 @@ func EnsureHostKey(path string) (created bool, err error) {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := secfile.MkdirAll(dir); err != nil {
 		return false, fmt.Errorf("server: create host key directory %s: %w", dir, err)
 	}
 	keyPEM, err := generateHostKeyPEM()
 	if err != nil {
 		return false, err
 	}
-	// O_EXCL rather than a plain create: two servers starting at once must not
-	// each write a key and hand out different identities.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
+	// WriteNewFile rather than WriteFile: two servers starting at once must not
+	// each write a key and hand out different identities, so the loser of that
+	// race takes the winner's key. It also creates the file already private,
+	// which on Windows a mode alone would not do.
+	if err := secfile.WriteNewFile(path, keyPEM); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, checkHostKey(path)
 		}
-		return false, fmt.Errorf("server: write host key %s: %w", path, err)
-	}
-	defer f.Close()
-	if _, err := f.Write(keyPEM); err != nil {
 		return false, fmt.Errorf("server: write host key %s: %w", path, err)
 	}
 	return true, nil

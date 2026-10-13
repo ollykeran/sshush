@@ -60,6 +60,18 @@ func SessionUnload(s *agent.Session, fingerprint string) error {
 	return err
 }
 
+// Identities returns every identity in the vault behind s, whether or not it is
+// loaded in this session, so a client can show and select from a vault whose
+// file it cannot read. A locked vault reports [agent.ErrVaultLocked], and an
+// sshushd older than the operation reports [agent.ErrOpUnknown].
+func Identities(s *agent.Session) (Listing, error) {
+	data, err := s.Op(agent.OpListIdentities, nil)
+	if err != nil {
+		return Listing{}, err
+	}
+	return decodeListing(data)
+}
+
 // UnlockWithRecoveryPhrase unlocks the vault behind s with its 24-word BIP-39
 // recovery phrase. A vault created with --no-recovery reports
 // [agent.ErrNoRecovery] rather than a wrong-phrase error.

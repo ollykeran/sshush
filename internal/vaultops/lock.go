@@ -10,7 +10,7 @@ func Lock(env Env) error {
 		return err
 	}
 	defer c.close()
-	return describe(c.session.Lock(nil), "lock", "")
+	return c.describe(c.session.Lock(nil), "")
 }
 
 // UnlockPassphrase unlocks the vault agent with its master passphrase. The
@@ -21,7 +21,7 @@ func UnlockPassphrase(env Env, passphrase []byte) error {
 		return err
 	}
 	defer c.close()
-	return describe(c.session.Unlock(passphrase), "unlock", "")
+	return c.describe(c.session.Unlock(passphrase), "")
 }
 
 // UnlockRecovery unlocks the vault agent with its 24-word BIP-39 recovery
@@ -33,5 +33,5 @@ func UnlockRecovery(env Env, mnemonic string) error {
 		return err
 	}
 	defer c.close()
-	return describe(vault.UnlockWithRecoveryPhrase(c.session, mnemonic), "unlock-recovery", "")
+	return c.describe(vault.UnlockWithRecoveryPhrase(c.session, mnemonic), "")
 }

@@ -3,9 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"charm.land/bubbles/v2/table"
@@ -14,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/clipboard"
 	"github.com/ollykeran/sshush/internal/keys"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -523,21 +522,7 @@ func copyToClipboardCmd(text string) tea.Cmd {
 }
 
 func copyToClipboard(text string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "linux":
-		if os.Getenv("WAYLAND_DISPLAY") != "" {
-			cmd = exec.Command("wl-copy")
-		} else {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
-		}
-	case "darwin":
-		cmd = exec.Command("pbcopy")
-	default:
-		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
-	}
-	cmd.Stdin = strings.NewReader(text)
-	return cmd.Run()
+	return clipboard.Copy(text)
 }
 
 func exportSavePubKeyCmd(pubKeyStr, filename string) tea.Cmd {

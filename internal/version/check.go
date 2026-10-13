@@ -199,8 +199,11 @@ func escapeModulePath(path string) string {
 	return b.String()
 }
 
+// platformKeyFor names the release checksum for the binary at binPath:
+// "sshush-linux-amd64", and likewise "sshush-windows-amd64" for sshush.exe.
 func platformKeyFor(binPath string) string {
-	return fmt.Sprintf("%s-%s-%s", filepath.Base(binPath), runtime.GOOS, runtime.GOARCH)
+	name := strings.TrimSuffix(filepath.Base(binPath), ".exe")
+	return fmt.Sprintf("%s-%s-%s", name, runtime.GOOS, runtime.GOARCH)
 }
 
 func verifyChecksum(binPath string, r io.Reader) (string, error) {

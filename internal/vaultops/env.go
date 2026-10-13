@@ -11,22 +11,44 @@ type PassphraseFunc func(prompt string) ([]byte, error)
 
 // Env names the vault and the agent a verb works against, and says whether the
 // front end can ask the user for a passphrase.
+//
+// A verb works on the running agent's own vault whenever a vault agent answers:
+// the agent is asked what its vault holds, so the vault file need not be
+// readable from here, or even on this machine. VaultPath is what a verb falls
+// back on when there is no such agent to ask, and NamedVault is how the user
+// says "this file, not the agent's".
 type Env struct {
 	// VaultPath is [vault].vault_path or --vault-path, before ~ expansion and
 	// before the directory-or-file resolution [vault.ResolveToFile] does. Empty
-	// means no vault was configured; only the verbs that talk purely to the
-	// agent tolerate that.
+	// means no vault file was configured, which is fine while a vault agent is
+	// there to answer for its own.
 	VaultPath string
+
+	// NamedVault reports that the user named VaultPath for this one command
+	// (--vault-path) rather than it coming from config. A named vault is read
+	// from its file even when a vault agent is running, since it may not be
+	// that agent's vault.
+	NamedVault bool
 
 	// SocketPath is the agent socket to dial. Empty behaves as unreachable.
 	SocketPath string
 
 	// AgentVaultPath is the vault file the running agent was configured with,
-	// or "" when the agent is not vault-backed or that is unknown. It gates the
-	// transparent unlock: a passphrase is only ever asked for on an agent that
-	// serves the very vault being operated on, so listing some other vault
-	// never prompts for the running agent's secret.
+	// or "" when the agent is not vault-backed or that is unknown. It matters
+	// only for a named vault, where it gates the transparent unlock: naming
+	// some other vault never prompts for the running agent's secret.
 	AgentVaultPath string
+
+	// AgentUnmanaged reports that this sshush does not start, stop or reload
+	// the agent ([agent].type = "external"), so a remedy must not tell the user
+	// to do that from here.
+	AgentUnmanaged bool
+
+	// AgentElsewhere reports that the agent runs somewhere 'sshush reload' here
+	// does not reach: an external agent, or the one on Windows that
+	// [agent].type = "windows" relays to. A stale daemon there has to be
+	// restarted where it runs.
+	AgentElsewhere bool
 
 	// AskPassphrase prompts for the agent's unlock passphrase. Nil means this
 	// front end cannot prompt — the TUI drives its passphrase modal from its
@@ -41,6 +63,9 @@ func (e Env) vaultFile() string { return resolveVaultPath(e.VaultPath) }
 
 // agentVaultFile is vaultFile for the vault the running agent serves.
 func (e Env) agentVaultFile() string { return resolveVaultPath(e.AgentVaultPath) }
+
+// namedVault reports whether the user named a vault file for this command.
+func (e Env) namedVault() bool { return e.NamedVault && e.VaultPath != "" }
 
 func resolveVaultPath(path string) string {
 	if path == "" {

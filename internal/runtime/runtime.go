@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/config"
@@ -124,6 +125,10 @@ func ResolveEditor(editorFlag string) string {
 	}
 	if _, err := exec.LookPath("nano"); err == nil {
 		return "nano"
+	}
+	if goruntime.GOOS == "windows" {
+		// The one editor every Windows machine has; it returns when its window closes.
+		return "notepad"
 	}
 	return "vi"
 }

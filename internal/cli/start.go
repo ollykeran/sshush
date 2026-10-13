@@ -1,16 +1,19 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/bridge"
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/spf13/cobra"
@@ -19,11 +22,11 @@ import (
 func newStartCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "start",
-		Example: "sshush start\n\neval $(sshush start)\n\nsshush start --shell fish | source",
+		Example: "sshush start\n\neval $(sshush start)\n\nsshush start --shell fish | source\n\nsshush start --shell powershell | Invoke-Expression",
 		Short:   "Start the sshush agent daemon",
 		Long: "Start the sshush agent daemon in the background.\n\n" +
 			"When stdout is not a terminal, prints a line that sets SSH_AUTH_SOCK for the calling shell; " +
-			"its syntax comes from [agent].shell in config, or --shell (posix or fish).",
+			"its syntax comes from [agent].shell in config, or --shell (" + platform.ShellNames + ").",
 		Args: argsNoneOrHelp,
 		RunE: runStart,
 	}
@@ -34,7 +37,7 @@ func newStartCommand() *cobra.Command {
 
 // addShellFlag registers --shell, which picks the syntax of the SSH_AUTH_SOCK line.
 func addShellFlag(cmd *cobra.Command) {
-	cmd.Flags().String("shell", "", "syntax of the SSH_AUTH_SOCK line printed for eval: posix or fish (default: [agent].shell from config, else posix)")
+	cmd.Flags().String("shell", "", "syntax of the SSH_AUTH_SOCK line printed for eval: "+platform.ShellNames+" (default: [agent].shell from config, else posix)")
 }
 
 // printAuthSockLine writes the SSH_AUTH_SOCK line to stdout (for eval) only when stdout is piped.
@@ -69,10 +72,13 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if f := cmd.Flags().Lookup("shell"); f != nil && f.Changed {
 		shell = f.Value.String()
 	}
-	absSocket, _ := filepath.Abs(cfg.SocketPath)
+	absSocket, _ := transport.Abs(cfg.SocketPath)
 	authSockLine, err := platform.AuthSockLine(shell, absSocket)
 	if err != nil {
-		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use posix or fish)").AsError()
+		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use " + platform.ShellNames + ")").AsError()
+	}
+	if cfg.RelaysToWindows() {
+		return runStartRelay(&cfg, absConfigPath, authSockLine)
 	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		printAuthSockLine(authSockLine)
@@ -129,18 +135,147 @@ func runStartDaemon(cmd *cobra.Command) error {
 		out.Error("no keys will be loaded")
 	}
 
+	if err := startDaemonProcess(absConfigPath, cfg.SocketPath); err != nil {
+		return err
+	}
+	return startSuccess(out, &cfg, authSockLine)
+}
+
+// startDaemonProcess starts sshushd for the config at absConfigPath, refusing
+// when the pidfile says one is already running.
+func startDaemonProcess(absConfigPath, socketPath string) error {
 	pidFilePath := runtime.PidFilePath()
-	if _, err := os.Stat(pidFilePath); err == nil {
+	if sshushd.PidFileLive(pidFilePath) {
 		return style.NewOutput().
 			Error("sshushd already running (pidfile " + utils.DisplayPath(pidFilePath) + " exists)").
 			Info("use 'sshush reload' to apply config changes").
 			AsError()
 	}
+	// A pidfile whose daemon is gone (it was killed, or the machine rebooted
+	// with the pidfile somewhere that survives that) must not block the start.
+	_ = os.Remove(pidFilePath)
 
-	if err := sshushd.StartDaemon(absConfigPath, cfg.SocketPath); err != nil {
+	if err := sshushd.StartDaemon(absConfigPath, socketPath); err != nil {
 		return style.NewOutput().Error(err.Error()).AsError()
 	}
-	return startSuccess(out, &cfg, authSockLine)
+	return nil
+}
+
+// runStartRelay is start for [agent].type = "windows": the agent is the one
+// sshush runs on the Windows side of this WSL distro, and the daemon here only
+// relays to it. Both halves are started if they are not running, so this one
+// command is all a WSL shell needs, whatever state Windows is in.
+//
+// Every connection through the relay costs a Windows process, and this runs
+// in every new shell, so everything it learns from the agent comes over one
+// connection: the round trip that shows an agent is there also says what kind
+// it is, and the same session then carries the unlock and the key list. The
+// "Agent:" line other commands have printed for them before they run comes
+// from that answer too (see commandPrintsAgentMode).
+func runStartRelay(cfg *config.Config, absConfigPath, authSockLine string) error {
+	absSocket, _ := transport.Abs(cfg.SocketPath)
+
+	startedRelay := false
+	if !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
+		if err := startDaemonProcess(absConfigPath, cfg.SocketPath); err != nil {
+			printAgentModeLine(cfg, "", false, true)
+			return err
+		}
+		startedRelay = true
+	}
+	session, backend, startedWindows, err := connectWindowsAgent(cfg)
+	if err != nil {
+		printAgentModeLine(cfg, "", false, false)
+		return err
+	}
+	defer session.Close()
+	printAgentModeLine(cfg, backend.Mode, true, false)
+
+	printAuthSockLine(authSockLine)
+	out := style.NewOutput()
+	state := "running at "
+	if startedRelay {
+		state = "started with socket: "
+	}
+	out.Success("* sshushd " + state + utils.DisplayPath(absSocket))
+	out.Info("relaying to the sshush agent on Windows")
+
+	// What is behind the relay is the agent's to say, not this config's. A
+	// locked vault is worth a prompt when this run brought something up, as it
+	// is for a vault started here; a shell that finds everything already
+	// running is left alone, and told the vault is locked.
+	if (startedRelay || startedWindows) && backend.Mode == "vault" && backend.VaultLocked {
+		promptUnlock(session, out)
+	}
+	out.Spacer()
+	_ = AppendKeysTo(session, out)
+	out.PrintErr()
+	return nil
+}
+
+// connectWindowsAgent returns a session on which the agent behind the relay
+// has answered, with what it said it is, starting the daemon on Windows if
+// nothing answers. started reports whether it had to. The caller closes the
+// session.
+func connectWindowsAgent(cfg *config.Config) (session *agent.Session, backend agent.Backend, started bool, err error) {
+	if session, backend, ok := probeAgent(cfg.SocketPath); ok {
+		return session, backend, false, nil
+	}
+	windows, err := bridge.Find(cfg.WindowsSSHush)
+	if err != nil {
+		return nil, agent.Backend{}, false, style.NewOutput().Error(err.Error()).AsError()
+	}
+	ctx := context.Background()
+	if err := windows.StartDaemon(ctx); err != nil {
+		return nil, agent.Backend{}, false, style.NewOutput().
+			Error("could not start the sshush agent on Windows").
+			Info(err.Error()).
+			AsError()
+	}
+	if session, backend, ok := probeAgent(cfg.SocketPath); ok {
+		return session, backend, true, nil
+	}
+	// It started, or said it did, and still nothing answers. Ask the relay
+	// itself: an sshush.exe from before the relay command says so here.
+	out := style.NewOutput().Error("the sshush agent on Windows is not answering through the relay")
+	if said := windows.Diagnose(ctx); said != "" {
+		out.Info("'" + utils.DisplayPath(windows.Path) + " relay' says: " + said)
+	}
+	out.Info("Both sides need the same sshush version.")
+	return nil, agent.Backend{}, true, out.AsError()
+}
+
+// probeAgent opens a session on socketPath and asks the agent what it is. It
+// reports ok, and leaves the session open for the caller, only when the agent
+// answered. Connecting is not enough to tell: a relay accepts the connection
+// whether or not anything is behind it.
+func probeAgent(socketPath string) (session *agent.Session, backend agent.Backend, ok bool) {
+	session, err := agent.Open(socketPath)
+	if err != nil {
+		return nil, agent.Backend{}, false
+	}
+	backend, err = session.Backend()
+	if err != nil {
+		_ = session.Close()
+		return nil, agent.Backend{}, false
+	}
+	return session, backend, true
+}
+
+// promptUnlock asks for the vault's passphrase and unlocks the agent behind
+// session, noting on out why if that does not happen.
+func promptUnlock(session *agent.Session, out *style.Output) {
+	passphrase, err := readPassphrase("Passphrase: ")
+	if err != nil {
+		out.Spacer()
+		out.Error("unlock skipped: " + err.Error())
+		return
+	}
+	defer ClearBytes(passphrase)
+	if err := session.Unlock(passphrase); err != nil {
+		out.Spacer()
+		out.Error("unlock failed: " + err.Error())
+	}
 }
 
 // startSuccess prints authSockLine to stdout (for eval) only when stdout is
@@ -148,7 +283,7 @@ func runStartDaemon(cmd *cobra.Command) error {
 // If the agent uses a vault, prompts for passphrase and unlocks before listing keys.
 func startSuccess(out *style.Output, cfg *config.Config, authSockLine string) error {
 	socketPath := cfg.SocketPath
-	absSocket, _ := filepath.Abs(socketPath)
+	absSocket, _ := transport.Abs(socketPath)
 
 	printAuthSockLine(authSockLine)
 
@@ -170,17 +305,7 @@ func startSuccess(out *style.Output, cfg *config.Config, authSockLine string) er
 				// Vault file missing or uninitialized; daemon fell back to key_paths or empty
 				// Do not prompt for passphrase
 			} else {
-				passphrase, err := readPassphrase("Passphrase: ")
-				if err != nil {
-					out.Spacer()
-					out.Error("unlock skipped: " + err.Error())
-				} else {
-					if err := session.Unlock(passphrase); err != nil {
-						out.Spacer()
-						out.Error("unlock failed: " + err.Error())
-					}
-					ClearBytes(passphrase)
-				}
+				promptUnlock(session, out)
 			}
 		}
 		out.Spacer()

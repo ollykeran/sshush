@@ -73,3 +73,30 @@ func TestCheckAlreadyRunning_false(t *testing.T) {
 		t.Fatal("CheckAlreadyRunning should return false for non-existent socket")
 	}
 }
+
+func TestPidFileLive(t *testing.T) {
+	dir := t.TempDir()
+
+	missing := filepath.Join(dir, "missing.pid")
+	if PidFileLive(missing) {
+		t.Error("a missing pidfile must not count as a running daemon")
+	}
+
+	// Unreadable as a pid: refuse to guess, so a second daemon is not started.
+	garbled := filepath.Join(dir, "garbled.pid")
+	if err := os.WriteFile(garbled, []byte("not-a-number\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !PidFileLive(garbled) {
+		t.Error("an unparsable pidfile must count as live")
+	}
+
+	// A pid no process has: what a daemon that was killed leaves behind.
+	stale := filepath.Join(dir, "stale.pid")
+	if err := os.WriteFile(stale, []byte("2147483646\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if PidFileLive(stale) {
+		t.Error("a pidfile naming a dead process must not count as a running daemon")
+	}
+}

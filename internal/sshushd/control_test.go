@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,6 +15,9 @@ import (
 )
 
 func TestStartServerDaemon_alreadyRunningPort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the SSH server is not supported on Windows")
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +54,9 @@ func TestStartServerDaemon_alreadyRunningPort(t *testing.T) {
 }
 
 func TestStopDaemon_removesPidfile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sh")
+	}
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "test.pid")
 
@@ -85,6 +92,9 @@ func TestStopDaemon_removesPidfile(t *testing.T) {
 }
 
 func TestStartServerDaemon_pidFileRunning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the SSH server is not supported on Windows")
+	}
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "sshush-server.pid")
 	t.Setenv("XDG_RUNTIME_DIR", dir)
@@ -152,6 +162,9 @@ func TestStartDaemon_alreadyRunning(t *testing.T) {
 }
 
 func TestStartDaemon_surfacesChildFailureMessage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sh")
+	}
 	binDir := t.TempDir()
 	scriptPath := filepath.Join(binDir, "sshushd")
 	script := "#!/bin/sh\neval \"printf '%s' 'stub failure message' >&${" + readypipe.EnvVar + "}\"\nexit 1\n"

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 func TestVaultFile_JSONRoundTrip(t *testing.T) {
@@ -136,13 +138,8 @@ func TestVaultStore_SaveAndLoad(t *testing.T) {
 	if len(idents) != 1 || idents[0].Fingerprint != "SHA256:xyz" {
 		t.Errorf("loaded identities: got %v", idents)
 	}
-	// File should be 0600
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&0077 != 0 {
-		t.Errorf("file should not be readable by others: mode %v", info.Mode())
+	if private, err := secfile.IsPrivate(path); err != nil || !private {
+		t.Errorf("file should not be readable by others (private=%v, err=%v)", private, err)
 	}
 }
 
