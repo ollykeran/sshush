@@ -99,6 +99,10 @@ func printAgentModeLine(cfg *config.Config, liveMode string, answered, skipUnrea
 	if !isTTYStderr() {
 		return
 	}
+	if cfg.RelaysToWindows() {
+		fmt.Fprintln(os.Stderr, style.RelayedAgentModeIndicatorLine(liveMode, answered, skipUnreachableNote))
+		return
+	}
 	fmt.Fprintln(os.Stderr, style.AgentModeIndicatorLine(configModeLabel(cfg), liveMode, answered, skipUnreachableNote))
 }
 
