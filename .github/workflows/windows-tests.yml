@@ -1,0 +1,58 @@
+name: windows tests
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # No race detector or gotestdox here: plain go test keeps the job free of the
+  # shell tooling the just recipes assume. Tests that only make sense on Unix
+  # (the SSH server's sessions, Unix path layouts) skip themselves.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  # An sshush inside a WSL distro, with [agent].type = "windows", against
+  # sshush.exe and sshushd.exe on the runner itself: the relay across the real
+  # boundary. Everything is built on the Windows side, test binary included, so
+  # the distro needs no Go.
+  test-wsl:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+      - name: Build both sides and the test binary
+        shell: bash
+        run: |
+          go build -o build/windows-amd64/sshush.exe ./cmd/sshush
+          go build -o build/windows-amd64/sshushd.exe ./cmd/sshushd
+          export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
+          go build -o build/linux-amd64/sshush ./cmd/sshush
+          go build -o build/linux-amd64/sshushd ./cmd/sshushd
+          go test -c -o build/linux-amd64/e2e.test ./test/e2e
+      - name: Run the interop tests inside the distro
+        shell: wsl-bash {0}
+        run: |
+          export SSHUSH_E2E_WSL=1
+          export SSHUSH_E2E_BIN_DIR="$PWD/build/linux-amd64"
+          export SSHUSH_E2E_WINDOWS_BIN_DIR="$PWD/build/windows-amd64"
+          "$SSHUSH_E2E_BIN_DIR/e2e.test" -test.run '^TestE2E_WSL' -test.v -test.timeout 5m | tee /tmp/wsl-e2e.log
+          # A skip here would be a green job that crossed no boundary.
+          if ! grep -q -- '--- PASS: TestE2E_WSL' /tmp/wsl-e2e.log || grep -q -- '--- SKIP' /tmp/wsl-e2e.log; then
+            echo "the WSL interop tests did not all run" >&2
+            exit 1
+          fi

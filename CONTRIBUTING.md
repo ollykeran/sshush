@@ -7,6 +7,24 @@
 3. Run `just build` to build both binaries.
 4. Run `just test` to run tests.
 
+## What CI tests, and where
+
+| Job | Runs on | Covers |
+|---|---|---|
+| `test`, `test-macos` | Linux, macOS | The whole suite, including `test/e2e` against built binaries. |
+| `windows / test-windows` | Windows | The whole suite on Windows: the named pipe, file permissions, and `sshush relay` as a real process against a running `sshushd.exe`. |
+| `windows / test-wsl` | Windows with a WSL 2 distro | `[agent].type = "windows"` across the real boundary: an sshush in the distro relaying to `sshush.exe` on the runner. |
+
+`just act test` runs the Linux job locally. `act` cannot run the Windows jobs from macOS or Linux.
+
+To run the WSL tests yourself, on a Windows machine, from a checkout on a Windows drive (`/mnt/c/...`) inside the distro:
+
+```sh
+just e2e-wsl
+```
+
+They are skipped everywhere else (`SSHUSH_E2E_WSL` is unset). A tag is not released unless both Windows jobs pass.
+
 ## Code style
 
 - Run `go fmt`, `just lint` (golangci-lint).

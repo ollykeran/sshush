@@ -9,7 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  # A tag does not run test.yml, and the release job below tests on Linux only:
+  # without this the Windows binaries would be published untested.
+  windows:
+    uses: ./.github/workflows/windows-tests.yml
+
   release:
+    needs: windows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
