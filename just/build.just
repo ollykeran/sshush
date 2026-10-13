@@ -51,6 +51,8 @@ build arch="": deps
         build_local darwin arm64 "{{ build_dir }}/darwin-arm64"
         echo "Building darwin/amd64..."
         build_local darwin amd64 "{{ build_dir }}/darwin-amd64"
+        echo "Building windows/amd64..."
+        build_local windows amd64 "{{ build_dir }}/windows-amd64"
         ;;
       "")
         host_os="$(go env GOOS)"
