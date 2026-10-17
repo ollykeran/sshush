@@ -10,6 +10,10 @@ build arch="": deps
       if [ "$os" = "windows" ]; then ext=".exe"; fi
       CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd$ext" ./cmd/sshushd
       CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush$ext" ./cmd/sshush
+      if [ "$os" = "windows" ]; then
+        # GUI subsystem: Windows opens no console window for the tray.
+        CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-H=windowsgui -X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush-tray$ext" ./cmd/sshush-tray
+      fi
     }
     case "{{ arch }}" in
       dev)
