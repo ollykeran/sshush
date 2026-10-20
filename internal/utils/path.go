@@ -45,15 +45,43 @@ func ContractHomeDirectory(path string) string {
 
 // DisplayPath formats a path for user-visible output: it is made absolute when
 // possible, then ContractHomeDirectory is applied so paths under $HOME use ~.
+// A Windows path into a WSL distro, such as a key added from WSL, is shown as
+// the Linux path it names (see WSLPath).
 func DisplayPath(path string) string {
 	if path == "" {
 		return path
+	}
+	if _, linux, ok := WSLPath(path); ok {
+		return ContractHomeDirectory(linux)
 	}
 	p := path
 	if abs, err := filepath.Abs(path); err == nil {
 		p = abs
 	}
 	return ContractHomeDirectory(p)
+}
+
+// WSLPath splits a Windows path into a WSL distro's files,
+// \\wsl.localhost\<distro>\... or the older \\wsl$\<distro>\..., into the
+// distro's name and the Linux path within it. ok is false for any other path.
+// Either slash is accepted, as Windows accepts both.
+func WSLPath(path string) (distro, linux string, ok bool) {
+	p := strings.ReplaceAll(path, `\`, "/")
+	var rest string
+	for _, host := range []string{"//wsl.localhost/", "//wsl$/"} {
+		if len(p) > len(host) && strings.EqualFold(p[:len(host)], host) {
+			rest = p[len(host):]
+			break
+		}
+	}
+	if rest == "" {
+		return "", "", false
+	}
+	distro, linux, _ = strings.Cut(rest, "/")
+	if distro == "" {
+		return "", "", false
+	}
+	return distro, "/" + linux, true
 }
 
 // KeyPath is a discovered private key file path. If the path is a symlink,
