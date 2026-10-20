@@ -41,6 +41,13 @@ func BuildAddKeyOptsPayload(path string, autoload bool) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vault: read key file %s: %w", path, err)
 	}
+	defer clear(pemData)
+	return buildAddKeyOptsPayloadPEM(pemData, path, autoload), nil
+}
+
+// buildAddKeyOptsPayloadPEM is BuildAddKeyOptsPayload for a key already in
+// memory; path is recorded as where it came from.
+func buildAddKeyOptsPayloadPEM(pemData []byte, path string, autoload bool) []byte {
 	fpBytes := []byte(path)
 	payload := make([]byte, 1+4+len(pemData)+1+4+len(fpBytes))
 	payload[0] = 1 // version 1: includes filepath
@@ -54,5 +61,5 @@ func BuildAddKeyOptsPayload(path string, autoload bool) ([]byte, error) {
 	filepathOffset := 5 + len(pemData) + 1
 	binary.BigEndian.PutUint32(payload[filepathOffset:filepathOffset+4], uint32(len(fpBytes)))
 	copy(payload[filepathOffset+4:], fpBytes)
-	return payload, nil
+	return payload
 }

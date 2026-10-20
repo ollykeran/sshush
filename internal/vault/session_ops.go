@@ -33,6 +33,18 @@ func AddPrivateKeyFile(s *agent.Session, path string, autoload bool) error {
 	return nil
 }
 
+// AddPrivateKeyPEM is AddPrivateKeyFile for an unencrypted OpenSSH private
+// key already in memory, such as one the caller decrypted; path records where
+// it came from. The caller still owns, and should zero, pemData.
+func AddPrivateKeyPEM(s *agent.Session, pemData []byte, path string, autoload bool) error {
+	payload := buildAddKeyOptsPayloadPEM(pemData, path, autoload)
+	defer clear(payload)
+	if _, err := s.Op(agent.OpAddKey, payload); err != nil {
+		return fmt.Errorf("vault: add key to vault: %w", err)
+	}
+	return nil
+}
+
 // SetAutoload persists whether the identity with the given fingerprint is
 // loaded automatically when the vault is unlocked.
 func SetAutoload(s *agent.Session, fingerprint string, on bool) error {
