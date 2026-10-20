@@ -31,15 +31,15 @@ func Probe(socketPath string) Snapshot {
 }
 
 // Poll probes socketPath every interval, and at once whenever kick receives,
-// and sends a View on out only when it differs from the last one sent. It
-// returns when ctx is done.
-func Poll(ctx context.Context, socketPath string, interval time.Duration, kick <-chan struct{}, out chan<- View) {
+// and sends a View on out only when it differs from the last one sent. managed
+// is passed to ViewOf. It returns when ctx is done.
+func Poll(ctx context.Context, socketPath string, managed bool, interval time.Duration, kick <-chan struct{}, out chan<- View) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var last View
 	sent := false
 	for {
-		v := ViewOf(Probe(socketPath))
+		v := ViewOf(Probe(socketPath), managed)
 		if !sent || !v.Equal(last) {
 			select {
 			case out <- v:

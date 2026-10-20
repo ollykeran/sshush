@@ -66,7 +66,7 @@ func TestPollSendsOnlyChanges(t *testing.T) {
 	defer cancel()
 	kick := make(chan struct{})
 	out := make(chan View)
-	go Poll(ctx, path, time.Hour, kick, out)
+	go Poll(ctx, path, true, time.Hour, kick, out)
 
 	if v := <-out; v.Status != "No keys loaded" {
 		t.Fatalf("first view: got %+v", v)

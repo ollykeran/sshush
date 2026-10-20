@@ -10,6 +10,8 @@ package tray
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	ssh "golang.org/x/crypto/ssh"
@@ -28,55 +30,76 @@ const (
 )
 
 // View is everything the tray renders for one poll. Two equal Views render
-// identically, so the tray redraws only when the View changes.
+// identically, so the tray redraws only when the View changes. The menu shows
+// only this; everything that changes the agent is in the main window.
 type View struct {
 	Icon    Icon
 	Tooltip string
-	// Keys holds one label per identity the agent serves, in agent order.
-	Keys []string
+	// Heading names the agent and its state, such as "Vault agent, unlocked".
+	Heading string
+	// Keys holds one entry per key the agent serves, in agent order.
+	Keys []KeyItem
 	// Status, when not empty, stands in for Keys: why there is nothing to list.
-	Status    string
-	CanUnlock bool
-	CanLock   bool
+	Status string
+}
+
+// KeyItem is one key in the menu.
+type KeyItem struct {
+	Label       string // "comment  SHA256:…"
+	Fingerprint string // SHA256 fingerprint, empty when the key does not parse
 }
 
 // Equal reports whether v and o render identically.
 func (v View) Equal(o View) bool {
-	if v.Icon != o.Icon || v.Tooltip != o.Tooltip || v.Status != o.Status ||
-		v.CanUnlock != o.CanUnlock || v.CanLock != o.CanLock || len(v.Keys) != len(o.Keys) {
-		return false
-	}
-	for i := range v.Keys {
-		if v.Keys[i] != o.Keys[i] {
-			return false
-		}
-	}
-	return true
+	return v.Icon == o.Icon && v.Tooltip == o.Tooltip && v.Heading == o.Heading &&
+		v.Status == o.Status && slices.Equal(v.Keys, o.Keys)
 }
 
 // Snapshot is what one poll learned from the agent. Err set means the agent
-// could not be reached or probed, and the other fields are meaningless.
+// did not answer, or answered nothing usable.
 type Snapshot struct {
 	Backend agent.Backend
 	Keys    []*sshagent.Key
 	Err     error
 }
 
-// ViewOf maps a Snapshot to what the tray shows.
-func ViewOf(s Snapshot) View {
-	if s.Err != nil {
-		return View{Icon: IconUnreachable, Tooltip: "sshush: agent not running", Status: "Agent not running"}
+// agentLine names the agent and its state in a few words, for the tray's
+// heading and the main window. managed reports whether sshush starts and
+// stops it, rather than it being someone else's agent.
+func agentLine(reachable, managed bool, b agent.Backend) string {
+	switch {
+	case !reachable && managed:
+		return "Agent not running"
+	case !reachable:
+		return "Agent not reachable"
+	case b.Mode == "vault" && b.VaultLocked:
+		return "Vault agent, locked"
+	case b.Mode == "vault":
+		return "Vault agent, unlocked"
+	case b.SpeaksOps:
+		return "Key agent, keys in memory"
 	}
-	if s.Backend.Mode == "vault" && s.Backend.VaultLocked {
-		return View{Icon: IconLocked, Tooltip: "sshush: vault locked", Status: "Vault locked", CanUnlock: true}
+	return "External agent"
+}
+
+// ViewOf maps a Snapshot to what the tray shows. managed reports whether the
+// agent is one sshush starts and stops, rather than an external agent.
+func ViewOf(s Snapshot, managed bool) View {
+	v := View{Heading: agentLine(s.Err == nil, managed, s.Backend)}
+	switch {
+	case s.Err != nil:
+		v.Icon = IconUnreachable
+		v.Tooltip = "sshush: " + strings.ToLower(v.Heading)
+		return v
+	case s.Backend.Mode == "vault" && s.Backend.VaultLocked:
+		v.Icon = IconLocked
+		v.Tooltip = "sshush: vault locked"
+		return v
 	}
-	v := View{Icon: IconKeys, Keys: keyLabels(s.Keys)}
-	if s.Backend.Mode == "vault" {
-		v.Icon = IconUnlocked
-		v.CanLock = true
-	}
+	v.Icon, v.Keys = IconKeys, keyItems(s.Keys)
 	v.Tooltip = fmt.Sprintf("sshush: %s", plural(len(v.Keys), "key"))
 	if s.Backend.Mode == "vault" {
+		v.Icon = IconUnlocked
 		v.Tooltip = fmt.Sprintf("sshush: vault unlocked, %s", plural(len(v.Keys), "key"))
 	}
 	if len(v.Keys) == 0 {
@@ -85,22 +108,23 @@ func ViewOf(s Snapshot) View {
 	return v
 }
 
-// keyLabels renders each key as "comment  SHA256:…", falling back to the key
-// type when the comment is empty.
-func keyLabels(keys []*sshagent.Key) []string {
-	labels := make([]string, 0, len(keys))
+// keyItems labels each key "comment  SHA256:…", falling back to the key type
+// when the comment is empty.
+func keyItems(keys []*sshagent.Key) []KeyItem {
+	items := make([]KeyItem, 0, len(keys))
 	for _, k := range keys {
 		name := k.Comment
 		if name == "" {
 			name = k.Format
 		}
-		fp := "unparseable key"
+		item := KeyItem{Label: name + "  unparseable key"}
 		if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
-			fp = ssh.FingerprintSHA256(pub)
+			item.Fingerprint = ssh.FingerprintSHA256(pub)
+			item.Label = name + "  " + item.Fingerprint
 		}
-		labels = append(labels, name+"  "+fp)
+		items = append(items, item)
 	}
-	return labels
+	return items
 }
 
 func plural(n int, word string) string {
