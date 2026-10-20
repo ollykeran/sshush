@@ -16,28 +16,24 @@ jobs:
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+    # Every package for every target, as releases are built: without cgo. A
+    # file only one OS compiles, such as the Windows tray, is checked here
+    # for both architectures, not only on the OS that runs the tests.
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: build sshush
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: build
         run: |
           for i in 1 2 3; do
-            go build -o /dev/null ./cmd/sshush && exit 0
+            go build ./... && exit 0
             echo "build failed (attempt $i), retrying..."
           done
           exit 1
-      - name: build sshushd
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          for i in 1 2 3; do
-            go build -o /dev/null ./cmd/sshushd && exit 0
-            echo "build failed (attempt $i), retrying..."
-          done
-          exit 1
+      - name: vet
+        run: go vet ./...
