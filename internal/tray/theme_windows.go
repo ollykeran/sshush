@@ -354,3 +354,15 @@ func ctlColorText(msg, hdc uintptr, text colorRef) uintptr {
 	procSetBkColor.Call(hdc, uintptr(darkWindow))
 	return darkWindowBrush
 }
+
+// fieldCtlColor colours a read-only field, which Windows asks about as if it
+// were a label, like an editable one: it holds something to select and copy.
+func fieldCtlColor(hdc uintptr) uintptr {
+	if darkNow() {
+		return ctlColorText(wmCtlColorEdit, hdc, darkText)
+	}
+	procSetTextColor.Call(hdc, uintptr(sysColor(colorWindowText)))
+	procSetBkColor.Call(hdc, uintptr(sysColor(colorWindow)))
+	brush, _, _ := procGetSysColorBrush.Call(colorWindow)
+	return brush
+}

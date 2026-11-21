@@ -32,10 +32,21 @@ var iconUnlocked []byte
 // such as 'sshush lock' in a terminal. A probe is one local pipe round-trip.
 const pollInterval = 2 * time.Second
 
+// Options are how the tray was started.
+type Options struct {
+	// OpenWindow opens the main window as well, as a launch from the Start
+	// menu should; a start at sign-in leaves it closed.
+	OpenWindow bool
+	// KeyPaths are the config's key files, where a key in an agent that is
+	// not a vault may have come from.
+	KeyPaths []string
+}
+
 // Run shows the tray icon and blocks until the user picks Quit. Quitting the
 // tray never touches the agent.
-func Run(env vaultops.Env) {
-	t := &tray{env: env, kick: make(chan struct{}, 1)}
+func Run(env vaultops.Env, opts Options) {
+	t := &tray{env: env, kick: make(chan struct{}, 1), openOnReady: opts.OpenWindow, keyPaths: opts.KeyPaths}
+	refreshStartup()
 	initTheme()
 	systray.Run(t.ready, func() {})
 }
@@ -44,6 +55,9 @@ type tray struct {
 	env       vaultops.Env
 	kick      chan struct{}
 	prompting atomic.Bool
+	// openOnReady opens the main window once the icon is up.
+	openOnReady bool
+	keyPaths    []string
 }
 
 func (t *tray) ready() {
@@ -51,6 +65,9 @@ func (t *tray) ready() {
 	systray.SetTooltip("sshush")
 	// A click on the icon opens the main window; the menu is on right-click.
 	systray.SetOnTapped(t.openMain)
+	if t.openOnReady {
+		t.openMain()
+	}
 	views := make(chan View)
 	go Poll(context.Background(), t.env.SocketPath, !t.env.AgentUnmanaged, pollInterval, t.kick, views)
 	go func() {
@@ -103,29 +120,114 @@ func onClick(item *systray.MenuItem, f func()) {
 var errPromptOpen = errors.New("tray: an unlock prompt is already open")
 
 // promptUnlock asks for the vault passphrase until it unlocks the vault or
-// the user cancels, which returns errCancelled. A vault found already
+// the user cancels, which returns errCancelled. The dialog offers the
+// recovery phrase instead, for a forgotten passphrase. A vault found already
 // unlocked is not an error.
 func (t *tray) promptUnlock() error {
 	if !t.prompting.CompareAndSwap(false, true) {
 		return errPromptOpen
 	}
 	defer t.prompting.Store(false)
-	wrong := false
+	spec := inputSpec{
+		title:      "sshush",
+		message:    "Enter the vault passphrase to unlock the sshush agent.",
+		okLabel:    "Unlock",
+		extraLabel: "Use &recovery phrase…",
+		masked:     true,
+	}
 	for {
-		pass, err := promptPassphrase("Enter the vault passphrase to unlock the sshush agent.", wrong)
+		pass, button, err := promptInput(mainWindowHwnd.Load(), spec)
 		if err != nil {
 			return err
+		}
+		switch button {
+		case idCancel:
+			return errCancelled
+		case idExtra:
+			return t.promptRecovery()
 		}
 		err = vaultops.UnlockPassphrase(t.env, pass)
 		clear(pass)
 		switch vaultops.CodeOf(err) {
 		case vaultops.CodeWrongPassphrase:
-			wrong = true
+			spec.errText = "Wrong passphrase. Try again."
 			continue
 		case vaultops.CodeNotLocked:
 			return nil
 		}
 		return err
+	}
+}
+
+// promptRecovery asks for the vault's recovery phrase until it unlocks the
+// vault or the user cancels.
+func (t *tray) promptRecovery() error {
+	spec := inputSpec{
+		title:   "Unlock with recovery phrase",
+		message: "Enter the 24 words you were given when the vault was created, separated by spaces.",
+		okLabel: "Unlock",
+	}
+	for {
+		b, button, err := promptInput(mainWindowHwnd.Load(), spec)
+		if err != nil {
+			return err
+		}
+		if button != idOK {
+			return errCancelled
+		}
+		phrase := strings.Join(strings.Fields(strings.ToLower(string(b))), " ")
+		clear(b)
+		err = vaultops.UnlockRecovery(t.env, phrase)
+		switch {
+		case err == nil, vaultops.CodeOf(err) == vaultops.CodeNotLocked:
+			return nil
+		case vaultops.CodeOf(err) == vaultops.CodeWrongPassphrase:
+			spec.errText = "That phrase does not unlock this vault. Check each word."
+			continue
+		}
+		return err
+	}
+}
+
+// askNewPassphrase asks for a new vault passphrase and for it again, until
+// the two match and are long enough, or the user cancels.
+func askNewPassphrase(owner uintptr) ([]byte, error) {
+	first := inputSpec{
+		title:   "Create vault",
+		message: "Choose a passphrase for the vault. You will type it to unlock your keys, so make it one you will remember.",
+		okLabel: "Next",
+		masked:  true,
+	}
+	for {
+		pass, button, err := promptInput(owner, first)
+		if err != nil {
+			return nil, err
+		}
+		if button != idOK {
+			return nil, errCancelled
+		}
+		if problem := newPassphraseProblem(pass, nil); problem != "" {
+			clear(pass)
+			first.errText = problem
+			continue
+		}
+		confirm, button, err := promptInput(owner, inputSpec{
+			title: "Create vault", message: "Type the passphrase again.", okLabel: "Create", masked: true,
+		})
+		if err != nil || button != idOK {
+			clear(pass)
+			if err == nil {
+				err = errCancelled
+			}
+			return nil, err
+		}
+		problem := newPassphraseProblem(pass, confirm)
+		clear(confirm)
+		if problem == "" {
+			return pass, nil
+		}
+		clear(pass)
+		first.errText = problem
 	}
 }
 

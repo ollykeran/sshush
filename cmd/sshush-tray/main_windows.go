@@ -2,7 +2,9 @@
 // an icon showing whether the vault is locked, a menu naming the agent and
 // listing its keys, and a main window, opened by clicking the icon or from
 // the menu, to start and stop the agent, unlock it, and manage its keys.
-// Starting it replaces any sshush-tray already running for the user.
+// Starting it replaces any sshush-tray already running for the user, and
+// opens the main window unless --background is given, as it is when Windows
+// starts the tray at sign-in.
 // It is a client of the agent like the CLI, so closing or crashing it never
 // affects sshushd, though it can start and stop it as 'sshush start' and
 // 'sshush stop' do.
@@ -19,6 +21,7 @@ package main
 //go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest gui --icon ../../internal/tray/icons/keys.ico --product-name sshush --file-description "sshush tray" --out rsrc
 
 import (
+	"flag"
 	"os"
 
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -27,6 +30,8 @@ import (
 )
 
 func main() {
+	background := flag.Bool("background", false, "start in the notification area without opening the window")
+	flag.Parse()
 	cfg, err := tray.LoadConfig()
 	if err != nil {
 		fatal("could not read the sshush config: " + err.Error())
@@ -39,7 +44,7 @@ func main() {
 	if err := tray.TakeOver(); err != nil {
 		fatal("could not replace the running tray: " + err.Error())
 	}
-	tray.Run(tray.EnvFor(cfg, socketPath))
+	tray.Run(tray.EnvFor(cfg, socketPath), tray.Options{OpenWindow: !*background, KeyPaths: cfg.KeyPaths})
 }
 
 // fatal reports in a message box: a GUI program has no console to print to.

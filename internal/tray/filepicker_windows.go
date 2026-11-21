@@ -104,3 +104,47 @@ func isDir(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
 }
+
+var procGetSaveFileNameW = comdlg32.NewProc("GetSaveFileNameW")
+
+const saveFlags = 0x00080000 | // OFN_EXPLORER
+	0x00000800 | // OFN_PATHMUSTEXIST
+	0x00000002 | // OFN_OVERWRITEPROMPT
+	0x00000008 | // OFN_NOCHANGEDIR
+	0x00000004 | // OFN_HIDEREADONLY
+	0x02000000 // OFN_DONTADDTORECENT
+
+// pickSavePath shows Explorer's Save dialog for a new private key file,
+// owned by owner and starting at suggested, and returns the chosen path. It
+// returns errCancelled when the user closes the dialog.
+func pickSavePath(owner uintptr, suggested string) (string, error) {
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
+		defer windows.CoUninitialize()
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	copy(buf, utf16.Encode([]rune(filepath.Base(suggested))))
+	filter := utf16.Encode([]rune("All files (*.*)\x00*.*\x00\x00"))
+	title, _ := windows.UTF16PtrFromString("Save the new key as")
+	ofn := openFileName{
+		owner:       windows.HWND(owner),
+		filter:      &filter[0],
+		filterIndex: 1,
+		file:        &buf[0],
+		maxFile:     uint32(len(buf)),
+		title:       title,
+		flags:       saveFlags,
+	}
+	ofn.structSize = uint32(unsafe.Sizeof(ofn))
+	if dir := filepath.Dir(suggested); isDir(dir) {
+		ofn.initialDir, _ = windows.UTF16PtrFromString(dir)
+	}
+	if r, _, _ := procGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn))); r == 0 {
+		if code, _, _ := procCommDlgExtendedError.Call(); code != 0 {
+			return "", fmt.Errorf("tray: file dialog failed (code %#x)", code)
+		}
+		return "", errCancelled
+	}
+	return windows.UTF16ToString(buf), nil
+}

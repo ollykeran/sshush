@@ -9,14 +9,18 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/ollykeran/sshush/internal/clipboard"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/selftest"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vaultops"
+	"github.com/ollykeran/sshush/internal/version"
 	"golang.org/x/sys/windows"
 )
 
 // The main window is a dialog that runs its own modal loop on a thread of its
-// own, so the tray keeps working while it is open. Its list is a
+// own, so the tray keeps working while it is open. It can be resized: the
+// template creates its controls and mainLayout places them. Its list is a
 // common-controls ListView. Every operation runs on another goroutine, which
 // hands its result back with PostMessage, so a slow agent never freezes the
 // window.
@@ -25,16 +29,32 @@ var (
 	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
 	procPostMessageW         = user32.NewProc("PostMessageW")
 	procShowWindow           = user32.NewProc("ShowWindow")
+	procGetDlgCtrlID         = user32.NewProc("GetDlgCtrlID")
 	procGetFocus             = user32.NewProc("GetFocus")
 	procIsWindowEnabled      = user32.NewProc("IsWindowEnabled")
 	procLoadImageW           = user32.NewProc("LoadImageW")
 	procGetSystemMetrics     = user32.NewProc("GetSystemMetrics")
 	procMessageBoxW          = user32.NewProc("MessageBoxW")
+	procGetClientRect        = user32.NewProc("GetClientRect")
+	procBeginDeferWindowPos  = user32.NewProc("BeginDeferWindowPos")
+	procDeferWindowPos       = user32.NewProc("DeferWindowPos")
+	procEndDeferWindowPos    = user32.NewProc("EndDeferWindowPos")
+	procGetWindowPlacement   = user32.NewProc("GetWindowPlacement")
+	procSetWindowPlacement   = user32.NewProc("SetWindowPlacement")
+	procCreatePopupMenu      = user32.NewProc("CreatePopupMenu")
+	procAppendMenuW          = user32.NewProc("AppendMenuW")
+	procTrackPopupMenu       = user32.NewProc("TrackPopupMenu")
+	procDestroyMenu          = user32.NewProc("DestroyMenu")
+	procClientToScreen       = user32.NewProc("ClientToScreen")
+	procGetKeyState          = user32.NewProc("GetKeyState")
 	mainDialogProc           = windows.NewCallback(mainWindowProc)
 	initCommonControls       sync.Once
 )
 
 const (
+	wmSize              = 0x0005
+	wmGetMinMaxInfo     = 0x0024
+	wmContextMenu       = 0x007B
 	wmSetIcon           = 0x0080
 	wmNotify            = 0x004E
 	wmNextDlgCtl        = 0x0028
@@ -42,11 +62,18 @@ const (
 	wmMainDone          = wmApp + 1 // an operation finished; take mainWindow.result
 	wmMainRefresh       = wmApp + 2 // the tray saw the agent change
 	bnClicked           = 0
+	bmGetCheck          = 0x00F0
+	bmSetCheck          = 0x00F1
 	cbnSelChange        = 1
 	cbAddString         = 0x0143
 	cbGetCurSel         = 0x0147
 	cbSetCurSel         = 0x014E
+	swHide              = 0
+	swShowNormal        = 1
+	swMaximize          = 3
+	swShow              = 5
 	swRestore           = 9
+	sizeMinimized       = 1
 	iconSmall           = 0
 	iconBig             = 1
 	imageIcon           = 1
@@ -56,7 +83,9 @@ const (
 	lvmFirst            = 0x1000
 	lvmDeleteAllItems   = lvmFirst + 9
 	lvmGetNextItem      = lvmFirst + 12
+	lvmGetItemRect      = lvmFirst + 14
 	lvmEnsureVisible    = lvmFirst + 19
+	lvmGetColumnWidth   = lvmFirst + 29
 	lvmSetColumnWidth   = lvmFirst + 30
 	lvmSetItemState     = lvmFirst + 43
 	lvmSetExtendedStyle = lvmFirst + 54
@@ -71,14 +100,28 @@ const (
 	lvniSelected        = 0x2
 	lvisFocused         = 0x1
 	lvisSelected        = 0x2
+	lvirSelectBounds    = 3
 	lvscwAutosizeHeader = ^uintptr(1) // -2
 	lvnItemChanged      = 0xFFFFFF9B  // LVN_FIRST - 1, as the uint32 NMHDR.code holds it
 	lvnKeyDown          = 0xFFFFFF65  // LVN_FIRST - 55
 	nmDblClk            = 0xFFFFFFFD  // NM_FIRST - 3
+	vkControl           = 0x11
 	vkDelete            = 0x2E
+	vkF2                = 0x71
+	vkF5                = 0x74
 	mbYesNo             = 0x4
 	mbDefButton2        = 0x100
 	idYes               = 6
+	mfString            = 0x0000
+	mfGrayed            = 0x0001
+	mfSeparator         = 0x0800
+	tpmRightButton      = 0x0002
+	tpmReturnCmd        = 0x0100
+	swpNoZOrderActivate = 0x0004 | 0x0010 // NOZORDER, NOACTIVATE
+	defaultClientW      = 900             // the first open, at 96 DPI
+	defaultClientH      = 600
+	placementValue      = "MainWindow"
+	windowPlacementSize = 44 // sizeof(WINDOWPLACEMENT)
 )
 
 // initCommonControlsEx is INITCOMMONCONTROLSEX.
@@ -133,6 +176,19 @@ type nmLVKeyDown struct {
 	flags uint32
 }
 
+// minMaxInfo is MINMAXINFO.
+type minMaxInfo struct {
+	reserved, maxSize, maxPosition, minTrackSize, maxTrackSize [2]int32
+}
+
+// windowPlacement is WINDOWPLACEMENT.
+type windowPlacement struct {
+	length, flags, showCmd uint32
+	minPosition            [2]int32
+	maxPosition            [2]int32
+	normalPosition         [4]int32
+}
+
 // mainWindowHwnd is the open main window, or 0. The tray reads it to bring
 // the window forward rather than open a second, and to tell it to refresh.
 var mainWindowHwnd atomic.Uintptr
@@ -147,12 +203,17 @@ type mainWindow struct {
 	hwnd      uintptr
 	state     MainState
 	rows      []vaultops.IdentityView // what the list shows, in list order
+	detail    DetailView
 	busy      bool
 	statusErr bool
 	tone      Tone // the header's colour
 	// lastAgentGlyph keeps the start/stop button's icon while it is disabled.
 	lastAgentGlyph rune
 	ui             *uiCache
+	// frame is how much bigger the window is than its client area.
+	frame [2]int32
+	// hidden holds the controls show has hidden.
+	hidden map[uint16]bool
 
 	mu     sync.Mutex
 	result *opResult
@@ -166,6 +227,9 @@ type opResult struct {
 	// report, when set, is shown in a message box with reportFlags.
 	report      string
 	reportFlags uint32
+	// background marks a refresh nobody asked for, after the agent changed:
+	// it leaves the last action's message unless the agent's state moved on.
+	background bool
 }
 
 // activeMain is the window the dialog procedure serves; there is only one.
@@ -207,7 +271,7 @@ func showMainWindow(t *tray) error {
 		procInitCommonControlsEx.Call(uintptr(unsafe.Pointer(&icc)))
 	})
 
-	activeMain = &mainWindow{t: t}
+	activeMain = &mainWindow{t: t, hidden: map[uint16]bool{}}
 	defer func() {
 		if activeMain.ui != nil {
 			activeMain.ui.release() // the dialog and its controls are gone
@@ -215,15 +279,9 @@ func showMainWindow(t *tray) error {
 		activeMain = nil
 	}()
 
-	words := mainTemplate()
-	tmpl := make([]uint32, (len(words)+1)/2) // DWORD-aligned, as for the passphrase dialog
-	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&tmpl[0])), len(words)), words)
-	var module windows.Handle
-	_ = windows.GetModuleHandleEx(0, nil, &module)
-	r, _, e := procDialogBoxIndirectParamW.Call(uintptr(module), uintptr(unsafe.Pointer(&tmpl[0])), 0, mainDialogProc, 0)
-	goruntime.KeepAlive(tmpl)
+	r, e := runTemplate(0, mainTemplate(), mainDialogProc)
 	mainWindowHwnd.Store(0)
-	if int32(r) == -1 {
+	if r == -1 {
 		return fmt.Errorf("could not open the sshush window: %w", e)
 	}
 	return nil
@@ -241,7 +299,22 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		themeWindow(hwnd)
 		mainWindowHwnd.Store(hwnd)
 		w.run("Asking the agent…", nil)
-		return 1 // the dialog manager focuses the first tab stop
+		procSetFocus.Call(control(hwnd, idMainList))
+		return 0 // focus set here
+
+	case wmSize:
+		if wParam != sizeMinimized && w.ui != nil {
+			w.layout()
+		}
+		return 0
+
+	case wmGetMinMaxInfo:
+		if w.ui != nil {
+			mw, mh := mainMinSize(layoutMetrics{dpi: w.ui.dpi})
+			mmi := *(**minMaxInfo)(unsafe.Pointer(&lParam))
+			mmi.minTrackSize = [2]int32{int32(mw) + w.frame[0], int32(mh) + w.frame[1]}
+		}
+		return 0
 
 	case wmCtlColorStatic:
 		switch lParam {
@@ -249,8 +322,11 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			if c, ok := toneColor(w.tone, darkNow()); ok {
 				return ctlColorText(msg, wParam, c)
 			}
-		case control(hwnd, idMainSource):
+		case control(hwnd, idMainSource), control(hwnd, idMainDetailSub), control(hwnd, idMainFpLabel),
+			control(hwnd, idMainPubLabel), control(hwnd, idMainFromLabel), control(hwnd, idMainVersion):
 			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
+		case control(hwnd, idMainFp), control(hwnd, idMainPub):
+			return fieldCtlColor(wParam)
 		case control(hwnd, idMainStatus):
 			return themedCtlColor(msg, wParam, w.statusErr)
 		}
@@ -268,7 +344,15 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 1
 
 	case wmDestroy:
+		w.savePlacement()
 		unthemeWindow(hwnd)
+		return 0
+
+	case wmContextMenu:
+		if wParam == control(hwnd, idMainList) {
+			w.contextMenu(lParam)
+			return 1
+		}
 		return 0
 
 	case wmNotify:
@@ -280,11 +364,11 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		case nmCustomDraw:
 			return w.customDraw(hwnd, lParam)
 		case lvnItemChanged:
-			w.updateButtons()
-		case lvnKeyDown:
-			if key := *(**nmLVKeyDown)(unsafe.Pointer(&lParam)); key.vkey == vkDelete {
-				w.remove()
+			if !w.busy {
+				w.updateButtons()
 			}
+		case lvnKeyDown:
+			w.listKey((*(**nmLVKeyDown)(unsafe.Pointer(&lParam))).vkey)
 		case nmDblClk:
 			w.toggleLoaded()
 		}
@@ -301,29 +385,16 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if code != bnClicked {
 			return 0
 		}
-		switch id {
-		case idCancel: // also Esc and the close button
-			procEndDialog.Call(hwnd, idCancel)
-		case idMainAgentToggle:
-			w.startOrStop()
-		case idMainLock:
-			w.lockOrUnlock()
-		case idMainAdd:
-			w.add()
-		case idMainRemove:
-			w.remove()
-		case idMainLoad, idMainUnload:
-			w.toggleLoaded()
-		case idMainAutoload:
-			w.toggleAutoload()
-		case idMainSelftest:
-			w.selftest()
-		case idMainRefresh:
-			w.run("Asking the agent…", nil)
-		default:
-			return 0
+		if id == idOK { // Enter
+			if focus, _, _ := procGetFocus.Call(); focus == control(hwnd, idMainList) {
+				w.toggleLoaded()
+			}
+			return 1
 		}
-		return 1
+		if w.command(uint16(id)) {
+			return 1
+		}
+		return 0
 
 	case wmMainDone:
 		w.finish()
@@ -338,10 +409,54 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	return 0
 }
 
-// init sets the window's icon, the list's columns and the theme choices.
+// command runs what the button, or the context menu's item, id stands for:
+// the menu's items carry their buttons' IDs.
+func (w *mainWindow) command(id uint16) bool {
+	switch id {
+	case idCancel: // also Esc and the close button
+		procEndDialog.Call(w.hwnd, idCancel)
+	case idMainAgentToggle:
+		w.startOrStop()
+	case idMainLock:
+		w.lockOrUnlock()
+	case idMainCreateVault:
+		w.createVault()
+	case idMainAdd:
+		w.add()
+	case idMainCreateKey:
+		w.createKey()
+	case idMainRemove:
+		w.remove()
+	case idMainLoad:
+		w.toggleLoaded()
+	case idMainAutoload:
+		w.toggleAutoload()
+	case idMainRename:
+		w.rename()
+	case idMainCopyFp:
+		w.copyFingerprint()
+	case idMainCopyPub:
+		w.copyPublicKey()
+	case idMainSelftest:
+		w.selftest()
+	case idMainRefresh:
+		w.run("Asking the agent…", nil)
+	case idMainStartup:
+		w.startupToggled()
+	default:
+		return false
+	}
+	return true
+}
+
+// init sets the window's icon, fonts, the list's columns, the settings, and
+// its size: where it was last closed, else a comfortable default.
 func (w *mainWindow) init() {
 	w.ui = newUICache(w.hwnd)
 	procSendMessageW.Call(control(w.hwnd, idMainAgent), wmSetFont, w.ui.headerFont(), 0)
+	procSendMessageW.Call(control(w.hwnd, idMainDetailTitle), wmSetFont, w.ui.titleFont(), 0)
+	procSendMessageW.Call(control(w.hwnd, idMainFp), wmSetFont, w.ui.monoFont(), 0)
+	procSendMessageW.Call(control(w.hwnd, idMainPub), wmSetFont, w.ui.monoFont(), 0)
 
 	var module windows.Handle
 	_ = windows.GetModuleHandleEx(0, nil, &module)
@@ -361,7 +476,6 @@ func (w *mainWindow) init() {
 		col := lvColumn{mask: lvcfText | lvcfWidth, cx: 80, text: text}
 		procSendMessageW.Call(list, lvmInsertColumnW, uintptr(i), uintptr(unsafe.Pointer(&col)))
 	}
-	w.autosizeColumns()
 
 	combo := control(w.hwnd, idMainTheme)
 	for i, c := range themeChoices {
@@ -371,6 +485,50 @@ func (w *mainWindow) init() {
 			procSendMessageW.Call(combo, cbSetCurSel, uintptr(i), 0)
 		}
 	}
+	procSendMessageW.Call(control(w.hwnd, idMainStartup), bmSetCheck, boolArg(startupEnabled()), 0)
+	setText(control(w.hwnd, idMainVersion), "sshush "+version.Version)
+
+	var wr, cr [4]int32
+	procGetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&wr)))
+	procGetClientRect.Call(w.hwnd, uintptr(unsafe.Pointer(&cr)))
+	w.frame = [2]int32{(wr[2] - wr[0]) - cr[2], (wr[3] - wr[1]) - cr[3]}
+	if !w.restorePlacement() {
+		cw, ch := scale(defaultClientW, w.ui.dpi), scale(defaultClientH, w.ui.dpi)
+		ww, wh := int32(cw)+w.frame[0], int32(ch)+w.frame[1]
+		// Centred where the template's centring put the smaller window.
+		x, y := wr[0]-(ww-(wr[2]-wr[0]))/2, wr[1]-(wh-(wr[3]-wr[1]))/2
+		procSetWindowPos.Call(w.hwnd, 0, uintptr(max(x, 0)), uintptr(max(y, 0)), uintptr(ww), uintptr(wh), swpNoZOrderActivate)
+	}
+	w.updateButtons()
+}
+
+// savePlacement remembers where the window is, and its size, for next time.
+func (w *mainWindow) savePlacement() {
+	wp := windowPlacement{length: windowPlacementSize}
+	if r, _, _ := procGetWindowPlacement.Call(w.hwnd, uintptr(unsafe.Pointer(&wp))); r == 0 {
+		return
+	}
+	saveSetting(placementValue, unsafe.Slice((*byte)(unsafe.Pointer(&wp)), windowPlacementSize))
+}
+
+// restorePlacement puts the window where it was last closed, reporting
+// whether there was such a place. Windows moves it onto a screen if the one
+// it was on has gone.
+func (w *mainWindow) restorePlacement() bool {
+	b := loadSetting(placementValue)
+	if len(b) != windowPlacementSize {
+		return false
+	}
+	var wp windowPlacement
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&wp)), windowPlacementSize), b)
+	if wp.length != windowPlacementSize {
+		return false
+	}
+	if wp.showCmd != swMaximize { // a maximized window opens maximized, anything else normal
+		wp.showCmd = swShowNormal
+	}
+	r, _, _ := procSetWindowPlacement.Call(w.hwnd, uintptr(unsafe.Pointer(&wp)))
+	return r != 0
 }
 
 // run marks the window busy, shows working, and runs op, then probes the
@@ -386,7 +544,7 @@ func (w *mainWindow) run(working string, op func() opResult) {
 	w.updateButtons()
 	hwnd, env := w.hwnd, w.t.env
 	go func() {
-		var res opResult
+		res := opResult{background: op == nil && working == ""}
 		if op != nil {
 			res = op()
 			w.t.refresh() // the tray shows the change too
@@ -416,13 +574,14 @@ func (w *mainWindow) finish() {
 	if res == nil {
 		return
 	}
-	w.busy = false
 	keep := ""
 	if sel := w.selected(); sel != nil {
 		keep = sel.Fingerprint
 	}
+	before := agentLine(w.state.Reachable, w.state.Managed, w.state.Backend)
 	w.state = res.state
 	w.fill(keep)
+	w.busy = false
 	tone, icon := headerOf(w.state)
 	w.tone = tone
 	procSendMessageW.Call(control(w.hwnd, idMainStateIcon), stmSetIcon, w.ui.stateIcon(icon), 0)
@@ -431,6 +590,8 @@ func (w *mainWindow) finish() {
 
 	text, isErr := mainStatus(w.state)
 	switch {
+	case res.background && !isErr && !w.statusErr && before == agentLine(w.state.Reachable, w.state.Managed, w.state.Backend):
+		text = windowText(control(w.hwnd, idMainStatus))
 	case res.err != nil:
 		text, isErr = oneLine(describeLine(res.err)), true
 	case res.status != "" && !isErr:
@@ -465,7 +626,7 @@ func (w *mainWindow) fill(keep string) {
 			selected = i
 		}
 	}
-	w.autosizeColumns()
+	w.sizeColumns()
 	if selected < 0 && len(w.rows) > 0 {
 		selected = 0
 	}
@@ -476,11 +637,19 @@ func (w *mainWindow) fill(keep string) {
 	}
 }
 
-func (w *mainWindow) autosizeColumns() {
+// sizeColumns fits the type and status columns to their text and gives the
+// name the rest of the list's width.
+func (w *mainWindow) sizeColumns() {
 	list := control(w.hwnd, idMainList)
-	for i := range mainColumns {
+	var cr [4]int32
+	procGetClientRect.Call(list, uintptr(unsafe.Pointer(&cr)))
+	rest := int(cr[2])
+	for i := len(mainColumns) - 1; i > 0; i-- {
 		procSendMessageW.Call(list, lvmSetColumnWidth, uintptr(i), lvscwAutosizeHeader)
+		width, _, _ := procSendMessageW.Call(list, lvmGetColumnWidth, uintptr(i), 0)
+		rest -= int(width)
 	}
+	procSendMessageW.Call(list, lvmSetColumnWidth, 0, uintptr(max(rest, scale(120, w.ui.dpi))))
 }
 
 // selected returns the row selected in the list, or nil.
@@ -493,16 +662,23 @@ func (w *mainWindow) selected() *vaultops.IdentityView {
 	return &w.rows[i]
 }
 
-// actions is what the buttons may do now: nothing while an operation runs.
+// actions is what the buttons may do now: nothing while an operation runs,
+// except copy, which touches only the clipboard.
 func (w *mainWindow) actions() MainActions {
+	a := mainActions(w.state, w.selected())
 	if w.busy {
-		return MainActions{}
+		return MainActions{Copy: a.Copy}
 	}
-	return mainActions(w.state, w.selected())
+	return a
 }
 
-// updateButtons enables what the state and selection allow; while an
-// operation runs, only Close.
+// detailControls are hidden while no key is selected.
+var detailControls = []uint16{idMainFpLabel, idMainFp, idMainCopyFp, idMainPubLabel, idMainPub, idMainCopyPub,
+	idMainFromLabel, idMainFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove}
+
+// updateButtons enables what the state and selection allow, fills the
+// details pane for the selected key, and lays the window out again for
+// labels that changed.
 func (w *mainWindow) updateButtons() {
 	a := w.actions()
 	enable := func(id int, on bool) {
@@ -511,14 +687,29 @@ func (w *mainWindow) updateButtons() {
 			w.setButtonIcon(id, g, on)
 		}
 	}
+	// With no vault yet, creating one is the only way forward, so it stands
+	// where Add would.
+	needsVault := w.state.needsVault()
 	enable(idMainAdd, a.Add)
+	enable(idMainCreateVault, a.CreateVault)
+	enable(idMainCreateKey, !w.busy)
+	w.show(idMainAdd, !needsVault)
+	w.show(idMainCreateVault, needsVault)
 	enable(idMainRemove, a.Remove)
-	enable(idMainLoad, a.Load)
-	enable(idMainUnload, a.Unload)
 	enable(idMainAutoload, a.Autoload)
+	enable(idMainRename, a.Rename)
+	enable(idMainCopyFp, a.Copy)
+	enable(idMainCopyPub, a.Copy)
 	if a.Autoload {
 		setText(control(w.hwnd, idMainAutoload), autoloadLabel(a.AutoloadOn))
 	}
+	if a.Unload {
+		setText(control(w.hwnd, idMainLoad), "&Unload")
+	} else {
+		setText(control(w.hwnd, idMainLoad), "L&oad")
+	}
+	enable(idMainLoad, a.Load || a.Unload)
+	w.setButtonIcon(idMainLoad, loadGlyph(a), a.Load || a.Unload)
 	if a.Unlock {
 		setText(control(w.hwnd, idMainLock), "Unlo&ck…")
 	} else {
@@ -526,6 +717,7 @@ func (w *mainWindow) updateButtons() {
 	}
 	enable(idMainLock, a.Lock || a.Unlock)
 	w.setButtonIcon(idMainLock, lockGlyph(a), a.Lock || a.Unlock)
+	w.show(idMainLock, w.state.isVault())
 	if a.Start || a.Stop {
 		setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(a))
 	}
@@ -534,19 +726,92 @@ func (w *mainWindow) updateButtons() {
 		w.lastAgentGlyph = agentGlyph(a)
 	}
 	w.setButtonIcon(idMainAgentToggle, w.lastAgentGlyph, a.Start || a.Stop)
+	w.show(idMainAgentToggle, w.state.Managed)
 	enable(idMainSelftest, !w.busy)
 	enable(idMainRefresh, !w.busy)
-	w.ui.fitRows(w.hwnd, func(id uint16) bool {
-		_, ok := buttonGlyphs[id]
-		return ok || id == idMainLock || id == idMainAgentToggle
-	})
 
-	// A disabled control cannot keep the focus; hand it to the list.
+	w.detail = detailOf(w.state, w.selected())
+	setText(control(w.hwnd, idMainDetailTitle), w.detail.Title)
+	setText(control(w.hwnd, idMainDetailSub), w.detail.Sub)
+	setText(control(w.hwnd, idMainFp), w.detail.Fingerprint)
+	setText(control(w.hwnd, idMainPub), w.detail.PublicKey)
+	setText(control(w.hwnd, idMainFrom), w.detail.From)
+	for _, id := range detailControls {
+		w.show(id, !w.detail.Empty)
+	}
+	if !w.detail.Empty {
+		// Autoload and Remove mean nothing to an agent that is not a vault.
+		w.show(idMainAutoload, w.state.showsVault())
+		w.show(idMainRemove, w.state.showsVault())
+	}
+	w.layout()
+
+	// A disabled or hidden control cannot keep the focus; hand it to the list.
 	if focus, _, _ := procGetFocus.Call(); focus != 0 {
-		if on, _, _ := procIsWindowEnabled.Call(focus); on == 0 {
+		on, _, _ := procIsWindowEnabled.Call(focus)
+		if id, _, _ := procGetDlgCtrlID.Call(focus); on == 0 || w.hidden[uint16(id)] {
 			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, idMainList), 1)
 		}
 	}
+}
+
+// layout places every control for the window's current size.
+func (w *mainWindow) layout() {
+	var cr [4]int32
+	procGetClientRect.Call(w.hwnd, uintptr(unsafe.Pointer(&cr)))
+	m := layoutMetrics{dpi: w.ui.dpi, natural: w.naturalWidths(), hidden: w.hidden}
+	// The public key's field is as tall as the key wraps to. The field
+	// breaks the line after the key's type, and the rest, one long word,
+	// wherever it reaches the edge.
+	boxes := mainLayout(int(cr[2]), int(cr[3]), m)
+	if pub := boxes[idMainPub]; pub.w > 0 && w.detail.PublicKey != "" {
+		field := control(w.hwnd, idMainPub)
+		inner := max(pub.w-scale(12, w.ui.dpi), 1)
+		_, rest, _ := strings.Cut(w.detail.PublicKey, " ")
+		m.pubLines = 1 + (textWidth(field, rest)+inner-1)/inner
+		if textWidth(field, w.detail.PublicKey) <= inner {
+			m.pubLines = 1
+		}
+		boxes = mainLayout(int(cr[2]), int(cr[3]), m)
+	}
+	dwp, _, _ := procBeginDeferWindowPos.Call(uintptr(len(boxes)))
+	for id, b := range boxes {
+		h := control(w.hwnd, int(id))
+		if h == 0 {
+			continue
+		}
+		if dwp != 0 {
+			dwp, _, _ = procDeferWindowPos.Call(dwp, h, 0, uintptr(b.x), uintptr(b.y), uintptr(b.w), uintptr(b.h), swpNoZOrderActivate)
+		}
+		if dwp == 0 {
+			procSetWindowPos.Call(h, 0, uintptr(b.x), uintptr(b.y), uintptr(b.w), uintptr(b.h), swpNoZOrderActivate)
+		}
+	}
+	if dwp != 0 {
+		procEndDeferWindowPos.Call(dwp)
+	}
+	w.sizeColumns()
+	procRedrawWindow.Call(w.hwnd, 0, 0, rdwInvalidate|rdwErase|rdwAllChildren)
+}
+
+// naturalWidths measures each button, and the labels that size to their
+// text, in the window's font.
+func (w *mainWindow) naturalWidths() map[uint16]int {
+	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
+	out := map[uint16]int{}
+	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
+		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest} {
+		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
+		if hasGlyph(id) {
+			content += iconW
+		}
+		out[id] = max(content+2*pad, minW)
+	}
+	// A check box's box and the gap after it are about as wide as an icon.
+	out[idMainStartup] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainStartup))) + iconW + scale(8, w.ui.dpi)
+	out[idMainThemeLabel] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainThemeLabel)))
+	out[idMainVersion] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainVersion))) + scale(4, w.ui.dpi)
+	return out
 }
 
 // setButtonIcon shows glyph on the button id, grey when it is disabled.
@@ -576,6 +841,81 @@ func (w *mainWindow) customDraw(hwnd, lParam uintptr) uintptr {
 func (w *mainWindow) setStatus(text string, isErr bool) {
 	w.statusErr = isErr
 	setText(control(w.hwnd, idMainStatus), text)
+	// The colour comes from WM_CTLCOLORSTATIC, so repaint even when the text
+	// stays the same.
+	procRedrawWindow.Call(control(w.hwnd, idMainStatus), 0, 0, rdwInvalidate|rdwErase)
+}
+
+// listKey handles the list's keyboard shortcuts. Enter arrives as idOK and
+// the menu key as WM_CONTEXTMENU.
+func (w *mainWindow) listKey(vk uint16) {
+	ctrl, _, _ := procGetKeyState.Call(vkControl)
+	switch {
+	case vk == vkDelete:
+		w.remove()
+	case vk == vkF2:
+		w.rename()
+	case vk == vkF5:
+		w.run("Asking the agent…", nil)
+	case vk == 'C' && int16(ctrl) < 0:
+		w.copyPublicKey()
+	}
+}
+
+// contextMenu shows the selected key's actions at the pointer, or for the
+// keyboard (pos -1) by the selected row.
+func (w *mainWindow) contextMenu(pos uintptr) {
+	sel := w.selected()
+	if sel == nil {
+		return
+	}
+	a := w.actions()
+	list := control(w.hwnd, idMainList)
+	var pt [2]int32
+	if int32(pos) == -1 {
+		r := [4]int32{lvirSelectBounds}
+		i, _, _ := procSendMessageW.Call(list, lvmGetNextItem, ^uintptr(0), lvniSelected)
+		procSendMessageW.Call(list, lvmGetItemRect, i, uintptr(unsafe.Pointer(&r)))
+		pt = [2]int32{r[0] + int32(scale(24, w.ui.dpi)), r[3]}
+		procClientToScreen.Call(list, uintptr(unsafe.Pointer(&pt)))
+	} else {
+		pt = [2]int32{int32(int16(pos)), int32(int16(pos >> 16))}
+	}
+
+	menu, _, _ := procCreatePopupMenu.Call()
+	if menu == 0 {
+		return
+	}
+	defer procDestroyMenu.Call(menu)
+	item := func(id uint16, text string, on bool) {
+		flags := uintptr(mfString)
+		if !on {
+			flags |= mfGrayed
+		}
+		p, _ := windows.UTF16PtrFromString(text)
+		procAppendMenuW.Call(menu, flags, uintptr(id), uintptr(unsafe.Pointer(p)))
+	}
+	sep := func() { procAppendMenuW.Call(menu, mfSeparator, 0, 0) }
+	item(idMainCopyPub, "Copy public key\tCtrl+C", a.Copy)
+	item(idMainCopyFp, "Copy fingerprint", a.Copy)
+	sep()
+	if a.Unload {
+		item(idMainLoad, "Unload from the agent\tEnter", true)
+	} else {
+		item(idMainLoad, "Load into the agent\tEnter", a.Load)
+	}
+	if w.state.showsVault() {
+		item(idMainAutoload, strings.ReplaceAll(autoloadLabel(a.AutoloadOn), "&", ""), a.Autoload)
+	}
+	item(idMainRename, "Rename…\tF2", a.Rename)
+	if w.state.showsVault() {
+		sep()
+		item(idMainRemove, "Remove from the vault…\tDel", a.Remove)
+	}
+	cmd, _, _ := procTrackPopupMenu.Call(menu, tpmRightButton|tpmReturnCmd, uintptr(pt[0]), uintptr(pt[1]), 0, w.hwnd, 0)
+	if cmd != 0 {
+		w.command(uint16(cmd))
+	}
 }
 
 // The actions. Each checks it is allowed now, since a key press or double
@@ -627,6 +967,44 @@ func (w *mainWindow) lockOrUnlock() {
 	}
 }
 
+// createVault asks for a passphrase, twice, creates the vault with a
+// recovery phrase, shows the phrase once, and starts the agent on the new
+// vault, unlocked.
+func (w *mainWindow) createVault() {
+	if !w.actions().CreateVault {
+		return
+	}
+	hwnd, t := w.hwnd, w.t
+	w.run("Creating the vault…", func() opResult {
+		pass, err := askNewPassphrase(hwnd)
+		if errors.Is(err, errCancelled) {
+			return opResult{}
+		}
+		if err != nil {
+			return opResult{err: err}
+		}
+		defer clear(pass)
+		res, err := vaultops.Init(t.env, pass, vaultops.InitOptions{Recovery: true})
+		if err != nil {
+			return opResult{err: err}
+		}
+		showRecoveryPhrase(hwnd, recoveryMessage(res.RecoveryFile), res.Mnemonic)
+		// The agent was waiting for this vault: start it, and unlock the
+		// vault with the passphrase just chosen rather than ask again.
+		if Probe(t.env.SocketPath).Err != nil && !t.env.AgentUnmanaged {
+			if err := StartAgent(t.env.SocketPath); err != nil {
+				return opResult{err: fmt.Errorf("created the vault, but could not start the agent: %w", err)}
+			}
+		}
+		if s := Probe(t.env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+			if err := vaultops.UnlockPassphrase(t.env, pass); err != nil {
+				return opResult{err: fmt.Errorf("created the vault, but could not unlock it: %w", err)}
+			}
+		}
+		return opResult{status: "Created and unlocked the vault. Add keys to it to use them."}
+	})
+}
+
 func (w *mainWindow) add() {
 	if !w.actions().Add {
 		return
@@ -648,6 +1026,39 @@ func (w *mainWindow) add() {
 			err = fmt.Errorf("added %s, but %w", plural(added, "key"), err)
 		}
 		return done(fmt.Sprintf("Added %s to %s.", plural(added, "key"), into), err)
+	})
+}
+
+// createKey makes a new key pair, as 'sshush create' does, and adds it to
+// the agent when the user leaves that box ticked.
+func (w *mainWindow) createKey() {
+	if w.busy {
+		return
+	}
+	hwnd, socketPath, canAdd := w.hwnd, w.t.env.SocketPath, w.actions().Add
+	addLabel := "&Add it to the agent"
+	if w.state.isVault() {
+		addLabel = "&Add it to the vault"
+	}
+	w.run("Creating a key…", func() opResult {
+		path, add, err := promptCreateKey(hwnd, addLabel)
+		if errors.Is(err, errCancelled) {
+			return opResult{}
+		}
+		if err != nil {
+			return opResult{err: err}
+		}
+		made := "Created " + utils.DisplayPath(path) + " and its .pub"
+		switch {
+		case !add:
+			return opResult{status: made + "."}
+		case !canAdd:
+			return opResult{status: made + ". Start or unlock the agent, then add it."}
+		}
+		if _, err := AddKeys(socketPath, []string{path}, nil); err != nil {
+			return opResult{err: fmt.Errorf("created %s, but could not add it: %w", utils.DisplayPath(path), err)}
+		}
+		return opResult{status: made + ", and added it."}
 	})
 }
 
@@ -712,6 +1123,60 @@ func (w *mainWindow) toggleAutoload() {
 	})
 }
 
+// rename asks for a new comment for the selected key and saves it.
+func (w *mainWindow) rename() {
+	sel := w.selected()
+	if sel == nil || !w.actions().Rename {
+		return
+	}
+	id, env, hwnd, keyPaths := *sel, w.t.env, w.hwnd, w.t.keyPaths
+	w.run("Renaming…", func() opResult {
+		spec := inputSpec{
+			title:   "Rename key",
+			message: "A key's name is its comment: what ssh-add -l shows, and what follows the key in authorized_keys.",
+			initial: id.Comment,
+			okLabel: "Rename",
+		}
+		for {
+			b, button, err := promptInput(hwnd, spec)
+			if err != nil {
+				return opResult{err: err}
+			}
+			if button != idOK {
+				return opResult{}
+			}
+			comment := strings.TrimSpace(string(b))
+			status, err := RenameKey(env, keyPaths, id, comment)
+			var invalid *invalidCommentError
+			if errors.As(err, &invalid) {
+				spec.initial, spec.errText = comment, invalid.Error()
+				continue
+			}
+			return done(status, err)
+		}
+	})
+}
+
+func (w *mainWindow) copyFingerprint() {
+	if w.actions().Copy {
+		w.copied(w.detail.Fingerprint, "fingerprint")
+	}
+}
+
+func (w *mainWindow) copyPublicKey() {
+	if w.actions().Copy {
+		w.copied(w.detail.PublicKey, "public key")
+	}
+}
+
+func (w *mainWindow) copied(text, what string) {
+	if err := clipboard.Copy(text); err != nil {
+		w.setStatus("Could not copy the "+what+": "+err.Error(), true)
+		return
+	}
+	w.setStatus("Copied the "+what+" of "+w.detail.Title+".", false)
+}
+
 // selftest runs the same checks as 'sshush selftest' and shows the report.
 func (w *mainWindow) selftest() {
 	socketPath := w.t.env.SocketPath
@@ -731,12 +1196,19 @@ func (w *mainWindow) themeSelected() {
 	}
 }
 
-// identityName names a key in a sentence by its comment, else its type.
-func identityName(id vaultops.IdentityView) string {
-	if id.Comment != "" {
-		return id.Comment
+func (w *mainWindow) startupToggled() {
+	box := control(w.hwnd, idMainStartup)
+	on, _, _ := procSendMessageW.Call(box, bmGetCheck, 0, 0)
+	if err := setStartup(on == 1); err != nil {
+		procSendMessageW.Call(box, bmSetCheck, boolArg(on != 1), 0)
+		w.setStatus("Could not change whether sshush starts at sign-in: "+err.Error(), true)
+		return
 	}
-	return id.KeyType + " key"
+	if on == 1 {
+		w.setStatus("sshush will start in the notification area when you sign in.", false)
+	} else {
+		w.setStatus("sshush will no longer start when you sign in.", false)
+	}
 }
 
 // oneLine joins a multi-line message, such as several joined errors, for the
@@ -746,8 +1218,24 @@ func oneLine(s string) string {
 }
 
 func setText(hwnd uintptr, text string) {
+	if windowText(hwnd) == text {
+		return // setting it again would repaint, and flicker
+	}
 	p, _ := windows.UTF16PtrFromString(text)
 	procSetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(p)))
+}
+
+// show shows or hides the control id and remembers which, for the layout:
+// Windows calls every control hidden until the window itself is shown.
+func (w *mainWindow) show(id uint16, visible bool) {
+	h := control(w.hwnd, int(id))
+	if visible {
+		procShowWindow.Call(h, swShow)
+		delete(w.hidden, id)
+	} else {
+		procShowWindow.Call(h, swHide)
+		w.hidden[id] = true
+	}
 }
 
 // messageBoxOwned asks from the main window, which it disables until answered.

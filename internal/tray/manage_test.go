@@ -1,11 +1,16 @@
 package tray
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"strings"
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/vaultops"
+	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -14,6 +19,10 @@ func TestMainTemplateLayout(t *testing.T) {
 	title, offsets, ids, classes, texts, names := readTemplateNames(t, b)
 	if title != "sshush" {
 		t.Errorf("title: got %q", title)
+	}
+	style := uint32(b[0]) | uint32(b[1])<<16
+	if style&wsThickFrame == 0 || style&wsMaximizeBox == 0 {
+		t.Error("the main window cannot be resized or maximized")
 	}
 	seen := map[uint16]bool{}
 	for i, id := range ids {
@@ -30,28 +39,25 @@ func TestMainTemplateLayout(t *testing.T) {
 		if id == idMainTheme && classes[i] != classComboBox {
 			t.Errorf("theme: class %#x, want a combo box", classes[i])
 		}
+		if (id == idMainFp || id == idMainPub) && uint32(b[offsets[i]])&esReadOnly == 0 {
+			t.Errorf("field %d can be edited", id)
+		}
 	}
-	for _, id := range []uint16{idMainAgent, idMainAgentToggle, idMainLock, idMainSource, idMainList, idMainStatus,
-		idMainAdd, idMainRemove, idMainLoad, idMainUnload, idMainAutoload, idMainSelftest, idMainThemeLabel,
-		idMainTheme, idMainRefresh, idCancel} {
+	// Every control the layout places is in the template, and the reverse.
+	placed := mainLayout(1000, 700, layoutMetrics{dpi: 96})
+	for id := range placed {
 		if !seen[id] {
-			t.Errorf("no item with id %d", id)
+			t.Errorf("the layout places %d, which the template lacks", id)
 		}
 	}
-	// Every item lies inside the window.
-	width, height := int16(b[7]), int16(b[8])
-	for i, off := range offsets {
-		x, y, cx, cy := int16(b[off+4]), int16(b[off+5]), int16(b[off+6]), int16(b[off+7])
-		if ids[i] == idMainTheme {
-			cy = 14 // the rest is its drop-down
-		}
-		if x < 0 || y < 0 || x+cx > width || y+cy > height {
-			t.Errorf("item %d (id %d) at %d,%d %dx%d falls outside the %dx%d window", i, ids[i], x, y, cx, cy, width, height)
+	for id := range seen {
+		if _, ok := placed[id]; !ok {
+			t.Errorf("control %d is never placed", id)
 		}
 	}
 	// Each keyboard mnemonic reaches one control.
 	keys := map[rune]string{}
-	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), "Unlo&ck…", "&Start agent") {
+	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), "Unlo&ck…", "&Start agent", "&Unload") {
 		i := strings.IndexRune(text, '&')
 		if i < 0 || i+1 >= len(text) {
 			continue
@@ -66,7 +72,7 @@ func TestMainTemplateLayout(t *testing.T) {
 
 // alternates reports whether a and b are labels one button switches between.
 func alternates(a, b string) bool {
-	pairs := [][2]string{{"&Lock", "Unlo&ck…"}, {autoloadLabel(true), autoloadLabel(false)}, {"S&top agent", "&Start agent"}}
+	pairs := [][2]string{{"&Lock", "Unlo&ck…"}, {autoloadLabel(true), autoloadLabel(false)}, {"S&top agent", "&Start agent"}, {"L&oad", "&Unload"}}
 	for _, p := range pairs {
 		if (a == p[0] && b == p[1]) || (a == p[1] && b == p[0]) {
 			return true
@@ -81,9 +87,11 @@ func vaultUp() MainState {
 }
 
 func TestMainActions(t *testing.T) {
-	loaded := &vaultops.IdentityView{Fingerprint: "SHA256:a", Loaded: vaultops.LoadYes, Autoload: true}
-	unloaded := &vaultops.IdentityView{Fingerprint: "SHA256:b", Loaded: vaultops.LoadNo}
+	pub := []byte("a public key")
+	loaded := &vaultops.IdentityView{Fingerprint: "SHA256:a", Loaded: vaultops.LoadYes, Autoload: true, PublicKey: pub}
+	unloaded := &vaultops.IdentityView{Fingerprint: "SHA256:b", Loaded: vaultops.LoadNo, PublicKey: pub}
 	unparseable := &vaultops.IdentityView{Loaded: vaultops.LoadYes}
+	noVault := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault", SpeaksOps: true}, Listing: true}
 	locked := vaultUp()
 	locked.Backend.VaultLocked = true
 	down := MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true}}
@@ -97,13 +105,15 @@ func TestMainActions(t *testing.T) {
 		want  MainActions
 	}{
 		{"vault, nothing selected", vaultUp(), nil, MainActions{Add: true, Lock: true, Stop: true}},
-		{"vault, loaded selected", vaultUp(), loaded, MainActions{Add: true, Lock: true, Stop: true, Remove: true, Unload: true, Autoload: true}},
-		{"vault, unloaded selected", vaultUp(), unloaded, MainActions{Add: true, Lock: true, Stop: true, Remove: true, Load: true, Autoload: true, AutoloadOn: true}},
-		{"locked", locked, unloaded, MainActions{Unlock: true, Stop: true}},
-		{"agent down", down, unloaded, MainActions{Start: true}},
-		{"keyring", keyring, loaded, MainActions{Add: true, Stop: true, Unload: true}},
+		{"vault, loaded selected", vaultUp(), loaded, MainActions{Add: true, Lock: true, Stop: true, Remove: true, Unload: true, Autoload: true, Rename: true, Copy: true}},
+		{"vault, unloaded selected", vaultUp(), unloaded, MainActions{Add: true, Lock: true, Stop: true, Remove: true, Load: true, Autoload: true, AutoloadOn: true, Rename: true, Copy: true}},
+		{"locked", locked, unloaded, MainActions{Unlock: true, Stop: true, Copy: true}},
+		{"agent down", down, unloaded, MainActions{Start: true, Copy: true}},
+		{"no vault yet", noVault, nil, MainActions{CreateVault: true, Stop: true}},
+		{"no vault yet, agent down", MainState{Managed: true, Listing: true}, nil, MainActions{CreateVault: true}},
+		{"keyring", keyring, loaded, MainActions{Add: true, Stop: true, Unload: true, Rename: true, Copy: true}},
 		{"keyring, unparseable key", keyring, unparseable, MainActions{Add: true, Stop: true}},
-		{"external agent", external, loaded, MainActions{Add: true, Unload: true}},
+		{"external agent", external, loaded, MainActions{Add: true, Unload: true, Copy: true}},
 		{"external agent down", MainState{}, nil, MainActions{}},
 	}
 	for _, tc := range tests {
@@ -158,7 +168,8 @@ func TestMainStatus(t *testing.T) {
 		{"external agent down", MainState{}, "not reachable", true},
 		{"locked, file read", withIDs(locked, 2), "unlock it", false},
 		{"locked, nothing to read", lockedNoFile, "The vault is locked.", false},
-		{"no vault yet", MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault"}, Listing: true}, "sshush vault init", false},
+		{"no vault yet, agent down", MainState{Managed: true, Listing: true}, "Create one", false},
+		{"no vault yet", MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault"}, Listing: true}, "Create one", false},
 		{"keyring", MainState{Reachable: true, Backend: agent.Backend{Mode: "keys"}, Keys: make([]*sshagent.Key, 2)}, "2 keys in the agent.", false},
 		{"list failed", failed, "read vault. Check the file.", true},
 	}
@@ -171,13 +182,14 @@ func TestMainStatus(t *testing.T) {
 }
 
 func TestKeyRow(t *testing.T) {
-	id := vaultops.IdentityView{Fingerprint: "SHA256:x", KeyType: "ssh-ed25519", Loaded: vaultops.LoadYes, Autoload: true}
+	k := testKey(t, "")
+	id := vaultops.IdentityView{Fingerprint: "SHA256:x", KeyType: k.Format, Loaded: vaultops.LoadYes, Autoload: true, PublicKey: k.Blob}
 	tests := []struct {
 		inVault bool
 		want    []string
 	}{
-		{true, []string{"(no comment)", "ssh-ed25519", "SHA256:x", "yes", "yes", "-"}},
-		{false, []string{"(no comment)", "ssh-ed25519", "SHA256:x", "yes", "-", "-"}},
+		{true, []string{"ED25519 key", "ED25519", "Loaded · autoload"}},
+		{false, []string{"ED25519 key", "ED25519", "Loaded"}},
 	}
 	for _, tc := range tests {
 		row := keyRow(id, tc.inVault)
@@ -189,6 +201,63 @@ func TestKeyRow(t *testing.T) {
 				t.Errorf("in vault %v, cell %d (%s): got %q, want %q", tc.inVault, i, mainColumns[i], row[i], tc.want[i])
 			}
 		}
+	}
+}
+
+func TestKeyTypeLabel(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPub, _ := ssh.NewPublicKey(&rsaKey.PublicKey)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	ecPub, _ := ssh.NewPublicKey(&ecKey.PublicKey)
+	tests := []struct {
+		id   vaultops.IdentityView
+		want string
+	}{
+		{vaultops.IdentityView{PublicKey: testKey(t, "").Blob}, "ED25519"},
+		{vaultops.IdentityView{PublicKey: rsaPub.Marshal()}, "RSA 2048"},
+		{vaultops.IdentityView{PublicKey: ecPub.Marshal()}, "ECDSA P-384"},
+		{vaultops.IdentityView{KeyType: "ssh-foo"}, "ssh-foo"},
+		{vaultops.IdentityView{KeyType: "?"}, "Unknown"},
+	}
+	for _, tc := range tests {
+		if got := keyTypeLabel(tc.id); got != tc.want {
+			t.Errorf("got %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestDetailOf(t *testing.T) {
+	k := testKey(t, "")
+	id := vaultops.IdentityView{Fingerprint: "SHA256:x", Comment: "work", Loaded: vaultops.LoadNo, PublicKey: k.Blob, Filepath: "/keys/id_work"}
+	v := vaultUp()
+	v.Listed.Identities = []vaultops.IdentityView{id}
+
+	d := detailOf(v, &id)
+	if d.Empty || d.Title != "work" || d.Fingerprint != "SHA256:x" {
+		t.Errorf("vault key: got %+v", d)
+	}
+	if !strings.HasPrefix(d.PublicKey, "ssh-ed25519 AAAA") || !strings.HasSuffix(d.PublicKey, " work") {
+		t.Errorf("public key line: got %q", d.PublicKey)
+	}
+	if d.Sub != "ED25519 · not loaded · loads only when you ask" {
+		t.Errorf("sub: got %q", d.Sub)
+	}
+	if !strings.HasSuffix(d.From, "id_work") {
+		t.Errorf("from: got %q", d.From)
+	}
+
+	if d := detailOf(v, nil); !d.Empty || d.Sub == "" {
+		t.Errorf("nothing selected among keys: got %+v", d)
+	}
+	if d := detailOf(MainState{}, nil); !d.Empty || d.Sub != "" {
+		t.Errorf("nothing to select: got %+v", d)
+	}
+	bad := vaultops.IdentityView{Comment: "odd"}
+	if d := detailOf(v, &bad); d.PublicKey != "" || d.Fingerprint == "" {
+		t.Errorf("unparseable key: got %+v", d)
 	}
 }
 
@@ -249,31 +318,6 @@ func TestHeaderOf(t *testing.T) {
 	for _, tc := range tests {
 		if tone, icon := headerOf(tc.state); tone != tc.tone || icon != tc.icon {
 			t.Errorf("%s: got tone %d icon %d, want %d %d", tc.name, tone, icon, tc.tone, tc.icon)
-		}
-	}
-}
-
-func TestButtonRowsCoverTheTemplate(t *testing.T) {
-	_, _, ids, _, _, _ := readTemplateNames(t, mainTemplate())
-	inTemplate := map[uint16]bool{}
-	for _, id := range ids {
-		inTemplate[id] = true
-	}
-	seen := map[uint16]bool{}
-	for _, row := range buttonRows {
-		for _, id := range row.ids {
-			if !inTemplate[id] {
-				t.Errorf("row control %d is not in the template", id)
-			}
-			if seen[id] {
-				t.Errorf("control %d is in two rows", id)
-			}
-			seen[id] = true
-		}
-	}
-	for id := range buttonGlyphs {
-		if !seen[id] {
-			t.Errorf("button %d has an icon but is in no row, so is never sized for it", id)
 		}
 	}
 }

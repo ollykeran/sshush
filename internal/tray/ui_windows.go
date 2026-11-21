@@ -40,8 +40,12 @@ var (
 	iconFaceOnce             sync.Once
 	iconFace                 string
 	iconFaceCandidates       = []string{"Segoe Fluent Icons", "Segoe MDL2 Assets"}
+	monoFaceCandidates       = []string{"Cascadia Mono", "Consolas"}
+	monoFaceOnce             sync.Once
+	monoFace                 string
 	glyphPixels, statePixels = 16, 32 // at 96 DPI
 	headerPoints             = 15
+	titlePoints              = 12
 )
 
 const (
@@ -52,9 +56,7 @@ const (
 	glyphGap          = 4  // between a button's icon and its text, at 96 DPI
 	buttonPad         = 14 // either side of a button's content, at 96 DPI
 	buttonMinWidth    = 76
-	rowGap            = 6
 	wmGetFont         = 0x0031
-	swpNoZOrderMove   = 0x0004 | 0x0010 // NOZORDER, NOACTIVATE
 	stmSetIcon        = 0x0170
 	dwlpMsgResult     = 0
 	fwNormal          = 400
@@ -118,8 +120,6 @@ func dpiOf(hwnd uintptr) int {
 	return 96
 }
 
-func scale(px, dpi int) int { return (px*dpi + 48) / 96 }
-
 // glyphKey names one drawn button icon.
 type glyphKey struct {
 	glyph rune
@@ -133,6 +133,8 @@ type uiCache struct {
 	glyphs map[glyphKey]uintptr
 	states map[Icon]uintptr
 	header uintptr
+	title  uintptr
+	mono   uintptr
 }
 
 func newUICache(hwnd uintptr) *uiCache {
@@ -198,6 +200,23 @@ func (u *uiCache) headerFont() uintptr {
 	return u.header
 }
 
+// titleFont is the details pane's semibold heading font.
+func (u *uiCache) titleFont() uintptr {
+	if u.title == 0 {
+		u.title = createFont("Segoe UI", -scale(titlePoints*96/72, u.dpi), fwSemibold, cleartypeQuality)
+	}
+	return u.title
+}
+
+// monoFont is the fixed-width font key material is shown in, so a
+// fingerprint or public key reads character by character.
+func (u *uiCache) monoFont() uintptr {
+	if u.mono == 0 {
+		u.mono = createFont(findMonoFace(), -scale(9*96/72+1, u.dpi), fwNormal, cleartypeQuality)
+	}
+	return u.mono
+}
+
 // takeGlyphs hands over the button images drawn so far, to be freed with
 // destroyImageLists once the buttons show new ones: the theme decides their
 // colours.
@@ -228,9 +247,11 @@ func (u *uiCache) release() {
 	destroyImageLists(u.takeGlyphs())
 	destroyIcons(u.states)
 	clear(u.states)
-	if u.header != 0 {
-		procDeleteObject.Call(u.header)
-		u.header = 0
+	for _, f := range []*uintptr{&u.header, &u.title, &u.mono} {
+		if *f != 0 {
+			procDeleteObject.Call(*f)
+			*f = 0
+		}
 	}
 }
 
@@ -241,27 +262,41 @@ func createFont(face string, height, weight, quality int) uintptr {
 	return f
 }
 
-// findIconFace returns the first icon font Windows has, or "". A font that
-// is not installed is silently substituted, so each candidate is asked for
-// and the face Windows actually chose compared with it.
+// findIconFace returns the first icon font Windows has, or "".
 func findIconFace() string {
-	iconFaceOnce.Do(func() {
-		dc, _, _ := procCreateCompatibleDC.Call(0)
-		defer procDeleteDC.Call(dc)
-		for _, face := range iconFaceCandidates {
-			f := createFont(face, -16, fwNormal, antialiasQuality)
-			old, _, _ := procSelectObject.Call(dc, f)
-			var buf [64]uint16
-			n, _, _ := procGetTextFaceW.Call(dc, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
-			procSelectObject.Call(dc, old)
-			procDeleteObject.Call(f)
-			if n > 0 && windows.UTF16ToString(buf[:]) == face {
-				iconFace = face
-				return
-			}
+	iconFaceOnce.Do(func() { iconFace = firstInstalledFace(iconFaceCandidates) })
+	return iconFace
+}
+
+// findMonoFace returns the first fixed-width font Windows has; Consolas has
+// shipped with every version sshush runs on.
+func findMonoFace() string {
+	monoFaceOnce.Do(func() {
+		if monoFace = firstInstalledFace(monoFaceCandidates); monoFace == "" {
+			monoFace = "Consolas"
 		}
 	})
-	return iconFace
+	return monoFace
+}
+
+// firstInstalledFace returns the first of faces that is installed, or "". A
+// font that is not installed is silently substituted, so each candidate is
+// asked for and the face Windows actually chose compared with it.
+func firstInstalledFace(faces []string) string {
+	dc, _, _ := procCreateCompatibleDC.Call(0)
+	defer procDeleteDC.Call(dc)
+	for _, face := range faces {
+		f := createFont(face, -16, fwNormal, antialiasQuality)
+		old, _, _ := procSelectObject.Call(dc, f)
+		var buf [64]uint16
+		n, _, _ := procGetTextFaceW.Call(dc, uintptr(len(buf)), uintptr(unsafe.Pointer(&buf[0])))
+		procSelectObject.Call(dc, old)
+		procDeleteObject.Call(f)
+		if n > 0 && windows.UTF16ToString(buf[:]) == face {
+			return face
+		}
+	}
+	return ""
 }
 
 // renderGlyph draws glyph from the icon font, px square, as an icon in color
@@ -340,49 +375,4 @@ func windowText(hwnd uintptr) string {
 	buf := make([]uint16, n+1)
 	procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	return windows.UTF16ToString(buf)
-}
-
-// fitRows sizes each button in buttonRows to its icon and label and lays
-// each row out again. hasIcon reports whether a button shows an icon.
-func (u *uiCache) fitRows(dlg uintptr, hasIcon func(id uint16) bool) {
-	for _, row := range buttonRows {
-		type placed struct {
-			h     uintptr
-			r     [4]int32
-			width int32
-		}
-		items := make([]placed, len(row.ids))
-		for i, id := range row.ids {
-			h := control(dlg, int(id))
-			r := rectIn(dlg, h)
-			width := r[2] - r[0]
-			switch id {
-			case idMainTheme: // keeps its width
-			case idMainThemeLabel:
-				width = int32(textWidth(dlg, windowText(h)))
-			default:
-				content := textWidth(dlg, windowText(h))
-				if hasIcon(id) {
-					content += scale(glyphPixels+glyphGap, u.dpi)
-				}
-				width = int32(max(content+2*scale(buttonPad, u.dpi), scale(buttonMinWidth, u.dpi)))
-			}
-			items[i] = placed{h, r, width}
-		}
-		gap := int32(scale(rowGap, u.dpi))
-		x := items[0].r[0]
-		if row.right {
-			x = items[len(items)-1].r[2]
-			for _, it := range items {
-				x -= it.width
-			}
-			x -= gap * int32(len(items)-1)
-		}
-		for _, it := range items {
-			if it.r[0] != x || it.r[2]-it.r[0] != it.width {
-				procSetWindowPos.Call(it.h, 0, uintptr(x), uintptr(it.r[1]), uintptr(it.width), uintptr(it.r[3]-it.r[1]), swpNoZOrderMove)
-			}
-			x += it.width + gap
-		}
-	}
 }

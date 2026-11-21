@@ -10,8 +10,12 @@ import (
 	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/editcomment"
+	"github.com/ollykeran/sshush/internal/keys"
 	"github.com/ollykeran/sshush/internal/openssh"
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
+	"github.com/ollykeran/sshush/internal/vaultops"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
@@ -173,4 +177,86 @@ func UnloadKey(socketPath, fingerprint string) error {
 		return fmt.Errorf("the agent no longer holds %s", fingerprint)
 	}
 	return nil
+}
+
+// invalidCommentError is a name the key cannot take, said so the user can
+// change it and try again.
+type invalidCommentError struct{ msg string }
+
+func (e *invalidCommentError) Error() string { return e.msg }
+
+// RenameKey gives the key id the comment, as 'sshush edit --comment' and the
+// TUI do: the key file it came from is rewritten with the new comment, its
+// .pub too, and the running agent is told. A vault keeps its own name for
+// the key as well, so a vault identity whose file is gone, or protected by a
+// passphrase, is still renamed there. keyPaths are the config's, where a key
+// in an agent that is not a vault may have come from. It returns what it did.
+func RenameKey(env vaultops.Env, keyPaths []string, id vaultops.IdentityView, comment string) (string, error) {
+	if err := editcomment.Validate(comment); err != nil {
+		return "", &invalidCommentError{"A name cannot span lines."}
+	}
+	if comment == id.Comment {
+		return "", nil
+	}
+	s, err := agent.Open(env.SocketPath)
+	if err != nil {
+		return "", fmt.Errorf("the agent is not running: %w", err)
+	}
+	defer s.Close()
+	backend, err := s.Backend()
+	if err != nil {
+		return "", fmt.Errorf("the agent did not answer: %w", err)
+	}
+	inVault := backend.Mode == "vault"
+
+	path := id.Filepath
+	if path == "" && !inVault {
+		path = agent.ResolveFilepath(id.Fingerprint, keyPaths)
+	}
+	fileErr := rewriteComment(path, id.Fingerprint, comment)
+	named := fmt.Sprintf("Renamed %s to %q", identityName(id), comment)
+
+	if fileErr == nil {
+		res := editcomment.SyncAgent(s, id.Fingerprint, path, comment)
+		switch {
+		case res.VaultErr != nil:
+			return "", fmt.Errorf("the key file was renamed, but the vault was not: %w", res.VaultErr)
+		case res.ReloadErr != nil:
+			return "", fmt.Errorf("the key file was renamed, but the agent still has the old name: %w", res.ReloadErr)
+		}
+		return named + ", and its key file " + utils.DisplayPath(path) + ".", nil
+	}
+	if !inVault {
+		if path == "" {
+			return "", errors.New("sshush does not know which file holds this key, so cannot rename it. " +
+				"Add the file to [agent].key_paths, or use 'sshush edit <file> --comment'")
+		}
+		return "", fmt.Errorf("could not rename %s: %w", utils.DisplayPath(path), fileErr)
+	}
+	if err := vault.SetComment(s, id.Fingerprint, comment); err != nil {
+		return "", err
+	}
+	if path == "" || errors.Is(fileErr, os.ErrNotExist) {
+		return named + " in the vault.", nil
+	}
+	return named + " in the vault; its key file was left alone: " + describeAddError(fileErr) + ".", nil
+}
+
+// errOtherKey reports a key file that now holds a different key.
+var errOtherKey = errors.New("the file now holds a different key")
+
+// rewriteComment rewrites the private key file at path, and its .pub, with
+// comment, after checking it still holds the key with fingerprint.
+func rewriteComment(path, fingerprint, comment string) error {
+	if path == "" {
+		return os.ErrNotExist
+	}
+	_, raw, signer, err := keys.LoadKeyMaterial(path)
+	if err != nil {
+		return err
+	}
+	if ssh.FingerprintSHA256(signer.PublicKey()) != fingerprint {
+		return errOtherKey
+	}
+	return keys.SaveWithComment(raw, comment, path)
 }

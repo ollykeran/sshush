@@ -15,9 +15,20 @@ const (
 	idMessage = 100
 	idEdit    = 101
 	idError   = 102
+	idExtra   = 103 // an input dialog's optional third button
+
+	// The create key dialog's own items.
+	idCreateTypeLabel    = 110
+	idCreateType         = 111
+	idCreateCommentLabel = 112
+	idCreateComment      = 113
+	idCreatePathLabel    = 114
+	idCreatePath         = 115
+	idCreateBrowse       = 116
+	idCreateAdd          = 117
 )
 
-// Window and dialog styles the template uses.
+// Window and dialog styles the templates use.
 const (
 	wsChild         = 0x40000000
 	wsVisible       = 0x10000000
@@ -53,18 +64,88 @@ type dlgItem struct {
 	text           string
 }
 
-// passphraseTemplate lays out the unlock dialog: message, masked field, an
-// error line (empty until a wrong passphrase), and OK / Cancel.
-func passphraseTemplate(title, message, errText string) []uint16 {
+// inputSpec describes a one-field input dialog: the passphrase prompt,
+// renaming a key, and the like.
+type inputSpec struct {
+	title, message, errText string
+	// initial is the field's text when the dialog opens, selected.
+	initial string
+	// okLabel names the default button; "OK" when empty.
+	okLabel string
+	// extraLabel, when set, adds a button at the left that ends the dialog
+	// with idExtra, for another way to answer, such as a recovery phrase.
+	extraLabel string
+	// masked hides what is typed, for a passphrase.
+	masked bool
+}
+
+// inputTemplate lays out an input dialog: message, field, an error line
+// (empty until something is wrong), and the buttons.
+func inputTemplate(spec inputSpec) []uint16 {
+	ok := spec.okLabel
+	if ok == "" {
+		ok = "OK"
+	}
+	edit := uint32(wsChild | wsVisible | wsTabStop | esAutoHScroll)
+	if spec.masked {
+		edit |= esPassword
+	}
 	items := []dlgItem{
-		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 10, cx: 200, cy: 18, id: idMessage, class: classStatic, text: message},
-		{style: wsChild | wsVisible | wsTabStop | esPassword | esAutoHScroll, exStyle: wsExClientEdge, x: 10, y: 32, cx: 200, cy: 14, id: idEdit, class: classEdit},
-		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 50, cx: 200, cy: 10, id: idError, class: classStatic, text: errText},
-		{style: wsChild | wsVisible | wsTabStop | bsDefPush, x: 106, y: 66, cx: 50, cy: 14, id: idOK, class: classButton, text: "Unlock"},
-		{style: wsChild | wsVisible | wsTabStop, x: 160, y: 66, cx: 50, cy: 14, id: idCancel, class: classButton, text: "Cancel"},
+		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 10, cx: 220, cy: 26, id: idMessage, class: classStatic, text: spec.message},
+		{style: edit, exStyle: wsExClientEdge, x: 10, y: 40, cx: 220, cy: 14, id: idEdit, class: classEdit},
+		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 58, cx: 220, cy: 10, id: idError, class: classStatic, text: spec.errText},
+		{style: wsChild | wsVisible | wsTabStop | bsDefPush, x: 126, y: 74, cx: 50, cy: 14, id: idOK, class: classButton, text: ok},
+		{style: wsChild | wsVisible | wsTabStop, x: 180, y: 74, cx: 50, cy: 14, id: idCancel, class: classButton, text: "Cancel"},
+	}
+	if spec.extraLabel != "" {
+		items = append(items, dlgItem{style: wsChild | wsVisible | wsTabStop, x: 10, y: 74, cx: 90, cy: 14, id: idExtra, class: classButton, text: spec.extraLabel})
 	}
 	style := uint32(wsPopup | wsCaption | wsSysMenu | dsSetFont | dsModalFrame | dsSetForeground | dsCenter)
-	return buildTemplate(style, 220, 88, title, "Segoe UI", 9, items)
+	return buildTemplate(style, 240, 96, spec.title, "Segoe UI", 9, items)
+}
+
+// passphraseTemplate lays out the unlock dialog.
+func passphraseTemplate(title, message, errText string) []uint16 {
+	return inputTemplate(inputSpec{title: title, message: message, errText: errText, okLabel: "Unlock", masked: true})
+}
+
+// phraseTemplate lays out the dialog that shows a new vault's recovery
+// phrase once: what it is for, the words, selectable, and a way to copy them
+// that keeps them out of clipboard history.
+func phraseTemplate(message string) []uint16 {
+	items := []dlgItem{
+		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 10, cx: 260, cy: 44, id: idMessage, class: classStatic, text: message},
+		{style: wsChild | wsVisible | wsTabStop | esReadOnly | esMultiline, exStyle: wsExClientEdge, x: 10, y: 58, cx: 260, cy: 50, id: idEdit, class: classEdit},
+		{style: wsChild | wsVisible | wsTabStop, x: 10, y: 116, cx: 60, cy: 14, id: idExtra, class: classButton, text: "&Copy"},
+		{style: wsChild | wsVisible | wsTabStop | bsDefPush, x: 180, y: 116, cx: 90, cy: 14, id: idOK, class: classButton, text: "I have saved it"},
+	}
+	style := uint32(wsPopup | wsCaption | dsSetFont | dsModalFrame | dsSetForeground | dsCenter)
+	return buildTemplate(style, 280, 138, "Your recovery phrase", "Segoe UI", 9, items)
+}
+
+// createKeyTemplate lays out the create key dialog: the kind of key, its
+// name, where to save it, whether to add it now, and an error line. addLabel
+// says where it would be added.
+func createKeyTemplate(addLabel string) []uint16 {
+	const stop = wsChild | wsVisible | wsTabStop
+	label := func(id uint16, y int16, text string) dlgItem {
+		return dlgItem{style: wsChild | wsVisible, x: 10, y: y, cx: 64, cy: 10, id: id, class: classStatic, text: text}
+	}
+	items := []dlgItem{
+		label(idCreateTypeLabel, 12, "&Kind of key:"),
+		{style: stop | wsVScroll | cbsDropDownList, x: 78, y: 10, cx: 182, cy: 80, id: idCreateType, class: classComboBox},
+		label(idCreateCommentLabel, 32, "&Name:"),
+		{style: stop | esAutoHScroll, exStyle: wsExClientEdge, x: 78, y: 30, cx: 182, cy: 14, id: idCreateComment, class: classEdit},
+		label(idCreatePathLabel, 52, "&Save as:"),
+		{style: stop | esAutoHScroll, exStyle: wsExClientEdge, x: 78, y: 50, cx: 128, cy: 14, id: idCreatePath, class: classEdit},
+		{style: stop, x: 210, y: 50, cx: 50, cy: 14, id: idCreateBrowse, class: classButton, text: "&Browse…"},
+		{style: stop | bsAutoCheckbox, x: 78, y: 70, cx: 182, cy: 12, id: idCreateAdd, class: classButton, text: addLabel},
+		{style: wsChild | wsVisible | ssNoPrefix, x: 10, y: 88, cx: 250, cy: 10, id: idError, class: classStatic},
+		{style: stop | bsDefPush, x: 156, y: 104, cx: 50, cy: 14, id: idOK, class: classButton, text: "Create"},
+		{style: stop, x: 210, y: 104, cx: 50, cy: 14, id: idCancel, class: classButton, text: "Cancel"},
+	}
+	style := uint32(wsPopup | wsCaption | wsSysMenu | dsSetFont | dsModalFrame | dsSetForeground | dsCenter)
+	return buildTemplate(style, 270, 126, "Create key", "Segoe UI", 9, items)
 }
 
 // buildTemplate encodes a DLGTEMPLATE followed by its DLGITEMTEMPLATEs as

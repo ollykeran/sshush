@@ -50,7 +50,8 @@ func TestProbeMainNoAgentReadsTheFile(t *testing.T) {
 	if s.Reachable || !s.Listing || s.ListErr != nil || s.Listed.Initialized {
 		t.Errorf("got %+v", s)
 	}
-	if a := mainActions(s, nil); !a.Start || a.Add {
-		t.Errorf("actions with no agent: got %+v", a)
+	// A vault agent will not start without its vault, so creating one comes first.
+	if a := mainActions(s, nil); a.Start || a.Add || !a.CreateVault {
+		t.Errorf("actions with no agent and no vault: got %+v", a)
 	}
 }

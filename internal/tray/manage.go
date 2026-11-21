@@ -2,8 +2,10 @@ package tray
 
 import (
 	"cmp"
+	"crypto/rsa"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -19,7 +21,8 @@ import (
 // shows is worked out here from a MainState, so it is tested on every OS;
 // manage_windows.go only draws it.
 
-// Main window item IDs. idCancel closes it, as Esc and the close button do.
+// Main window item IDs. Esc and the close button send idCancel, which
+// closes it.
 const (
 	idMainAgent = 200 + iota
 	idMainAgentToggle
@@ -30,18 +33,35 @@ const (
 	idMainAdd
 	idMainRemove
 	idMainLoad
-	idMainUnload
 	idMainAutoload
 	idMainSelftest
 	idMainThemeLabel
 	idMainTheme
 	idMainRefresh
 	idMainStateIcon
+	idMainCreateVault
+	idMainDetailTitle
+	idMainDetailSub
+	idMainFpLabel
+	idMainFp
+	idMainCopyFp
+	idMainPubLabel
+	idMainPub
+	idMainCopyPub
+	idMainFromLabel
+	idMainFrom
+	idMainRename
+	idMainStartup
+	idMainVersion
+	idMainCreateKey
 )
 
 // Styles the main window adds to those in dialog_template.go.
 const (
 	wsMinimizeBox   = 0x00020000
+	wsMaximizeBox   = 0x00010000
+	wsThickFrame    = 0x00040000
+	wsClipChildren  = 0x02000000
 	wsBorder        = 0x00800000
 	wsVScroll       = 0x00200000
 	lvsReport       = 0x0001
@@ -50,43 +70,43 @@ const (
 	lvsNoSortHeader = 0x8000
 	ssIcon          = 0x0003
 	ssCenterImage   = 0x0200
+	ssNotify        = 0x0100
 	ssEndEllipsis   = 0x4000
 	ssPathEllipsis  = 0x8000
 	cbsDropDownList = 0x0003
+	esMultiline     = 0x0004
+	esAutoVScroll   = 0x0040
+	esReadOnly      = 0x0800
+	bsAutoCheckbox  = 0x0003
 	classListView   = "SysListView32"
 	classComboBox   = 0x85
 )
 
-// mainColumns heads the key list; keyRow fills it in this order.
-var mainColumns = []string{"Comment", "Type", "Fingerprint", "Loaded", "Autoload", "Added from"}
+// mainColumns heads the key list; keyRow fills it in this order. The
+// fingerprint, public key and file are in the details pane.
+var mainColumns = []string{"Name", "Type", "Status"}
 
 // buttonGlyphs gives each button its icon: a code point in Windows' icon font,
 // Segoe Fluent Icons or, before Windows 11, Segoe MDL2 Assets, which share
-// these. The lock and agent buttons change icon with what they do; see
-// lockGlyph and agentGlyph.
+// these. The lock, agent and load buttons change icon with what they do; see
+// lockGlyph, agentGlyph and loadGlyph.
 var buttonGlyphs = map[uint16]rune{
-	idMainAdd:      0xE710, // Add
-	idMainRemove:   0xE738, // Remove
-	idMainLoad:     0xE896, // Download: into the agent
-	idMainUnload:   0xE898, // Upload: out of it
-	idMainAutoload: 0xE945, // LightningBolt
-	idMainSelftest: 0xE9D9, // Diagnostic
-	idMainRefresh:  0xE72C, // Refresh
+	idMainAdd:         0xE710, // Add
+	idMainCreateVault: 0xE8F4, // NewFolder
+	idMainCreateKey:   0xE8D7, // Permissions: a key
+	idMainRemove:      0xE74D, // Delete
+	idMainAutoload:    0xE945, // LightningBolt
+	idMainRename:      0xE8AC, // Rename
+	idMainCopyFp:      0xE8C8, // Copy
+	idMainCopyPub:     0xE8C8, // Copy
+	idMainSelftest:    0xE9D9, // Diagnostic
+	idMainRefresh:     0xE72C, // Refresh
 }
 
-// buttonRows are the window's rows of controls that fit their labels: each
-// button is as wide as its icon and label need, and a row keeps its first
-// control where the template put it, or with right set its last, so it grows
-// away from the window's edge.
-var buttonRows = []struct {
-	ids   []uint16
-	right bool
-}{
-	{[]uint16{idMainLock, idMainAgentToggle}, true},
-	{[]uint16{idMainAdd, idMainRemove, idMainLoad, idMainUnload, idMainAutoload}, false},
-	{[]uint16{idMainRefresh}, true},
-	{[]uint16{idMainSelftest, idMainThemeLabel, idMainTheme}, false},
-	{[]uint16{idCancel}, true},
+// hasGlyph reports whether the button id shows an icon.
+func hasGlyph(id uint16) bool {
+	_, ok := buttonGlyphs[id]
+	return ok || id == idMainLock || id == idMainAgentToggle || id == idMainLoad
 }
 
 // lockGlyph is the lock button's icon: what pressing it does.
@@ -105,68 +125,70 @@ func agentGlyph(a MainActions) rune {
 	return 0xE71A // Stop
 }
 
-// mainTemplate lays out the main window as three bands: a header naming the
-// agent, with its state icon and the buttons that change that state; the
-// keys, a toolbar of what can be done to the one selected over the list and
-// a status line under it; and a footer with the selftest, the theme and
-// Close. Tab order follows that reading order.
+// loadGlyph is the load button's icon.
+func loadGlyph(a MainActions) rune {
+	if a.Unload {
+		return 0xE898 // Upload: out of the agent
+	}
+	return 0xE896 // Download: into it
+}
+
+// mainTemplate creates the main window's controls. Where they go is
+// mainLayout's business, so every item is placed at the origin; the order
+// is the tab order, which follows the reading order: header, command bar,
+// list, details, footer.
 func mainTemplate() []uint16 {
-	const (
-		w       = 480
-		h       = 248
-		margin  = 8
-		btnH    = 16
-		gap     = 4
-		btnW    = 58
-		wideW   = 80
-		headerH = 30
-		toolY   = margin + headerH + 6
-		listY   = toolY + btnH + 4
-		statusY = h - margin - btnH - 16
-		footY   = h - margin - btnH
-		textX   = margin + 26 // past the state icon
-	)
-	btn := func(id uint16, x, y, cx int16, text string) dlgItem {
-		return dlgItem{style: wsChild | wsVisible | wsTabStop, x: x, y: y, cx: cx, cy: btnH, id: id, class: classButton, text: text}
+	const stop = wsChild | wsVisible | wsTabStop
+	btn := func(id uint16, text string) dlgItem {
+		return dlgItem{style: stop, id: id, class: classButton, text: text}
 	}
-	label := func(id uint16, x, y, cx, cy int16, style uint32, text string) dlgItem {
-		return dlgItem{style: wsChild | wsVisible | style, x: x, y: y, cx: cx, cy: cy, id: id, class: classStatic, text: text}
+	label := func(id uint16, style uint32, text string) dlgItem {
+		return dlgItem{style: wsChild | wsVisible | ssNoPrefix | style, id: id, class: classStatic, text: text}
 	}
-	toggleX := int16(w - margin - wideW)
-	lockX := toggleX - gap - btnW
-	x := int16(margin)
-	tool := func(id uint16, cx int16, text string) dlgItem {
-		item := btn(id, x, toolY, cx, text)
-		x += cx + gap
-		return item
+	field := func(id uint16, style uint32) dlgItem {
+		return dlgItem{style: stop | esReadOnly | style, exStyle: wsExClientEdge, id: id, class: classEdit}
 	}
 	items := []dlgItem{
 		// Header.
-		label(idMainStateIcon, margin, margin+3, 20, 20, ssIcon|ssCenterImage, ""),
-		label(idMainAgent, textX, margin, lockX-gap-textX, 16, ssNoPrefix|ssEndEllipsis, ""),
-		label(idMainSource, textX, margin+18, lockX-gap-textX, 10, ssNoPrefix|ssPathEllipsis, ""),
-		btn(idMainLock, lockX, margin+5, btnW, "&Lock"),
-		btn(idMainAgentToggle, toggleX, margin+5, wideW, "S&top agent"),
-		// Keys.
-		tool(idMainAdd, btnW, "&Add…"),
-		tool(idMainRemove, btnW+8, "&Remove…"),
-		tool(idMainLoad, btnW, "L&oad"),
-		tool(idMainUnload, btnW, "&Unload"),
-		tool(idMainAutoload, 90, autoloadLabel(false)),
-		btn(idMainRefresh, w-margin-btnW, toolY, btnW, "Refresh"),
-		{style: wsChild | wsVisible | wsTabStop | wsBorder | lvsReport | lvsSingleSel | lvsShowSelAlway | lvsNoSortHeader,
-			x: margin, y: listY, cx: w - 2*margin, cy: statusY - 4 - listY, id: idMainList, className: classListView},
-		label(idMainStatus, margin, statusY, w-2*margin, 10, ssNoPrefix|ssEndEllipsis, ""),
-		// Footer.
-		btn(idMainSelftest, margin, footY, wideW, "Run s&elftest"),
+		label(idMainStateIcon, ssIcon|ssCenterImage, ""),
+		label(idMainAgent, ssEndEllipsis, ""),
+		label(idMainSource, ssPathEllipsis, ""),
+		btn(idMainLock, "&Lock"),
+		btn(idMainAgentToggle, "S&top agent"),
+		// Command bar.
+		btn(idMainAdd, "&Add keys…"),
+		btn(idMainCreateVault, "Create &vault…"),
+		btn(idMainCreateKey, "Create &key…"),
+		btn(idMainRefresh, "Refresh"),
+		// The list.
+		{style: stop | wsBorder | lvsReport | lvsSingleSel | lvsShowSelAlway | lvsNoSortHeader, id: idMainList, className: classListView},
+		// Details.
+		label(idMainDetailTitle, ssEndEllipsis, ""),
+		label(idMainDetailSub, ssEndEllipsis, ""),
+		label(idMainFpLabel, 0, "Fingerprint"),
+		field(idMainFp, esAutoHScroll),
+		btn(idMainCopyFp, "Copy"),
+		label(idMainPubLabel, 0, "Public key"),
+		field(idMainPub, esMultiline|esAutoVScroll),
+		btn(idMainCopyPub, "Co&py"),
+		label(idMainFromLabel, 0, "Added from"),
+		label(idMainFrom, ssPathEllipsis, ""),
+		btn(idMainLoad, "L&oad"),
+		btn(idMainAutoload, autoloadLabel(false)),
+		btn(idMainRename, "Rena&me…"),
+		btn(idMainRemove, "&Remove…"),
+		// Status and footer.
+		label(idMainStatus, ssEndEllipsis, ""),
+		btn(idMainSelftest, "Run s&elftest"),
 		// The label's mnemonic moves the focus to the drop-down after it.
-		label(idMainThemeLabel, margin+wideW+3*gap, footY+4, 26, 10, 0, "T&heme:"),
-		// A drop-down list's height includes its open list.
-		{style: wsChild | wsVisible | wsTabStop | wsVScroll | cbsDropDownList, x: margin + wideW + 3*gap + 26, y: footY + 1, cx: 80, cy: 60, id: idMainTheme, class: classComboBox},
-		btn(idCancel, w-margin-btnW, footY, btnW, "Close"),
+		{style: wsChild | wsVisible, id: idMainThemeLabel, class: classStatic, text: "T&heme:"},
+		{style: stop | wsVScroll | cbsDropDownList, id: idMainTheme, class: classComboBox},
+		{style: stop | bsAutoCheckbox, id: idMainStartup, class: classButton, text: "Start at sign-&in"},
+		label(idMainVersion, ssEndEllipsis, ""),
 	}
-	style := uint32(wsPopup | wsCaption | wsSysMenu | wsMinimizeBox | dsSetFont | dsSetForeground | dsCenter)
-	return buildTemplate(style, w, h, "sshush", "Segoe UI", 9, items)
+	style := uint32(wsPopup | wsCaption | wsSysMenu | wsMinimizeBox | wsMaximizeBox | wsThickFrame | wsClipChildren |
+		dsSetFont | dsSetForeground | dsCenter)
+	return buildTemplate(style, 520, 320, "sshush", "Segoe UI", 9, items)
 }
 
 // Tone colours the agent's state in the header.
@@ -231,6 +253,12 @@ func ProbeMain(env vaultops.Env) MainState {
 
 func (s MainState) isVault() bool { return s.Reachable && s.Backend.Mode == "vault" }
 
+// needsVault reports that the vault this agent serves, or would, has not
+// been created yet.
+func (s MainState) needsVault() bool {
+	return s.Listing && s.ListErr == nil && !s.Listed.Initialized
+}
+
 // open reports whether the agent can be asked to change its keys now.
 func (s MainState) open() bool { return s.Reachable && !(s.isVault() && s.Backend.VaultLocked) }
 
@@ -256,7 +284,7 @@ func (s MainState) Rows() []vaultops.IdentityView {
 	}
 	rows := make([]vaultops.IdentityView, 0, len(s.Keys))
 	for _, k := range s.Keys {
-		row := vaultops.IdentityView{Comment: k.Comment, KeyType: k.Format, Loaded: vaultops.LoadYes}
+		row := vaultops.IdentityView{Comment: k.Comment, KeyType: k.Format, Loaded: vaultops.LoadYes, PublicKey: k.Blob}
 		if pub, err := ssh.ParsePublicKey(k.Blob); err == nil {
 			row.Fingerprint = ssh.FingerprintSHA256(pub)
 		}
@@ -283,7 +311,8 @@ func Dimmed(id vaultops.IdentityView) bool { return id.Loaded != vaultops.LoadYe
 // MainActions says which of the window's buttons do anything.
 type MainActions struct {
 	Add, Remove, Load, Unload, Autoload bool
-	Lock, Unlock                        bool
+	Rename, Copy                        bool
+	Lock, Unlock, CreateVault           bool
 	Start, Stop                         bool
 	// AutoloadOn is what the autoload button would set: the opposite of sel's.
 	AutoloadOn bool
@@ -297,12 +326,15 @@ type MainActions struct {
 func mainActions(s MainState, sel *vaultops.IdentityView) MainActions {
 	vault := s.isVault()
 	a := MainActions{
-		Add:    s.open(),
-		Lock:   vault && !s.Backend.VaultLocked,
-		Unlock: vault && s.Backend.VaultLocked,
-		Start:  s.Managed && !s.Reachable,
-		Stop:   s.Managed && s.Reachable,
+		Add:         s.open() && !s.needsVault(),
+		Lock:        vault && !s.Backend.VaultLocked && !s.needsVault(),
+		Unlock:      vault && s.Backend.VaultLocked,
+		CreateVault: s.needsVault(),
+		Start:       s.Managed && !s.Reachable && !s.needsVault(), // a vault agent needs its vault
+		Stop:        s.Managed && s.Reachable,
 	}
+	// Copying a public key needs nothing from the agent.
+	a.Copy = sel != nil && len(sel.PublicKey) > 0
 	if sel == nil || !s.open() || sel.Fingerprint == "" {
 		return a
 	}
@@ -312,6 +344,11 @@ func mainActions(s MainState, sel *vaultops.IdentityView) MainActions {
 		a.Load = sel.Loaded == vaultops.LoadNo
 		a.Autoload = true
 		a.AutoloadOn = !sel.Autoload
+		a.Rename = true
+	} else {
+		// Renaming a key the agent holds rewrites its file, which only an
+		// agent sshush runs can say where to find.
+		a.Rename = s.Backend.SpeaksOps
 	}
 	return a
 }
@@ -335,26 +372,133 @@ func agentToggleLabel(a MainActions) string {
 // keyRow renders one row in mainColumns order. inVault says whether
 // autoload means anything for it.
 func keyRow(id vaultops.IdentityView, inVault bool) []string {
-	comment := id.Comment
-	if comment == "" {
-		comment = "(no comment)"
+	return []string{identityName(id), keyTypeLabel(id), statusLabel(id, inVault)}
+}
+
+// identityName names a key by its comment, else its type.
+func identityName(id vaultops.IdentityView) string {
+	if id.Comment != "" {
+		return id.Comment
 	}
-	fp := id.Fingerprint
-	if fp == "" {
-		fp = "unparseable key"
+	return keyTypeLabel(id) + " key"
+}
+
+// keyTypeLabel names a key's algorithm as people say it, with its size where
+// that varies: "ED25519", "RSA 3072", "ECDSA P-256".
+func keyTypeLabel(id vaultops.IdentityView) string {
+	pub, err := ssh.ParsePublicKey(id.PublicKey)
+	if err != nil {
+		if id.KeyType == "" || id.KeyType == "?" {
+			return "Unknown"
+		}
+		return id.KeyType
 	}
-	autoload := "-"
+	switch t := pub.Type(); t {
+	case ssh.KeyAlgoED25519:
+		return "ED25519"
+	case ssh.KeyAlgoSKED25519:
+		return "ED25519-SK"
+	case ssh.KeyAlgoSKECDSA256:
+		return "ECDSA-SK"
+	case ssh.KeyAlgoECDSA256:
+		return "ECDSA P-256"
+	case ssh.KeyAlgoECDSA384:
+		return "ECDSA P-384"
+	case ssh.KeyAlgoECDSA521:
+		return "ECDSA P-521"
+	case ssh.KeyAlgoRSA:
+		if c, ok := pub.(ssh.CryptoPublicKey); ok {
+			if k, ok := c.CryptoPublicKey().(*rsa.PublicKey); ok {
+				return fmt.Sprintf("RSA %d", k.N.BitLen())
+			}
+		}
+		return "RSA"
+	default:
+		return t
+	}
+}
+
+// statusLabel says whether ssh can use the key now and, in a vault, whether
+// it will be loaded when the vault is unlocked.
+func statusLabel(id vaultops.IdentityView, inVault bool) string {
+	var s string
+	switch id.Loaded {
+	case vaultops.LoadYes:
+		s = "Loaded"
+	case vaultops.LoadNo:
+		s = "Not loaded"
+	default:
+		s = "Unknown"
+	}
+	if inVault && id.Autoload {
+		s += " · autoload"
+	}
+	return s
+}
+
+// DetailView is what the details pane shows for the selected key.
+type DetailView struct {
+	Title, Sub  string
+	Fingerprint string
+	// PublicKey is the key as a line of authorized_keys, comment included:
+	// what a server or a forge wants pasted.
+	PublicKey string
+	From      string
+	// Empty reports that nothing is selected, and the fields are hidden.
+	Empty bool
+}
+
+// detailOf describes sel, or with nil the pane's empty state for s.
+func detailOf(s MainState, sel *vaultops.IdentityView) DetailView {
+	if sel == nil {
+		d := DetailView{Empty: true, Title: "No key selected"}
+		if len(s.Rows()) > 0 {
+			d.Sub = "Select a key to see its fingerprint and public key."
+		}
+		return d
+	}
+	inVault := s.showsVault()
+	d := DetailView{Title: identityName(*sel), Fingerprint: sel.Fingerprint, PublicKey: authorizedLine(*sel)}
+	parts := []string{keyTypeLabel(*sel)}
+	switch sel.Loaded {
+	case vaultops.LoadYes:
+		parts = append(parts, "loaded in the agent")
+	case vaultops.LoadNo:
+		parts = append(parts, "not loaded")
+	}
 	if inVault {
-		autoload = "no"
-		if id.Autoload {
-			autoload = "yes"
+		if sel.Autoload {
+			parts = append(parts, "loads when the vault is unlocked")
+		} else {
+			parts = append(parts, "loads only when you ask")
 		}
 	}
-	from := "-"
-	if id.Filepath != "" {
-		from = utils.DisplayPath(id.Filepath)
+	d.Sub = strings.Join(parts, " · ")
+	switch {
+	case sel.Filepath != "":
+		d.From = utils.DisplayPath(sel.Filepath)
+	case inVault:
+		d.From = "Not recorded"
+	default:
+		d.From = "Not known: the agent does not say"
 	}
-	return []string{comment, id.KeyType, fp, id.Loaded.String(), autoload, from}
+	if d.Fingerprint == "" {
+		d.Fingerprint = "The key does not parse"
+	}
+	return d
+}
+
+// authorizedLine is id's public key as one authorized_keys line, or "".
+func authorizedLine(id vaultops.IdentityView) string {
+	pub, err := ssh.ParsePublicKey(id.PublicKey)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+	if c := strings.TrimSpace(id.Comment); c != "" {
+		line += " " + c
+	}
+	return line
 }
 
 // sourceLine says where the listed keys come from.
@@ -373,6 +517,8 @@ func sourceLine(s MainState) string {
 func mainStatus(s MainState) (text string, isErr bool) {
 	locked := s.isVault() && s.Backend.VaultLocked
 	switch {
+	case s.needsVault():
+		return "There is no vault yet. Create one to keep your keys encrypted in a single file.", false
 	case locked && vaultops.CodeOf(s.ListErr) == vaultops.CodeVaultLocked:
 		return "The vault is locked. Unlock it to see what it holds.", false
 	case s.ListErr != nil:
@@ -385,7 +531,7 @@ func mainStatus(s MainState) (text string, isErr bool) {
 		}
 		return "The agent is not reachable. It is not one sshush starts; check the program that provides it.", true
 	case !s.Listed.Initialized:
-		return "There is no vault yet. Create one with 'sshush vault init'.", false
+		return "There is no vault yet. Create one to keep your keys encrypted in a single file.", false
 	}
 	n := len(s.Listed.Identities)
 	if n == 1 {
