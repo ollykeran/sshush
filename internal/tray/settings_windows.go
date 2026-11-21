@@ -55,8 +55,13 @@ func startupCommand() (string, error) {
 	return `"` + exe + `" ` + startupSwitch, nil
 }
 
-// startupEnabled reports whether Windows starts sshush at sign-in.
+// startupEnabled reports whether Windows starts sshush at sign-in: the
+// package's StartupTask in a Store install, else the Run key.
 func startupEnabled() bool {
+	if packaged() {
+		state, err := packagedStartupState()
+		return err == nil && state.on()
+	}
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
 	if err != nil {
 		return false
@@ -68,6 +73,9 @@ func startupEnabled() bool {
 
 // setStartup makes Windows start this tray at sign-in, or stop doing so.
 func setStartup(on bool) error {
+	if packaged() {
+		return setPackagedStartup(on)
+	}
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -87,9 +95,11 @@ func setStartup(on bool) error {
 }
 
 // refreshStartup points an existing sign-in entry at this program, so one
-// left by an install that has since moved still starts the tray.
+// left by an install that has since moved still starts the tray. A packaged
+// tray leaves the Run key alone: its StartupTask needs no path kept up to
+// date, and a write would only reach the package's private registry.
 func refreshStartup() {
-	if !startupEnabled() {
+	if packaged() || !startupEnabled() {
 		return
 	}
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE|registry.SET_VALUE)

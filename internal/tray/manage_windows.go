@@ -1202,6 +1202,9 @@ func (w *mainWindow) startupToggled() {
 	if err := setStartup(on == 1); err != nil {
 		procSendMessageW.Call(box, bmSetCheck, boolArg(on != 1), 0)
 		w.setStatus("Could not change whether sshush starts at sign-in: "+err.Error(), true)
+		if errors.Is(err, errStartupInSettings) {
+			openStartupSettings()
+		}
 		return
 	}
 	if on == 1 {

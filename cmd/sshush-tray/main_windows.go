@@ -3,8 +3,8 @@
 // listing its keys, and a main window, opened by clicking the icon or from
 // the menu, to start and stop the agent, unlock it, and manage its keys.
 // Starting it replaces any sshush-tray already running for the user, and
-// opens the main window unless --background is given, as it is when Windows
-// starts the tray at sign-in.
+// opens the main window unless it starts at sign-in: given --background, as
+// the Run key entry does, or started by the Store package's StartupTask.
 // It is a client of the agent like the CLI, so closing or crashing it never
 // affects sshushd, though it can start and stop it as 'sshush start' and
 // 'sshush stop' do.
@@ -44,7 +44,10 @@ func main() {
 	if err := tray.TakeOver(); err != nil {
 		fatal("could not replace the running tray: " + err.Error())
 	}
-	tray.Run(tray.EnvFor(cfg, socketPath), tray.Options{OpenWindow: !*background, KeyPaths: cfg.KeyPaths})
+	// A Store install starts at sign-in through its StartupTask, which passes
+	// no arguments, so it asks Windows instead of reading -background.
+	openWindow := !*background && !tray.StartedAtSignIn()
+	tray.Run(tray.EnvFor(cfg, socketPath), tray.Options{OpenWindow: openWindow, KeyPaths: cfg.KeyPaths})
 }
 
 // fatal reports in a message box: a GUI program has no console to print to.
