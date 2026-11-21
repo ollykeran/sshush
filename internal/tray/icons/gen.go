@@ -4,6 +4,11 @@
 // files holding PNG images (supported since Windows Vista).
 //
 //	cd internal/tray/icons && go run gen.go
+//
+// Given "msix <dir>", it instead writes the MSIX package's logos into dir,
+// drawn from the same padlock as the tray's keys icon:
+//
+//	cd internal/tray/icons && go run gen.go msix ../../../packaging/msix/Assets
 package main
 
 import (
@@ -15,6 +20,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"path/filepath"
 )
 
 type style struct {
@@ -31,6 +37,10 @@ func main() {
 		{name: "locked", fill: color.NRGBA{0xe0, 0x8a, 0x1e, 0xff}},
 		{name: "unlocked", fill: color.NRGBA{0x22, 0xa5, 0x5a, 0xff}, open: true},
 	}
+	if len(os.Args) == 3 && os.Args[1] == "msix" {
+		writeMSIXLogos(styles[1], os.Args[2])
+		return
+	}
 	for _, s := range styles {
 		var pngs [][]byte
 		for _, size := range []int{16, 32, 48} {
@@ -41,6 +51,37 @@ func main() {
 			pngs = append(pngs, buf.Bytes())
 		}
 		if err := os.WriteFile(s.name+".ico", ico(pngs, []int{16, 32, 48}), 0o644); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+// writeMSIXLogos writes the logos AppxManifest.xml names, each at the size
+// Windows shows it at 100% scale. The tile is mostly margin, as Windows
+// expects of a tile logo, so the padlock fills two thirds of it.
+func writeMSIXLogos(s style, dir string) {
+	logos := []struct {
+		name        string
+		size, glyph int
+	}{
+		{"Square44x44Logo.png", 44, 44},
+		{"Square150x150Logo.png", 150, 100},
+		{"StoreLogo.png", 50, 50},
+	}
+	for _, l := range logos {
+		canvas := image.NewNRGBA(image.Rect(0, 0, l.size, l.size))
+		glyph := draw(s, l.glyph).(*image.NRGBA)
+		off := (l.size - l.glyph) / 2
+		for y := 0; y < l.glyph; y++ {
+			for x := 0; x < l.glyph; x++ {
+				canvas.SetNRGBA(x+off, y+off, glyph.NRGBAAt(x, y))
+			}
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, canvas); err != nil {
+			log.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, l.name), buf.Bytes(), 0o644); err != nil {
 			log.Fatal(err)
 		}
 	}
