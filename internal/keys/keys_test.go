@@ -209,3 +209,11 @@ func TestFormatPublicKey(t *testing.T) {
 		t.Fatalf("FormatPublicKey() = %q, expected comment suffix", got)
 	}
 }
+
+func TestAccountNameDropsTheWindowsDomain(t *testing.T) {
+	for in, want := range map[string]string{`OLLY-PC\ollyk`: "ollyk", "ollyk": "ollyk", `A\B\c`: "c"} {
+		if got := accountName(in); got != want {
+			t.Errorf("accountName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
