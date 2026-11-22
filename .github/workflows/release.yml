@@ -56,10 +56,15 @@ jobs:
           path: build/windows-amd64/*.exe
           if-no-files-found: error
 
+      # A tag with a suffix, such as v0.1.1-test.1, makes a draft pre-release:
+      # the whole pipeline runs, MSIX included, but only maintainers see the
+      # result until it is published or deleted.
       - name: Release
         if: ${{ !env.ACT }}
         uses: softprops/action-gh-release@v3
         with:
+          draft: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             build/sshush-*-linux-amd64.tar.gz

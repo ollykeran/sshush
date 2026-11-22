@@ -84,9 +84,9 @@ pkg target="": (build "linux")
       local out="$(cd "{{ build_dir }}" && pwd)/sshush-{{ version }}-${suffix}.zip"
       rm -f "$out"
       if command -v zip >/dev/null 2>&1; then
-        (cd "{{ build_dir }}/${src_dir}" && zip -q "$out" sshush.exe sshushd.exe)
+        (cd "{{ build_dir }}/${src_dir}" && zip -q "$out" sshush.exe sshushd.exe sshush-tray.exe)
       else
-        (cd "{{ build_dir }}/${src_dir}" && python3 -m zipfile -c "$out" sshush.exe sshushd.exe)
+        (cd "{{ build_dir }}/${src_dir}" && python3 -m zipfile -c "$out" sshush.exe sshushd.exe sshush-tray.exe)
       fi
     }
     case "{{ target }}" in
@@ -226,6 +226,7 @@ check-artifacts ver="dev":
     check "$dir/darwin-amd64/sshushd"                   "Mach-O"
     check "$dir/windows-amd64/sshush.exe"               "PE32+"
     check "$dir/windows-amd64/sshushd.exe"              "PE32+"
+    check "$dir/windows-amd64/sshush-tray.exe"          "PE32+"
     check "$dir/sshush-{{ ver }}-linux-amd64.tar.gz"   "gzip"
     check "$dir/sshush-{{ ver }}-darwin-arm64.tar.gz"  "gzip"
     check "$dir/sshush-{{ ver }}-darwin-amd64.tar.gz"  "gzip"
