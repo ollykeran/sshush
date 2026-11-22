@@ -39,6 +39,13 @@ assets="$here/packaging/msix/Assets"
 
 die() { echo "msix: $*" >&2; exit 1; }
 
+# sdk_tool runs a Windows SDK program. Git Bash and MSYS2 rewrite arguments
+# that look like Unix paths, which turns makeappx's /o into O:/; the paths
+# given here are already Windows paths (windows_path), so that is turned off.
+sdk_tool() {
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$@"
+}
+
 # msix_version turns a release version into the four-part one MSIX requires.
 # The Store also requires the fourth part to be 0. A pre-release suffix
 # (1.2.0-rc1) is dropped: MSIX versions are numbers only. Anything that is not
@@ -226,7 +233,7 @@ pack() {
     src="$work/stage"
     out="$work/package.msix"
   fi
-  "$makeappx" pack /o /h SHA256 /d "$(windows_path "$src")" /p "$(windows_path "$out")"
+  sdk_tool "$makeappx" pack /o /h SHA256 /d "$(windows_path "$src")" /p "$(windows_path "$out")"
   if [ -n "$work" ]; then
     mv "$out" "$msix"
     rm -rf "$work"
@@ -268,7 +275,7 @@ sign() {
     cp "$msix" "$work/package.msix"
     target="$work/package.msix"
   fi
-  "$signtool" sign /q /fd SHA256 /sha1 "$thumbprint" "$(windows_path "$target")"
+  sdk_tool "$signtool" sign /q /fd SHA256 /sha1 "$thumbprint" "$(windows_path "$target")"
   if [ -n "$work" ]; then
     mv "$target" "$msix"
     rm -rf "$work"
