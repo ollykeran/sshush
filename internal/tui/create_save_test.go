@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 // newCreateSaveScreen returns a Create screen saving to name in a temp dir,
@@ -72,8 +73,11 @@ func TestCreateSaveOverExistingFileAsksFirst(t *testing.T) {
 	}
 	view := ansi.Strip(s.View().Content)
 	// A long path wraps inside the box, so compare without borders and spacing.
-	flat := strings.NewReplacer("│", "", " ", "", "\n", "").Replace(view)
-	if !strings.Contains(view, "Overwrite key?") || !strings.Contains(flat, path+"alreadyexists") {
+	// The popup shows the display path (~ for home, which temp dirs sit under
+	// on Windows), so compare with that.
+	unwrap := strings.NewReplacer("│", "", " ", "", "\n", "")
+	if !strings.Contains(view, "Overwrite key?") ||
+		!strings.Contains(unwrap.Replace(view), unwrap.Replace(utils.DisplayPath(path))+"alreadyexists") {
 		t.Fatalf("popup should name the file:\n%s", view)
 	}
 
