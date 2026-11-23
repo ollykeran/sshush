@@ -49,7 +49,7 @@ type CreateScreen struct {
 	zonePrefix  string
 	lastKeyType string
 	fileEdited  bool
-	confirmSave bool
+	confirm     confirmDialog // asks before Save overwrites an existing key file
 	ring        FocusRing
 	width       int
 	height      int
@@ -95,6 +95,7 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 		saveBtn:     saveBtn,
 		zonePrefix:  prefix,
 		lastKeyType: "ed25519",
+		confirm:     newConfirmDialog(),
 		ring:        NewFocusRing(6), // type, options, comment, dir, filename, save
 	}
 	s.ring.SetSkip(func(i int) bool {
@@ -103,7 +104,10 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 	return s
 }
 
-func (s *CreateScreen) HasModal() bool { return false }
+func (s *CreateScreen) HasModal() bool { return s.confirm.active }
+
+// ModalTakesEsc lets esc reach the overwrite popup, where it answers no.
+func (s *CreateScreen) ModalTakesEsc() bool { return s.confirm.active }
 
 func (s *CreateScreen) HasActiveTextInput() bool {
 	return s.commentIn.Focused() || s.dirInput.Focused() || s.filenameIn.Focused()
@@ -121,7 +125,6 @@ func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 
 	case keyGenDoneMsg:
-		s.confirmSave = false
 		if msg.err != nil {
 			s.status = msg.err.Error()
 			s.statusErr = true
@@ -140,9 +143,15 @@ func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Button != tea.MouseLeft {
 			return s, nil
 		}
+		if s.confirm.active {
+			return s.answerOverwrite(s.confirm.HandleMouse(msg.X, msg.Y))
+		}
 		return s.handleMouse(msg.X, msg.Y)
 
 	case tea.KeyPressMsg:
+		if s.confirm.active {
+			return s.answerOverwrite(s.confirm.Update(msg))
+		}
 		if s.ring.Index() == createFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
 		}
@@ -216,9 +225,6 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 
 func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	focus := s.ring.Index()
-	if !(msg.String() == "enter" && focus == createFocusSave) {
-		s.confirmSave = false
-	}
 
 	switch {
 	case KeyMatches(msg, KeyQuit):
@@ -403,23 +409,44 @@ func (s *CreateScreen) syncKeyTypeChange() {
 	}
 }
 
-func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
-	dir := s.dirInput.Value()
-	filename := s.filenameIn.Value()
+// savePath is the directory and file name Save writes the private key to (the
+// public key goes beside it with .pub added), and the two joined.
+func (s *CreateScreen) savePath() (dir, filename, fullPath string) {
+	dir = s.dirInput.Value()
+	filename = s.filenameIn.Value()
 	if filename == "" {
 		filename = "id_" + s.currentKeyType()
 	}
-	fullPath := filepath.Join(dir, filename)
+	return dir, filename, filepath.Join(dir, filename)
+}
 
-	if !s.confirmSave {
-		if _, err := os.Stat(fullPath); err == nil {
-			s.confirmSave = true
-			s.status = "file exists! press Save again to overwrite"
-			s.statusErr = true
-			return s, nil
-		}
+// doSave generates and saves the key, first asking whether to overwrite when
+// the private key file already exists.
+func (s *CreateScreen) doSave() (tea.Model, tea.Cmd) {
+	_, _, fullPath := s.savePath()
+	if _, err := os.Stat(fullPath); err == nil {
+		s.confirm.Show("Overwrite key?",
+			utils.DisplayPath(fullPath)+"\n"+
+				"already exists. Saving replaces it and its .pub file.")
+		return s, nil
 	}
-	s.confirmSave = false
+	return s.generate()
+}
+
+// answerOverwrite acts on the overwrite question once it has an answer.
+func (s *CreateScreen) answerOverwrite(result confirmResult) (tea.Model, tea.Cmd) {
+	switch result {
+	case confirmYes:
+		return s.generate()
+	case confirmNo:
+		s.status = "not saved"
+		s.statusErr = false
+	}
+	return s, nil
+}
+
+func (s *CreateScreen) generate() (tea.Model, tea.Cmd) {
+	dir, filename, _ := s.savePath()
 
 	s.saveBtn.Press()
 	s.genResult = nil
@@ -447,6 +474,11 @@ func (s *CreateScreen) View() tea.View {
 	w := width
 	if w < 1 {
 		w = defaultViewWidth
+	}
+
+	if s.confirm.active {
+		return tea.NewView(lipgloss.Place(w, height, lipgloss.Center, lipgloss.Center,
+			s.confirm.View(s.sk.Styles(), min(SectionWidth(w), 72))))
 	}
 
 	leftW := w / 2
@@ -495,12 +527,14 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 
 	sections = append(sections, zone.Mark(s.zonePrefix+"filename", st.SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename))))
 
-	fullPath := filepath.Join(s.dirInput.Value(), s.filenameIn.Value())
-	if _, err := os.Stat(fullPath); err == nil {
-		sections = append(sections, st.WarnStyle.Render("  ⚠ File exists: "+utils.DisplayPath(fullPath)))
-	}
-
 	sections = append(sections, " "+s.saveBtn.View(st))
+
+	// Below Save, set apart by a blank line: the warning that Save will ask to
+	// overwrite, then the last save's status.
+	_, _, fullPath := s.savePath()
+	if _, err := os.Stat(fullPath); err == nil {
+		sections = append(sections, "", st.WarnStyle.Render("  ⚠ File exists: "+utils.DisplayPath(fullPath)))
+	}
 
 	if s.status != "" {
 		style := st.FocusStyle
@@ -513,19 +547,28 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 	return strings.Join(sections, "\n")
 }
 
+// viewResultPanel shows the Public Key, Private Key and Public Key File boxes.
+// They are drawn before a key is generated too, so the page does not shift when
+// one is: until then the file boxes preview, dimmed, where Save will write.
 func (s *CreateScreen) viewResultPanel(w int) string {
 	st := s.sk.Styles()
-	if s.genResult == nil {
-		return st.DimStyle.Render("  Generate a key to see results")
+	var pubKey, privPath, pubPath string
+	if s.genResult != nil {
+		pubKey = st.AccentStyle.Render(s.genResult.pubKeyStr)
+		privPath = st.AccentStyle.Render(utils.DisplayPath(s.genResult.privPath))
+		pubPath = st.AccentStyle.Render(utils.DisplayPath(s.genResult.pubPath))
+	} else {
+		_, _, full := s.savePath()
+		pubKey = st.DimStyle.Render("shown here after Save")
+		privPath = st.DimStyle.Render(utils.DisplayPath(full))
+		pubPath = st.DimStyle.Render(utils.DisplayPath(full + ".pub"))
 	}
 
-	var sections []string
-
-	sections = append(sections, st.SectionBox("Public Key", st.AccentStyle.Render(s.genResult.pubKeyStr), w, false))
-	sections = append(sections, st.SectionBox("Private Key", st.AccentStyle.Render(utils.DisplayPath(s.genResult.privPath)), w, false))
-	sections = append(sections, st.SectionBox("Public Key File", st.AccentStyle.Render(utils.DisplayPath(s.genResult.pubPath)), w, false))
-
-	return strings.Join(sections, "\n")
+	return strings.Join([]string{
+		st.SectionBox("Public Key", pubKey, w, false),
+		st.SectionBox("Private Key", privPath, w, false),
+		st.SectionBox("Public Key File", pubPath, w, false),
+	}, "\n")
 }
 
 func (s *CreateScreen) StatusTextRaw() (string, bool) {
