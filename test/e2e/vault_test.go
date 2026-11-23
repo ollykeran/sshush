@@ -37,7 +37,7 @@ func buildBins(t *testing.T) string {
 		if dir := os.Getenv("SSHUSH_E2E_BIN_DIR"); dir != "" {
 			// Verify binaries exist
 			for _, name := range []string{"sshush", "sshushd"} {
-				path := filepath.Join(dir, name)
+				path := filepath.Join(dir, exeName(name))
 				if _, err := os.Stat(path); err != nil {
 					buildErr = fmt.Errorf("pre-built binary %s not found in %s: %w", name, dir, err)
 					return
@@ -61,7 +61,7 @@ func buildBins(t *testing.T) string {
 			{"sshush", "./cmd/sshush"},
 			{"sshushd", "./cmd/sshushd"},
 		} {
-			outPath := filepath.Join(binDir, target.name)
+			outPath := filepath.Join(binDir, exeName(target.name))
 			cmd := exec.Command("go", "build", "-o", outPath, target.pkg)
 			cmd.Dir = moduleRoot
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -71,6 +71,11 @@ func buildBins(t *testing.T) string {
 		}
 	})
 	if buildErr != nil {
+		// Binaries that were asked for by name and are not there is a mistake in
+		// whatever set the variable, and skipping would report it as a pass.
+		if os.Getenv("SSHUSH_E2E_BIN_DIR") != "" {
+			t.Fatalf("SSHUSH_E2E_BIN_DIR: %v", buildErr)
+		}
 		t.Skipf("build binaries: %v", buildErr)
 	}
 	return binDir
@@ -126,19 +131,7 @@ func writeE2EConfig(t *testing.T, dir, socketPath, vaultPath string, keyPaths []
 // Returns stdout, stderr, and exit code.
 func runSSHush(t *testing.T, binDir, configPath, runtimeDir string, stdin io.Reader, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
-	sshushPath := filepath.Join(binDir, "sshush")
-	fullArgs := append([]string{"--config", configPath}, args...)
-	cmd := exec.Command(sshushPath, fullArgs...)
-	env := make([]string, 0, len(os.Environ())+2)
-	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "SSHUSH_CONFIG=") || strings.HasPrefix(e, "XDG_RUNTIME_DIR=") || strings.HasPrefix(e, "XDG_STATE_HOME=") {
-			continue
-		}
-		env = append(env, e)
-	}
-	// XDG_STATE_HOME puts the server's default log in the test's directory rather
-	// than the developer's own.
-	cmd.Env = append(env, "SSHUSH_CONFIG="+configPath, "XDG_RUNTIME_DIR="+runtimeDir, "XDG_STATE_HOME="+runtimeDir)
+	cmd := sshushCommand(binDir, configPath, runtimeDir, args...)
 	cmd.Stdin = stdin
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -154,6 +147,25 @@ func runSSHush(t *testing.T, binDir, configPath, runtimeDir string, stdin io.Rea
 		}
 	}
 	return stdout, stderr, exitCode
+}
+
+// sshushCommand prepares the sshush binary with the config and environment
+// runSSHush describes, for a test that needs the process itself rather than
+// what it printed.
+func sshushCommand(binDir, configPath, runtimeDir string, args ...string) *exec.Cmd {
+	fullArgs := append([]string{"--config", configPath}, args...)
+	cmd := exec.Command(filepath.Join(binDir, exeName("sshush")), fullArgs...)
+	env := make([]string, 0, len(os.Environ())+3)
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "SSHUSH_CONFIG=") || strings.HasPrefix(e, "XDG_RUNTIME_DIR=") || strings.HasPrefix(e, "XDG_STATE_HOME=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	// XDG_STATE_HOME puts the server's default log in the test's directory rather
+	// than the developer's own.
+	cmd.Env = append(env, "SSHUSH_CONFIG="+configPath, "XDG_RUNTIME_DIR="+runtimeDir, "XDG_STATE_HOME="+runtimeDir)
+	return cmd
 }
 
 // writeE2ETestKey generates an ed25519 key and writes private+public to dir. Returns private key path.

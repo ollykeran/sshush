@@ -1,3 +1,5 @@
+//go:build !windows
+
 package server
 
 import (
@@ -337,6 +339,27 @@ func TestServer_ListenAndServeReturnsNilAfterClose(t *testing.T) {
 	if err := srv.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("ListenAndServe after Close = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ListenAndServe kept serving after Close")
+	}
+}
+
+// A Close that lands after the listener is up but before the server has
+// started accepting on it must still stop the server.
+func TestServer_CloseBeforeServingStartsStillStops(t *testing.T) {
+	srv := &Server{
+		ListenAddr: "127.0.0.1:0",
+		AuthKeys:   &AgentAuth{Agent: sshagent.NewKeyring()},
+	}
+	// Ready runs in exactly that gap.
+	srv.Ready = func() { _ = srv.Close() }
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe() }()
 	select {
 	case err := <-served:
 		if err != nil {

@@ -9,18 +9,19 @@ var (
 	ErrAmbiguousComment = errors.New("vault: multiple identities match that comment")
 )
 
-// ResolveIdentity finds an identity by exact SHA256 fingerprint string or by exact comment.
-func ResolveIdentity(store *VaultStore, spec string) (Identity, error) {
+// ResolveIdentity finds an identity by exact SHA256 fingerprint string or by
+// exact comment. ids is a vault's contents from either source: [ListIdentities]
+// for a vault file, [Identities] for the vault behind an agent.
+func ResolveIdentity(ids []IdentityInfo, spec string) (IdentityInfo, error) {
 	if spec == "" {
-		return Identity{}, ErrIdentityNotFound
+		return IdentityInfo{}, ErrIdentityNotFound
 	}
-	ids := store.AllIdentities()
 	for _, id := range ids {
 		if id.Fingerprint == spec {
 			return id, nil
 		}
 	}
-	var matches []Identity
+	var matches []IdentityInfo
 	for _, id := range ids {
 		if id.Comment == spec {
 			matches = append(matches, id)
@@ -28,20 +29,20 @@ func ResolveIdentity(store *VaultStore, spec string) (Identity, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return Identity{}, ErrIdentityNotFound
+		return IdentityInfo{}, ErrIdentityNotFound
 	case 1:
 		return matches[0], nil
 	default:
-		return Identity{}, ErrAmbiguousComment
+		return IdentityInfo{}, ErrAmbiguousComment
 	}
 }
 
 // ResolveIdentityByFingerprint finds an identity by fingerprint only.
-func ResolveIdentityByFingerprint(store *VaultStore, fp string) (Identity, error) {
-	for _, id := range store.AllIdentities() {
+func ResolveIdentityByFingerprint(ids []IdentityInfo, fp string) (IdentityInfo, error) {
+	for _, id := range ids {
 		if id.Fingerprint == fp {
 			return id, nil
 		}
 	}
-	return Identity{}, ErrIdentityNotFound
+	return IdentityInfo{}, ErrIdentityNotFound
 }

@@ -180,16 +180,104 @@ func TestRemove_unknownSelectorNamesIt(t *testing.T) {
 }
 
 // TestRemove_uninitializedVaultReportsNotInitialized pins the precondition
-// order the seam settles on: the store is checked before the agent, so a
-// missing vault is reported as a missing vault rather than as a missing agent.
+// order the seam settles on for a vault the user named: the file is checked
+// before the agent, so a mistyped --vault-path is reported as a missing vault
+// rather than as whatever the running agent makes of the selector.
 func TestRemove_uninitializedVaultReportsNotInitialized(t *testing.T) {
 	f := startVaultAgent(t, false)
-	env := f.env()
-	env.VaultPath = filepath.Join(f.dir, "no-such-vault.json")
+
+	_, err := Remove(f.namedEnv(filepath.Join(f.dir, "no-such-vault.json")), []string{"nope"})
+	if got := CodeOf(err); got != CodeVaultNotInitialized {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeVaultNotInitialized, got, err)
+	}
+}
+
+// TestRemove_uninitializedVaultWithoutAnAgentReportsNotInitialized: with no
+// vault agent to ask, the configured file is all there is, and "there is no
+// vault there yet" is the more useful half of the story.
+func TestRemove_uninitializedVaultWithoutAnAgentReportsNotInitialized(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	env := Env{
+		VaultPath:  filepath.Join(dir, "no-such-vault.json"),
+		SocketPath: filepath.Join(dir, "nothing-here.sock"),
+	}
 
 	_, err := Remove(env, []string{"nope"})
 	if got := CodeOf(err); got != CodeVaultNotInitialized {
 		t.Fatalf("code: want %v, got %v (err %v)", CodeVaultNotInitialized, got, err)
+	}
+}
+
+// TestRemove_withoutAVaultFile is the shared-daemon case: the agent's vault is
+// somewhere this client cannot read, so every kind of selector has to resolve
+// against what the agent says it holds.
+func TestRemove_withoutAVaultFile(t *testing.T) {
+	f := startVaultAgent(t, false)
+	_, fingerprint := f.addKey(t, "id_one", "one-key", true)
+	f.addKey(t, "id_two", "two-key", false)
+	path, _ := f.addKey(t, "id_three", "three-key", true)
+
+	res, err := Remove(f.remoteEnv(), []string{fingerprint, "two-key", path})
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if len(res.Removed) != 3 {
+		t.Fatalf("removed: want 3, got %v", res.Removed)
+	}
+	if left := f.store.AllIdentities(); len(left) != 0 {
+		t.Fatalf("stored identities: want 0, got %v", left)
+	}
+}
+
+// TestRemove_configuredVaultFileNeedNotExist: a vault_path left in config is
+// only a fallback, so one that points nowhere does not get in the way of an
+// agent that can answer for its own vault.
+func TestRemove_configuredVaultFileNeedNotExist(t *testing.T) {
+	f := startVaultAgent(t, false)
+	f.addKey(t, "id_one", "one-key", true)
+
+	env := f.env()
+	env.VaultPath = filepath.Join(f.dir, "no-such-vault.json")
+	if _, err := Remove(env, []string{"one-key"}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if left := f.store.AllIdentities(); len(left) != 0 {
+		t.Fatalf("stored identities: want 0, got %v", left)
+	}
+}
+
+func TestRemove_legacyAgentFallsBackToTheVaultFile(t *testing.T) {
+	f := startLegacyVaultAgent(t)
+	f.addKey(t, "id_one", "one-key", true)
+
+	if _, err := Remove(f.env(), []string{"one-key"}); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if left := f.store.AllIdentities(); len(left) != 0 {
+		t.Fatalf("stored identities: want 0, got %v", left)
+	}
+}
+
+// TestRemove_legacyAgentWithoutAVaultFileSaysSo: nothing can resolve the
+// selector, and the remedy must not send the user to 'sshush reload', which
+// refuses for an agent this sshush does not manage.
+func TestRemove_legacyAgentWithoutAVaultFileSaysSo(t *testing.T) {
+	f := startLegacyVaultAgent(t)
+	f.addKey(t, "id_one", "one-key", true)
+
+	_, err := Remove(f.remoteEnv(), []string{"one-key"})
+	if got := CodeOf(err); got != CodeAgentTooOld {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeAgentTooOld, got, err)
+	}
+	if hint := HintOf(err); strings.Contains(hint, "sshush reload") || !strings.Contains(hint, "where it runs") {
+		t.Fatalf("hint: want a remedy for an unmanaged agent, got %q", hint)
+	}
+
+	env := f.remoteEnv()
+	env.AgentUnmanaged = false
+	_, err = Remove(env, []string{"one-key"})
+	if hint := HintOf(err); !strings.Contains(hint, "sshush reload") {
+		t.Fatalf("hint: want it to name 'sshush reload' for a managed agent, got %q", hint)
 	}
 }
 
@@ -249,13 +337,14 @@ func TestAdd_unlocksLockedAgentServingThisVault(t *testing.T) {
 }
 
 // TestAdd_doesNotPromptForAnAgentServingAnotherVault keeps the guard that goes
-// with the transparent unlock.
+// with the transparent unlock: naming a vault that is not the agent's never
+// asks for the agent's passphrase.
 func TestAdd_doesNotPromptForAnAgentServingAnotherVault(t *testing.T) {
 	f := startVaultAgent(t, false)
 	path, _ := writeTestKey(t, f.dir, "id_new", "new-key")
 	f.lock(t)
 
-	env := f.env()
+	env := f.namedEnv(f.vaultPath)
 	env.AgentVaultPath = filepath.Join(f.dir, "some-other-vault.json")
 	_, err := Add(env, []string{path}, true)
 	if got := CodeOf(err); got != CodeVaultLocked {
@@ -263,5 +352,88 @@ func TestAdd_doesNotPromptForAnAgentServingAnotherVault(t *testing.T) {
 	}
 	if f.ask.calls != 0 {
 		t.Fatalf("passphrase prompts: want 0, got %d", f.ask.calls)
+	}
+}
+
+// TestAdd_unlocksLockedAgentWithoutLocalVaultConfig is the transparent unlock
+// following the agent rather than config: nothing here says the agent is a
+// vault except the agent, and that is enough to ask for its passphrase.
+func TestAdd_unlocksLockedAgentWithoutLocalVaultConfig(t *testing.T) {
+	f := startVaultAgent(t, false)
+	path, fingerprint := writeTestKey(t, f.dir, "id_new", "new-key")
+	f.lock(t)
+
+	if _, err := Add(f.remoteEnv(), []string{path}, true); err != nil {
+		t.Fatalf("add against a locked agent: %v", err)
+	}
+	if f.ask.calls != 1 {
+		t.Fatalf("passphrase prompts: want 1, got %d", f.ask.calls)
+	}
+	ids := f.store.AllIdentities()
+	if len(ids) != 1 || ids[0].Fingerprint != fingerprint {
+		t.Fatalf("stored identities: want fingerprint %s, got %v", fingerprint, ids)
+	}
+}
+
+// TestAdd_unmanagedAgentRemediesDoNotNameStartOrReload: 'sshush start' and
+// 'sshush reload' refuse under [agent].type = "external", so a hint naming
+// them sends the user in a circle.
+func TestAdd_unmanagedAgentRemediesDoNotNameStartOrReload(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	path, _ := writeTestKey(t, dir, "id_new", "new-key")
+
+	for name, socketPath := range map[string]string{
+		"no agent":      filepath.Join(dir, "nothing-here.sock"),
+		"foreign agent": startForeignAgent(t, dir),
+	} {
+		_, err := Add(Env{SocketPath: socketPath, AgentUnmanaged: true}, []string{path}, true)
+		hint := HintOf(err)
+		if hint == "" || strings.Contains(hint, "sshush start") || strings.Contains(hint, "sshush reload") {
+			t.Errorf("%s: want a remedy that does not name start or reload, got %q", name, hint)
+		}
+		if !strings.Contains(hint, "where it runs") {
+			t.Errorf("%s: want the remedy to point at where the agent runs, got %q", name, hint)
+		}
+	}
+}
+
+// TestAdd_relayWithNothingBehindItIsNoAgent: a relay accepts the connection
+// whether or not there is an agent behind it. One that then says nothing is a
+// missing agent, to be started, and not a foreign agent to be upgraded.
+func TestAdd_relayWithNothingBehindItIsNoAgent(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	path, _ := writeTestKey(t, dir, "id_new", "new-key")
+	socketPath := startSilentRelay(t, dir)
+
+	_, err := Add(Env{SocketPath: socketPath, AgentElsewhere: true}, []string{path}, true)
+	if got := CodeOf(err); got != CodeNoAgent {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeNoAgent, got, err)
+	}
+	if hint := HintOf(err); !strings.Contains(hint, "sshush start") {
+		t.Fatalf("hint: want 'sshush start', which brings up both sides of a relay, got %q", hint)
+	}
+
+	// With the agent optional, the same silence means there is no agent to ask.
+	res, err := List(Env{VaultPath: filepath.Join(dir, "vault.json"), SocketPath: socketPath})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if res.AgentReachable {
+		t.Fatal("agent reachable: want false for a relay with nothing behind it")
+	}
+}
+
+// TestRemove_relayedAgentTooOldIsRestartedWhereItRuns: 'sshush reload' restarts
+// only the relay, so it is no remedy for a stale daemon on the other side.
+func TestRemove_relayedAgentTooOldIsRestartedWhereItRuns(t *testing.T) {
+	f := startLegacyVaultAgent(t)
+	f.addKey(t, "id_one", "one-key", true)
+
+	_, err := Remove(Env{SocketPath: f.socketPath, AgentElsewhere: true}, []string{"one-key"})
+	if got := CodeOf(err); got != CodeAgentTooOld {
+		t.Fatalf("code: want %v, got %v (err %v)", CodeAgentTooOld, got, err)
+	}
+	if hint := HintOf(err); strings.Contains(hint, "sshush reload") || !strings.Contains(hint, "where it runs") {
+		t.Fatalf("hint: want a remedy for an agent that runs elsewhere, got %q", hint)
 	}
 }

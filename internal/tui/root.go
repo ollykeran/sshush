@@ -57,14 +57,19 @@ func themeMessageTimeoutCmd(generation int) tea.Cmd {
 // NewTUI builds the TUI skeleton with agent, create, edit, and export tabs.
 // Theme is used for all TUI colours; pass theme.DefaultTheme() or from config.
 // configPath is used by the theme picker to persist theme changes.
-// agentBackendMode is "vault" or "keys" (from config.AgentBackendMode); shown in the footer.
-// vaultPath is the configured [vault].vault_path (from config.VaultPathForAgent), used only
-// when agentBackendMode is "vault" to register the Vault tab.
+// agentBackendMode is "vault" or "keys" (from config.AgentBackendMode); shown in the footer
+// until the running agent says what it is.
+// vaultPath is the configured [vault].vault_path (from config.VaultPathForAgent), or "".
+// The Vault tab is registered here when agentBackendMode is "vault", so a vault that is
+// not initialized or not running yet can still be set up, and later for any other config
+// whose running agent turns out to be a vault (see Skeleton.ensureVaultPage).
 func NewTUI(configPath, socketPath string, t theme.Theme, agentBackendMode, vaultPath string) *Skeleton {
 	s := NewSkeleton()
 	s.theme = t
 	s.styles = BuildStyles(t)
 	s.configPath = configPath
+	s.socketPath = socketPath
+	s.vaultPath = vaultPath
 	s.agentBackendMode = agentBackendMode
 	s.KeyMap.SwitchTabLeft = []string{"left", "h"}
 	s.KeyMap.SwitchTabRight = []string{"right", "l"}

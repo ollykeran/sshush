@@ -47,7 +47,20 @@ func runReload(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cli: load merged config: %w", err)
 	}
 
+	if newCfg.IsExternal() {
+		return reloadExternal(newCfg)
+	}
+
 	pidFilePath := runtime.PidFilePath()
+
+	if newCfg.RelaysToWindows() {
+		// The keys are the Windows agent's, and that agent is reloaded from
+		// Windows. All there is to reload here is the relay, which holds
+		// nothing: restart it so it picks up this config.
+		_ = sshushd.StopDaemon(pidFilePath) // best-effort; may not be running
+		style.NewOutput().Info("restarting the relay to the sshush agent on Windows...").Print()
+		return runStartDaemon(cmd)
+	}
 
 	// Try connecting to the socket from the new config.
 	session, err := agent.Open(newCfg.SocketPath)
@@ -76,24 +89,36 @@ func runReload(cmd *cobra.Command, _ []string) error {
 
 	// Socket changed or agent unreachable: stop the old daemon and start a new one.
 	if needsRestart {
-		if newCfg.IsExternal() {
-			if newCfg.SocketPath == "" {
-				return style.NewOutput().
-					Error("[agent].type = \"external\" but no socket found").
-					Info("Set [agent].socket_path, or export SSH_AUTH_SOCK before running sshush, then try again.").
-					AsError()
-			}
-			return style.NewOutput().
-				Error("cannot reconcile: no agent reachable at " + newCfg.SocketPath).
-				Info("[agent].type = \"external\": sshush will not stop/start a daemon here; ensure your external agent is running at that socket.").
-				AsError()
-		}
 		_ = sshushd.StopDaemon(pidFilePath) // best-effort; may already be gone
 		style.NewOutput().Info("restarting sshushd with new config...").Print()
 		return runStartDaemon(cmd)
 	}
 
 	return nil
+}
+
+// reloadExternal refuses to reload an agent sshush does not own, whether or not
+// it answers. Reconciling is the dangerous half: this config's key_paths says
+// nothing about what somebody else's agent should hold, so reconciling against
+// it would remove every key the agent lists, and when that agent is a
+// vault-backed sshushd a removal deletes the identity from its vault.
+func reloadExternal(cfg config.Config) error {
+	if cfg.SocketPath == "" {
+		return style.NewOutput().
+			Error("[agent].type = \"external\" but no socket found").
+			Info("Set [agent].socket_path, or export SSH_AUTH_SOCK before running sshush, then try again.").
+			AsError()
+	}
+	if !sshushd.CheckAlreadyRunning(cfg.SocketPath) {
+		return style.NewOutput().
+			Error("cannot reconcile: no agent reachable at " + cfg.SocketPath).
+			Info("[agent].type = \"external\": sshush will not stop/start a daemon here; ensure your external agent is running at that socket.").
+			AsError()
+	}
+	return style.NewOutput().
+		Error("[agent].type = \"external\": sshush does not manage this agent and will not reload it").
+		Info("Its keys are left as they are. Use 'sshush add' and 'sshush remove' to change them.").
+		AsError()
 }
 
 // desiredKeysFromConfig returns the set of keys that should be in the agent after reload:

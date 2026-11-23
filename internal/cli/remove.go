@@ -42,6 +42,9 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	defer session.Close()
 	before, err := session.List()
 	if err != nil {
+		if down := windowsAgentDown(cfg); down != nil {
+			return down
+		}
 		return fmt.Errorf("cli: list keys from socket: %w", err)
 	}
 	wantFP := make(map[string]bool)

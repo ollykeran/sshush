@@ -26,4 +26,5 @@ func registerCommands(root *cobra.Command) {
 	root.AddCommand(newGenerateCommand())
 	root.AddCommand(newValidateCommand())
 	root.AddCommand(newSelftestCommand())
+	root.AddCommand(newRelayCommand())
 }

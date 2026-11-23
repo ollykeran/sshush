@@ -54,6 +54,8 @@ type Skeleton struct {
 	themeMessage            string      // footer message: session only, saved, save failed
 	themeMessageGeneration  int         // incremented each time message is set, so timeout only clears if still current
 	agentBackendMode        string      // "vault" or "keys"; shown in footer (from config at TUI start)
+	socketPath              string      // agent socket, for a Vault tab registered after startup
+	vaultPath               string      // configured vault file, if any, for the same
 	vaultMode               string      // live backend mode read from the running agent ("vault"/"keys")
 	vaultLocked             bool        // true when the running vault agent reports locked
 	vaultKnown              bool        // true when the vault lock state has been read from a running agent
@@ -233,6 +235,18 @@ func (s *Skeleton) UpdateVaultState(mode string, locked, known bool) {
 	s.vaultMode = mode
 	s.vaultLocked = locked
 	s.vaultKnown = known
+}
+
+// ensureVaultPage registers the Vault tab once the running agent says it is a
+// vault, for a config that could not: [agent].type = "external" pointed at an
+// sshushd, where only the agent knows what it is. The tab then stays for the
+// session, since an agent that stops being a vault explains that itself when
+// asked to act. Nothing is listed until the tab is switched to (see switchTab).
+func (s *Skeleton) ensureVaultPage() {
+	if !s.vaultKnown || s.vaultMode != "vault" || s.socketPath == "" || s.findPageIndex("vault") >= 0 {
+		return
+	}
+	s.AddPage("vault", "Vault", NewVaultScreen(s, s.configPath, s.socketPath, s.vaultPath))
 }
 
 func (s *Skeleton) GetTerminalWidth() int {
@@ -580,6 +594,7 @@ func (s *Skeleton) applySideEffect(msg tea.Msg) tea.Cmd {
 		return cmd
 	case VaultStateMsg:
 		s.UpdateVaultState(m.Mode, m.Locked, m.Known)
+		s.ensureVaultPage()
 		return nil
 	}
 	return nil
@@ -588,6 +603,7 @@ func (s *Skeleton) applySideEffect(msg tea.Msg) tea.Cmd {
 func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if vs, ok := msg.(VaultStateMsg); ok {
 		s.UpdateVaultState(vs.Mode, vs.Locked, vs.Known)
+		s.ensureVaultPage()
 		return s, nil
 	}
 	if len(s.pages) == 0 {
@@ -889,6 +905,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s.handleExitHeaderTools()
 	case VaultStateMsg:
 		s.UpdateVaultState(msg.Mode, msg.Locked, msg.Known)
+		s.ensureVaultPage()
 		return s, nil
 	case ThemeChangedMsg:
 		for i := range s.pages {

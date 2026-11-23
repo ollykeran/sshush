@@ -3,11 +3,15 @@ package sshushd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestPrepareServerLog_CreatesAPrivateLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the SSH server is not supported on Windows")
+	}
 	dir := filepath.Join(t.TempDir(), "state", "sshush")
 	path := filepath.Join(dir, "server.log")
 	if err := prepareServerLog(path); err != nil {

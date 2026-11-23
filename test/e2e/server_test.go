@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,8 +21,13 @@ import (
 )
 
 // writeE2EConfigWithServer writes a TOML config like writeE2EConfig plus optional [server] fields.
+// It skips the test on Windows, where the SSH server refuses to start: every
+// server test begins by writing its config here.
 func writeE2EConfigWithServer(t *testing.T, dir, socketPath, vaultPath string, keyPaths []string, serverPort int, authorizedKeysPath, hostKeyPath string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the SSH server is not supported on Windows")
+	}
 	configPath := filepath.Join(dir, "config.toml")
 	var b strings.Builder
 	b.WriteString("[agent]\n")
@@ -210,6 +216,10 @@ func TestE2E_ServerStartStop(t *testing.T) {
 }
 
 func TestE2E_ServerConnectAgentAuth(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")
@@ -265,6 +275,10 @@ func TestE2E_ServerConnectAgentAuth(t *testing.T) {
 }
 
 func TestE2E_ServerFileAuth(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	keyPath := writeE2ETestKey(t, dir, "id_ed25519", "fileauth-key")
@@ -384,6 +398,10 @@ func TestE2E_ServerHostKeyFile(t *testing.T) {
 }
 
 func TestE2E_ServerAddKeyThenConnect(t *testing.T) {
+	// The daemon inherits this test process's environment, so this fixes which
+	// shell it runs: the command below is POSIX sh, which fish does not parse.
+	t.Setenv("SHELL", "/bin/sh")
+
 	dir := e2eWorkDir(t)
 	socketPath := filepath.Join(dir, "agent.sock")
 	vaultPath := filepath.Join(dir, "vault.json")

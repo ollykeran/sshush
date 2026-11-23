@@ -4,9 +4,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	ssh "golang.org/x/crypto/ssh"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 func TestRunCreate_ed25519(t *testing.T) {
@@ -260,8 +263,12 @@ func assertKeyPairExists(t *testing.T, privPath string, privPerm, pubPerm os.Fil
 	if err != nil {
 		t.Fatalf("private key not found: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != privPerm {
+	// Windows has no file modes; who can read a file there is its access list.
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != privPerm {
 		t.Errorf("private key permissions: got %o, want %o", perm, privPerm)
+	}
+	if private, err := secfile.IsPrivate(privPath); err != nil || !private {
+		t.Errorf("the private key is readable by other users (private=%v, err=%v)", private, err)
 	}
 
 	pubPath := privPath + ".pub"
@@ -269,7 +276,7 @@ func assertKeyPairExists(t *testing.T, privPath string, privPerm, pubPerm os.Fil
 	if err != nil {
 		t.Fatalf("public key not found: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != pubPerm {
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != pubPerm {
 		t.Errorf("public key permissions: got %o, want %o", perm, pubPerm)
 	}
 }

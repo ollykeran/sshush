@@ -112,6 +112,13 @@ func (a *VaultAgent) handleOp(contents []byte) []byte {
 		}
 		return resultFor(a.addKeyWithAutoload(addedKey, autoload, keyFilepath))
 
+	case agent.OpListIdentities:
+		listing, lerr := a.listing()
+		if lerr != nil {
+			return resultFor(lerr)
+		}
+		return agent.EncodeOpResponse(agent.StatusOK, encodeListing(listing))
+
 	default:
 		return agent.EncodeOpResponse(agent.StatusUnsupportedOp, nil)
 	}

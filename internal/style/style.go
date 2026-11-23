@@ -162,6 +162,22 @@ func AgentModeIndicatorLine(configMode, liveMode string, liveReachable bool, ski
 	return line
 }
 
+// RelayedAgentModeIndicatorLine is the "Agent:" line inside WSL when the agent
+// is the sshushd on Windows and the daemon here only relays to it. It names
+// what that agent is (liveMode, once it has answered) and where it runs, so the
+// local daemon is not mistaken for the one holding the keys.
+func RelayedAgentModeIndicatorLine(liveMode string, liveReachable bool, skipUnreachableNote bool) string {
+	const relayed = " (WSL relay)"
+	if liveReachable && liveMode != "" {
+		return Focus("Agent: ") + Highlight("Windows "+liveMode) + Text(relayed)
+	}
+	line := Focus("Agent: ") + Highlight("Windows") + Text(relayed)
+	if !skipUnreachableNote {
+		line += Text(" (agent not reachable)")
+	}
+	return line
+}
+
 func Box(s string) string {
 	return renderBox(s, effectiveBoxLimit(0))
 }

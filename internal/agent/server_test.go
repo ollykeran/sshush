@@ -16,10 +16,13 @@ import (
 
 func unixSocketTempDir(t *testing.T) string {
 	t.Helper()
+	base := "/tmp"
 	if runtime.GOOS == "windows" {
-		return t.TempDir()
+		// %TEMP%, not t.TempDir(): that adds the test's name, and Windows has the
+		// same limit on a socket path's length.
+		base = ""
 	}
-	dir, err := os.MkdirTemp("/tmp", "sshush-a-")
+	dir, err := os.MkdirTemp(base, "sshush-a-")
 	if err != nil {
 		t.Fatal(err)
 	}

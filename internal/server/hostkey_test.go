@@ -13,6 +13,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
+
+	"github.com/ollykeran/sshush/internal/secfile"
 )
 
 func TestEnsureHostKey_CreatesAKeyTheFirstTime(t *testing.T) {
@@ -35,12 +37,8 @@ func TestEnsureHostKey_WritesTheKeyReadableOnlyByItsOwner(t *testing.T) {
 	if _, err := EnsureHostKey(path); err != nil {
 		t.Fatalf("EnsureHostKey: %v", err)
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("host key mode = %o, want 600", perm)
+	if private, err := secfile.IsPrivate(path); err != nil || !private {
+		t.Errorf("host key is readable by other users (private=%v, err=%v)", private, err)
 	}
 }
 

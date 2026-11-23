@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ollykeran/sshush/internal/config"
@@ -111,11 +110,7 @@ func runServerStatus(cmd *cobra.Command, _ []string) error {
 	data, err := os.ReadFile(pidFilePath)
 	if err == nil {
 		pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
-		if pid > 0 {
-			if p, findErr := os.FindProcess(pid); findErr == nil && p.Signal(syscall.Signal(0)) == nil {
-				processRunning = true
-			}
-		}
+		processRunning = pid > 0 && sshushd.ProcessAlive(pid)
 	}
 
 	addr := "127.0.0.1:" + strconv.Itoa(int(cfg.ServerListenPort))

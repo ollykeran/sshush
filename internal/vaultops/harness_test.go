@@ -2,6 +2,7 @@ package vaultops
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,10 +21,13 @@ import (
 // t.TempDir() under /var/folders/... often exceeds that.
 func unixSocketTempDirVaultOps(t *testing.T) string {
 	t.Helper()
+	base := "/tmp"
 	if runtime.GOOS == "windows" {
-		return t.TempDir()
+		// %TEMP%, not t.TempDir(): that adds the test's name, and Windows has the
+		// same limit on a socket path's length.
+		base = ""
 	}
-	dir, err := os.MkdirTemp("/tmp", "sshush-vaultops-")
+	dir, err := os.MkdirTemp(base, "sshush-vaultops-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +72,33 @@ type fixture struct {
 // startVaultAgent builds an initialized, unlocked vault and serves it.
 func startVaultAgent(t *testing.T, withRecovery bool) *fixture {
 	t.Helper()
+	return startVaultAgentAs(t, withRecovery, func(va *vault.VaultAgent) sshagent.ExtendedAgent { return va })
+}
+
+// legacyVault is a vault agent from before it could say what its vault holds:
+// every other operation works, and that one is answered as unknown.
+type legacyVault struct{ *vault.VaultAgent }
+
+func (l legacyVault) Extension(extensionType string, contents []byte) ([]byte, error) {
+	if extensionType == agent.ExtensionOp {
+		if op, _, err := agent.DecodeOpRequest(contents); err == nil && op == agent.OpListIdentities {
+			return agent.EncodeOpResponse(agent.StatusUnsupportedOp, nil), nil
+		}
+	}
+	return l.VaultAgent.Extension(extensionType, contents)
+}
+
+// startLegacyVaultAgent is startVaultAgent for an sshushd older than the
+// list-identities operation.
+func startLegacyVaultAgent(t *testing.T) *fixture {
+	t.Helper()
+	return startVaultAgentAs(t, false, func(va *vault.VaultAgent) sshagent.ExtendedAgent { return legacyVault{va} })
+}
+
+// startVaultAgentAs builds an initialized, unlocked vault and serves it through
+// whatever served makes of its agent.
+func startVaultAgentAs(t *testing.T, withRecovery bool, served func(*vault.VaultAgent) sshagent.ExtendedAgent) *fixture {
+	t.Helper()
 	dir := unixSocketTempDirVaultOps(t)
 	f := &fixture{
 		dir:       dir,
@@ -96,7 +127,7 @@ func startVaultAgent(t *testing.T, withRecovery bool) *fixture {
 	if err := f.va.Unlock(f.pass); err != nil {
 		t.Fatal(err)
 	}
-	f.socketPath = serve(t, dir, "agent.sock", f.va)
+	f.socketPath = serve(t, dir, "agent.sock", served(f.va))
 	return f
 }
 
@@ -113,6 +144,21 @@ func (f *fixture) env() Env {
 // silentEnv is the Env the TUI builds: no prompting, no agent vault path.
 func (f *fixture) silentEnv() Env {
 	return Env{VaultPath: f.vaultPath, SocketPath: f.socketPath}
+}
+
+// remoteEnv is the Env of a client that reaches the agent but has no vault
+// file to read, as sshush in WSL has for a daemon on Windows: no vault path,
+// and an agent it does not manage.
+func (f *fixture) remoteEnv() Env {
+	return Env{SocketPath: f.socketPath, AgentUnmanaged: true, AskPassphrase: f.ask.fn}
+}
+
+// namedEnv is env with the vault file named by the user, as --vault-path does.
+func (f *fixture) namedEnv(vaultPath string) Env {
+	env := f.env()
+	env.VaultPath = vaultPath
+	env.NamedVault = true
+	return env
 }
 
 // lock wipes the agent's master key, as 'sshush lock' does.
@@ -153,6 +199,29 @@ func startForeignAgent(t *testing.T, dir string) string {
 		t.Fatal("keyring is not an ExtendedAgent")
 	}
 	return serve(t, dir, "foreign.sock", inner)
+}
+
+// startSilentRelay listens on a socket and hangs up on every connection without
+// a word: what a relay to an agent somewhere else does while that agent is not
+// running.
+func startSilentRelay(t *testing.T, dir string) string {
+	t.Helper()
+	socketPath := filepath.Join(dir, "relay.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return socketPath
 }
 
 // writeTestKey writes a freshly generated ed25519 private key and returns its

@@ -31,7 +31,7 @@ func Add(env Env, paths []string, autoload bool) (AddResult, error) {
 	res := AddResult{Before: c.agentKeys()}
 	for _, path := range paths {
 		if err := vault.AddPrivateKeyFile(c.session, path, autoload); err != nil {
-			return res, describe(err, "add", path)
+			return res, c.describe(err, path)
 		}
 		res.Added = append(res.Added, path)
 	}
@@ -49,6 +49,8 @@ type RemoveResult struct {
 
 // Remove deletes the identities named by selectors from the vault. A selector
 // is a SHA256 fingerprint, an exact comment, or a path to the private key file.
+// Selectors are resolved against what the agent says its vault holds, so the
+// vault file is only read when the agent cannot say.
 //
 // Remove stops at the first failure; identities removed before it stay removed.
 func Remove(env Env, selectors []string) (RemoveResult, error) {
@@ -62,7 +64,7 @@ func Remove(env Env, selectors []string) (RemoveResult, error) {
 	for _, selector := range selectors {
 		id, err := c.resolveIdentity(selector)
 		if err != nil {
-			return res, describe(err, "remove", selector)
+			return res, c.describe(err, selector)
 		}
 		pubKey, err := ssh.ParsePublicKey(id.PublicKey)
 		if err != nil {
@@ -73,7 +75,7 @@ func Remove(env Env, selectors []string) (RemoveResult, error) {
 			}
 		}
 		if err := c.session.Remove(pubKey); err != nil {
-			return res, describe(err, "remove", selector)
+			return res, c.describe(err, selector)
 		}
 		res.Removed = append(res.Removed, id.Fingerprint)
 	}

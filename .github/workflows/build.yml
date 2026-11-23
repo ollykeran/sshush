@@ -2,9 +2,9 @@ name: build
 
 on:
   push:
-    branches: [master]
+    branches: [master, develop]
   pull_request:
-    branches: [master]
+    branches: [master, develop]
 
 permissions:
   contents: read
@@ -14,30 +14,51 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, darwin]
+        goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+    # Every package for every target, as releases are built: without cgo. A
+    # file only one OS compiles, such as the Windows tray, is checked here
+    # for both architectures, not only on the OS that runs the tests.
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: build sshush
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: build
         run: |
           for i in 1 2 3; do
-            go build -o /dev/null ./cmd/sshush && exit 0
+            go build ./... && exit 0
             echo "build failed (attempt $i), retrying..."
           done
           exit 1
-      - name: build sshushd
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: vet
+        run: go vet ./...
+
+  # Packs the MSIX (packaging/msix) with the Windows SDK's makeappx, which
+  # checks the manifest against its schema: a manifest the Store would refuse
+  # fails here rather than at release time.
+  msix:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: build
         run: |
-          for i in 1 2 3; do
-            go build -o /dev/null ./cmd/sshushd && exit 0
-            echo "build failed (attempt $i), retrying..."
-          done
-          exit 1
+          go build -o build/windows-amd64/sshush.exe ./cmd/sshush
+          go build -o build/windows-amd64/sshushd.exe ./cmd/sshushd
+          go build -ldflags -H=windowsgui -o build/windows-amd64/sshush-tray.exe ./cmd/sshush-tray
+      - name: pack
+        run: |
+          bash scripts/msix.sh stage dev x64 build/windows-amd64 build/msix-amd64
+          bash scripts/msix.sh pack build/msix-amd64 build/sshush-dev-windows-amd64.msix

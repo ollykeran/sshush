@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,7 @@ func TestRunExport_toFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("output file not found: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o644 {
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o644 {
 		t.Errorf("output permissions: got %o, want %o", perm, 0o644)
 	}
 

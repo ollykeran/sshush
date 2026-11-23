@@ -2,7 +2,7 @@
 
 How to get sshush running and integrated with your shell.
 
-See also: [Config](config.md) | [TUI](tui.md)
+See also: [Config](config.md) | [TUI](tui.md) | [Windows](windows.md) (PowerShell, named pipe)
 
 ## eval $(sshush)
 
@@ -34,11 +34,13 @@ On every run, before loading config, sshush runs `SetupConfig()`. It does two th
      - `$XDG_RUNTIME_DIR/sshush.sock` when `XDG_RUNTIME_DIR` is set (common on Linux desktops)
      - otherwise `~/.config/sshush/sshush.sock` (stable on macOS and minimal Linux environments)
    - Writes `[agent].type` = `"keys"` and `[agent].key_paths` = discovered keys from `~/.ssh`
+   - Writes `[agent].shell` = the shell that ran sshush (its parent process when that is `fish`, `bash`, `zsh` or `sh`; otherwise `$SHELL`; otherwise `"posix"`)
    - Writes `[theme]` with `name = "default"`, `no_color = false` and commented custom colour hints
    - Appends commented-out `[vault]` and `[server]` sections so you can enable them later. `[server]` lists every server option, each with its default or an example, all commented out: the SSH server gives whoever signs in a shell as you, so it stays off until you uncomment `[server]` and `listen_port` yourself (see [Config: `[server]`](config.md#server))
    - Does not overwrite an existing config
-2. **AddEvalToShell** (when your shell rc file does not already contain `eval $(sshush)`):
+2. **AddEvalToShell** (when your shell startup files do not already start sshush):
    - Chooses the rc file from `$SHELL` when possible (`zsh` → `~/.zshrc`, `bash` → `~/.bashrc`)
+   - For `fish`, creates `~/.config/fish/conf.d/sshush.fish` (under `$XDG_CONFIG_HOME/fish` when set) instead of touching an rc file. It is skipped if that file already exists, or if `config.fish` already starts sshush (for example `eval (sshush start)`)
    - On macOS, defaults to `~/.zshrc` when `SHELL` is empty or not zsh/bash
    - On other Unix systems, uses `~/.bashrc` if it exists, else `~/.zshrc` if that exists, else creates `~/.bashrc` and adds the line
    - If the rc file already exists, sshush appends the line
@@ -53,6 +55,30 @@ eval $(sshush)
 
 On macOS with zsh, put it in `~/.zshrc`. With bash, use `~/.bashrc` or `~/.bash_profile` as you prefer. If sshush auto-setup created or updated your rc file, you may already have this line.
 
+## Fish
+
+Fish uses its own syntax, so ask for it with `--shell fish` and pipe the result to `source`:
+
+```fish
+if status is-interactive
+    sshush start --shell fish | source
+end
+```
+
+This prints `set -gx SSH_AUTH_SOCK '...';` instead of the POSIX `export` line. With fish as your login shell, sshush auto-setup writes exactly this to `~/.config/fish/conf.d/sshush.fish`, so you normally do not need to add it yourself. Delete the contents of that file (but keep the file) if you would rather manage the line in `config.fish`.
+
+The syntax comes from `[agent].shell` in your config, which first-time setup fills in from the shell that ran sshush, so on a fish-first machine plain `sshush start | source` already prints fish syntax. `--shell` overrides the config for one call and accepts `posix` (`sh`, `bash` and `zsh` are aliases), `fish` and `powershell` (see [Windows](windows.md)); without either, the output is POSIX.
+
+If you use more than one shell, pass `--shell` explicitly in each shell's startup line (for example `eval $(sshush --shell posix)` in `~/.bashrc`), because `[agent].shell` applies to every caller.
+
+For completions, add `sshush completion fish | source`.
+
 On login, `sshush` will start the daemon if needed and export `SSH_AUTH_SOCK` so `ssh`, `git`, and other tools can use your keys.
+
+## WSL
+
+Inside WSL you can set sshush up as on any other Linux, with its own daemon and its own keys. Nothing above changes.
+
+Or the distro can use the agent that sshush runs on Windows, so both sides share one vault and one unlock. Set `[agent].type = "windows"` in the distro's config and keep the same `eval $(sshush)` line in your shell's startup file: it then starts a relay in the distro, starts sshush on Windows if it is not running, and asks for the vault's passphrase if it is locked. See [Windows: Using it from WSL](windows.md#using-it-from-wsl).
 
 Starting the daemon waits for it to confirm it's actually ready rather than guessing on a fixed delay, so this works reliably even when the shell startup environment is busy (many rc scripts launching at once). If startup does fail, the error shown is the daemon's actual failure reason (bad config, a vault problem, and so on), not a generic timeout. See [Architecture: Daemon startup](architecture.md#daemon-startup) for how this works.

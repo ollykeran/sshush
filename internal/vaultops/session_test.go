@@ -29,26 +29,45 @@ func TestSessionLoad_byFingerprintWithoutVaultPath(t *testing.T) {
 	}
 }
 
-func TestSessionLoad_nonFingerprintSelectorWithoutVaultPathIsAnError(t *testing.T) {
-	f := startVaultAgent(t, false)
-	f.addKey(t, "id_noload", "noload-key", false)
-
-	_, err := SessionLoad(Env{SocketPath: f.socketPath}, []string{"noload-key"})
-	if got := CodeOf(err); got != CodeNoVaultPath {
-		t.Fatalf("code: want %v, got %v (err %v)", CodeNoVaultPath, got, err)
-	}
-}
-
-// TestSessionLoad_configuredButUninitializedVaultIsAnError: naming a vault that
-// is not there is a mistake worth reporting, even for a selector the agent
-// could have resolved on its own.
-func TestSessionLoad_configuredButUninitializedVaultIsAnError(t *testing.T) {
+// TestSessionLoad_byCommentWithoutVaultPath: the agent says what its vault
+// holds, so a comment resolves with no vault file on this side at all.
+func TestSessionLoad_byCommentWithoutVaultPath(t *testing.T) {
 	f := startVaultAgent(t, false)
 	_, fingerprint := f.addKey(t, "id_noload", "noload-key", false)
 
-	env := f.silentEnv()
-	env.VaultPath = filepath.Join(f.dir, "no-such-vault.json")
-	_, err := SessionLoad(env, []string{fingerprint})
+	res, err := SessionLoad(Env{SocketPath: f.socketPath}, []string{"noload-key"})
+	if err != nil {
+		t.Fatalf("session load by comment: %v", err)
+	}
+	if len(res.Loaded) != 1 || res.Loaded[0] != fingerprint {
+		t.Fatalf("loaded: want [%s], got %v", fingerprint, res.Loaded)
+	}
+}
+
+// TestSessionLoad_legacyAgentWithoutVaultPath: an sshushd from before the
+// upgrade cannot resolve a comment for us, but a fingerprint needs no
+// resolving, so the TUI keeps working against it.
+func TestSessionLoad_legacyAgentWithoutVaultPath(t *testing.T) {
+	f := startLegacyVaultAgent(t)
+	_, fingerprint := f.addKey(t, "id_noload", "noload-key", false)
+
+	_, err := SessionLoad(Env{SocketPath: f.socketPath}, []string{"noload-key"})
+	if got := CodeOf(err); got != CodeAgentTooOld {
+		t.Fatalf("code for a comment: want %v, got %v (err %v)", CodeAgentTooOld, got, err)
+	}
+	if _, err := SessionLoad(Env{SocketPath: f.socketPath}, []string{fingerprint}); err != nil {
+		t.Fatalf("session load by fingerprint: %v", err)
+	}
+}
+
+// TestSessionLoad_namedButUninitializedVaultIsAnError: naming a vault that is
+// not there is a mistake worth reporting, even for a selector the agent could
+// have resolved on its own.
+func TestSessionLoad_namedButUninitializedVaultIsAnError(t *testing.T) {
+	f := startVaultAgent(t, false)
+	_, fingerprint := f.addKey(t, "id_noload", "noload-key", false)
+
+	_, err := SessionLoad(f.namedEnv(filepath.Join(f.dir, "no-such-vault.json")), []string{fingerprint})
 	if got := CodeOf(err); got != CodeVaultNotInitialized {
 		t.Fatalf("code: want %v, got %v (err %v)", CodeVaultNotInitialized, got, err)
 	}

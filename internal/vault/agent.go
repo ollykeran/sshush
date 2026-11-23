@@ -102,6 +102,27 @@ func (a *VaultAgent) List() ([]*sshagent.Key, error) {
 	return keys, nil
 }
 
+// listing returns every identity in the vault, loaded in this session or not,
+// which is what List cannot say. A locked vault refuses: List answers a locked
+// agent with nothing, and this must not be the way around that for whoever can
+// reach the socket — a relay, or a host the agent was forwarded to.
+func (a *VaultAgent) listing() (Listing, error) {
+	if err := a.purgeExpired(); err != nil {
+		return Listing{}, err
+	}
+	a.mu.RLock()
+	locked := a.masterKey == nil
+	a.mu.RUnlock()
+	if locked {
+		return Listing{}, errLocked
+	}
+	identities, err := ListIdentities(a.store)
+	if err != nil {
+		return Listing{}, fmt.Errorf("vault: list identities: %w", err)
+	}
+	return Listing{VaultPath: a.store.Path(), Identities: identities}, nil
+}
+
 // Add encrypts the private key and adds it to the store with autoload=false,
 // and adds the fingerprint to the session set so the key is visible until restart.
 // Constraints the vault cannot honor (confirm, constraint extensions, certificates)

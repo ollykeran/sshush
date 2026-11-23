@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/style"
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
@@ -37,88 +38,43 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 
+	persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
+	report := selftest.Run(socketPath, os.Getenv("SSH_AUTH_SOCK"), persisted)
+
 	out := style.NewOutput()
-
-	authSock := os.Getenv("SSH_AUTH_SOCK")
-	if authSock == "" {
-		out.Add(style.Focus("env:    ") + style.Err("SSH_AUTH_SOCK not set"))
-	} else if authSock != socketPath {
-		out.Add(style.Focus("env:    ") + style.Err(fmt.Sprintf("SSH_AUTH_SOCK=%s (differs from socket)", authSock)))
-	} else {
-		out.Add(style.Focus("env:    ") + style.Success(fmt.Sprintf("SSH_AUTH_SOCK=%s  ✓", authSock)))
-	}
-
-	session, sessionErr := agent.Open(socketPath)
-	if sessionErr == nil {
-		defer session.Close()
-	}
-	var backend agent.Backend
-	liveOK := false
-	if sessionErr == nil {
-		if b, err := session.Backend(); err == nil {
-			backend, liveOK = b, true
+	for _, c := range report.Checks {
+		out.Add(style.Focus(fmt.Sprintf("%-8s", c.Name+":")) + styleFor(c.Status)(c.Detail))
+		if c.Hint != "" {
+			out.Add(style.Focus("        ") + style.Err(c.Hint))
 		}
 	}
-	if liveOK {
-		out.Add(style.Focus("agent:  ") + style.Success(backend.Mode+"  ✓"))
-	} else {
-		out.Add(style.Focus("agent:  ") + style.Err("unreachable"))
-	}
-
-	if backend.Mode == "vault" {
-		if backend.VaultLocked {
-			out.Add(style.Focus("state:  ") + style.Err("locked"))
-		} else {
-			out.Add(style.Focus("state:  ") + style.Success("unlocked  ✓"))
-		}
-	} else if liveOK {
-		out.Add(style.Focus("state:  ") + style.Success("ready  ✓"))
-	}
-
-	if _, err := os.Stat(socketPath); err != nil {
-		out.Add(style.Focus("socket: ") + style.Err(fmt.Sprintf("%s  ✗", socketPath)))
-		out.Add(style.Focus("        ") + style.Err("agent is not running (try sshush start)"))
+	// Checksum only after every check passed as far as signing.
+	if last := report.Checks[len(report.Checks)-1]; last.Name != "sign" || last.Status != selftest.OK {
 		out.Print()
 		return nil
 	}
-	out.Add(style.Focus("socket: ") + style.Success(fmt.Sprintf("%s  ✓", socketPath)))
 
-	// The socket file can exist while the dial failed (a stale socket), so the
-	// os.Stat check above does not guarantee a session.
-	if sessionErr != nil {
-		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", sessionErr)))
-		out.Print()
-		return nil
-	}
-	keys, err := session.List()
-	if err != nil {
-		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
-		out.Print()
-		return nil
-	}
-	if len(keys) == 0 {
-		out.Add(style.Focus("list:   ") + style.Warn("no keys loaded"))
-		out.Print()
-		return nil
-	}
-	out.Add(style.Focus("list:   ") + style.Success(fmt.Sprintf("%d key(s) loaded  ✓", len(keys))))
-
-	if _, err := session.Sign(keys[0], []byte("sshush-test")); err != nil {
-		out.Add(style.Focus("sign:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
-		out.Print()
-		return nil
-	}
-	out.Add(style.Focus("sign:   ") + style.Success(fmt.Sprintf("%s  ✓", keys[0].Comment)))
-
-	integrityMsg, integErr := version.VerifyBinaryChecksum()
-	if integErr != nil {
+	integrity, integErr := version.VerifyBinaryChecksum()
+	switch {
+	case integErr != nil:
 		out.Add(style.Focus("checksum: ") + style.Err(fmt.Sprintf("✗ %v", integErr)))
-	} else if integrityMsg != "" {
-		out.Add(style.Focus("checksum: ") + style.Warn(integrityMsg))
-	} else {
-		out.Add(style.Focus("checksum: ") + style.Success("binary checksum verified  ✓"))
+	case integrity.Verified:
+		out.Add(style.Focus("checksum: ") + style.Success(integrity.Message+"  ✓"))
+	default:
+		out.Add(style.Focus("checksum: ") + style.Warn(integrity.Message))
 	}
 
 	out.Print()
 	return nil
+}
+
+func styleFor(s selftest.Status) func(string) string {
+	switch s {
+	case selftest.OK:
+		return style.Success
+	case selftest.Warn:
+		return style.Warn
+	default:
+		return style.Err
+	}
 }

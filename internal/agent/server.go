@@ -5,10 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/style"
+	"github.com/ollykeran/sshush/internal/transport"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
@@ -38,28 +37,40 @@ func WithReady(fn func()) Option {
 	return func(o *options) { o.ready = fn }
 }
 
-// ListenAndServe serves the SSH agent protocol on a Unix socket at socketPath
-// until ctx is cancelled, handing every accepted connection to keyring. Because
+// ListenAndServe serves the SSH agent protocol at socketPath — a Unix socket, or
+// on Windows a named pipe (see package transport) — until ctx is cancelled, handing every accepted connection to keyring. Because
 // all connections share the one keyring, agent state is per-process rather than
 // per-connection.
 //
 // It returns [ErrAlreadyRunning] when something is already listening on the path,
-// and removes a stale socket otherwise. Cancelling ctx closes the listener, so a
+// and replaces a stale socket file otherwise. Cancelling ctx closes the listener, so a
 // normal shutdown also returns a non-nil error.
 func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.ExtendedAgent, opts ...Option) error {
+	return ListenAndHandle(ctx, socketPath, func(conn net.Conn) {
+		_ = sshagent.ServeAgent(keyring, conn)
+	}, opts...)
+}
+
+// ListenAndHandle is [ListenAndServe] for a caller that answers connections
+// some other way than from a keyring in this process: handle is run in its own
+// goroutine for each accepted connection, and owns it.
+func ListenAndHandle(ctx context.Context, socketPath string, handle func(net.Conn), opts ...Option) error {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
-		return fmt.Errorf("agent: create socket directory %s: %w", filepath.Dir(socketPath), err)
-	}
-	if conn, err := net.Dial("unix", socketPath); err == nil {
+	conn, err := transport.Dial(socketPath)
+	if err == nil {
 		conn.Close()
 		return &errStyled{err: ErrAlreadyRunning, styled: style.Err(ErrAlreadyRunning.Error())}
 	}
-	_ = os.Remove(socketPath)
-	listener, err := net.Listen("unix", socketPath)
+	// A pipe some other account got to first is not ours to replace, and
+	// listening on its name would only fail with "access is denied", which
+	// says nothing about why. Say what is actually in the way.
+	if errors.Is(err, transport.ErrForeignPipe) {
+		return fmt.Errorf("agent: cannot listen on %s: %w", socketPath, err)
+	}
+	listener, err := transport.Listen(socketPath)
 	if err != nil {
 		return fmt.Errorf("agent: listen on %s: %w", socketPath, err)
 	}
@@ -79,6 +90,6 @@ func ListenAndServe(ctx context.Context, socketPath string, keyring sshagent.Ext
 		if err != nil {
 			return fmt.Errorf("agent: accept connection: %w", err)
 		}
-		go sshagent.ServeAgent(keyring, conn)
+		go handle(conn)
 	}
 }

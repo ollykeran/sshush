@@ -6,11 +6,13 @@ import (
 	"net"
 	"sync/atomic"
 
+	"github.com/ollykeran/sshush/internal/transport"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-// Session is a single open connection to an SSH agent's Unix socket, and the
+// Session is a single open connection to an SSH agent's socket (or, on Windows,
+// its named pipe), and the
 // only way sshush reaches a running agent. Every operation travels over the one
 // connection the Session owns, so a command needing several operations pays for
 // one dial rather than one per call.
@@ -37,7 +39,7 @@ func Open(socketPath string) (*Session, error) {
 	if socketPath == "" {
 		return nil, errors.New("agent: dial socket: no socket path")
 	}
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := transport.Dial(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("agent: dial socket %s: %w", socketPath, err)
 	}

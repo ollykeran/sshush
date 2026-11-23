@@ -128,6 +128,107 @@ func TestNewTUIVaultTabRegisteredOnlyInVaultMode(t *testing.T) {
 	}
 }
 
+// TestVaultTabAppearsWhenTheRunningAgentIsAVault covers a config that cannot say
+// the agent is a vault — [agent].type = "external" pointed at an sshushd, as WSL
+// has for a daemon on Windows. The tab follows what the agent reports.
+func TestVaultTabAppearsWhenTheRunningAgentIsAVault(t *testing.T) {
+	sk := NewTUI("", "/tmp/agent.sock", theme.DefaultTheme(), "keys", "")
+	vaultPages := func() int {
+		n := 0
+		for _, p := range sk.pages {
+			if p.id == "vault" {
+				n++
+			}
+		}
+		return n
+	}
+
+	_, _ = sk.Update(VaultStateMsg{Mode: "keys", Known: true})
+	if vaultPages() != 0 {
+		t.Fatal("a keys agent should not register a vault tab")
+	}
+	_, _ = sk.Update(VaultStateMsg{Mode: "vault", Known: false})
+	if vaultPages() != 0 {
+		t.Fatal("an agent that has not been heard from should not register a vault tab")
+	}
+
+	_, _ = sk.Update(VaultStateMsg{Mode: "vault", Locked: true, Known: true})
+	_, _ = sk.Update(VaultStateMsg{Mode: "vault", Known: true})
+	if got := vaultPages(); got != 1 {
+		t.Fatalf("vault tabs after the agent reported a vault twice: want 1, got %d", got)
+	}
+	if _, ok := sk.pages[0].model.(*AgentScreen); !ok {
+		t.Fatal("Agent must remain page 0 when the vault tab is registered late")
+	}
+
+	_, _ = sk.Update(VaultStateMsg{Mode: "keys", Known: true})
+	if vaultPages() != 1 {
+		t.Fatal("the vault tab should stay for the session once registered")
+	}
+}
+
+// TestVaultScreenWithoutAVaultPathAsksTheAgent is the screen that late tab holds:
+// no vault file to read, so the listing, the path under the table and a removal
+// all come from the agent.
+func TestVaultScreenWithoutAVaultPathAsksTheAgent(t *testing.T) {
+	socketPath, vaultPath, store := startVaultAgentWithPath(t, []byte("remote-vault-pass"))
+	privPath, fp := writeTUITestKey(t, t.TempDir(), "id_ed25519", "held-by-the-agent")
+	if err := addVaultKeyCmd(socketPath, privPath, true)().(vaultOpResultMsg).err; err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	_, vs := newVaultTestSkeleton("", socketPath)
+	if got := vs.vaultPathLabel(); got != "held by the agent" {
+		t.Fatalf("path label before any listing: want %q, got %q", "held by the agent", got)
+	}
+
+	listed := listVaultIdentitiesCmd("", socketPath)().(vaultIdentitiesMsg)
+	if listed.err != nil {
+		t.Fatalf("list: %v", listed.err)
+	}
+	if len(listed.rows) != 1 || listed.rows[0].fingerprint != fp || listed.rows[0].loaded != "yes" {
+		t.Fatalf("rows: want the one loaded identity %s, got %+v", fp, listed.rows)
+	}
+	_, _ = vs.Update(listed)
+	if got, want := vs.vaultPathLabel(), utils.DisplayPath(vaultPath); got != want {
+		t.Fatalf("path label: want the agent's vault %q, got %q", want, got)
+	}
+
+	if err := removeVaultIdentityCmd(socketPath, "", fp)().(vaultOpResultMsg).err; err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if left := store.AllIdentities(); len(left) != 0 {
+		t.Fatalf("stored identities after remove: want 0, got %d", len(left))
+	}
+}
+
+// TestVaultScreenLockedWithoutAVaultPathOffersUnlockNotInit: a locked vault tells
+// its socket nothing, and with no file to read the screen has nothing to show.
+// It must say how to unlock, and must not offer to create a vault that exists.
+func TestVaultScreenLockedWithoutAVaultPathOffersUnlockNotInit(t *testing.T) {
+	socketPath, _, _ := startVaultAgentWithPath(t, []byte("remote-locked-pass"))
+	privPath, _ := writeTUITestKey(t, t.TempDir(), "id_ed25519", "behind-the-lock")
+	if err := addVaultKeyCmd(socketPath, privPath, true)().(vaultOpResultMsg).err; err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	lockTestAgent(t, socketPath)
+
+	listed := listVaultIdentitiesCmd("", socketPath)().(vaultIdentitiesMsg)
+	if listed.err == nil || !listed.locked {
+		t.Fatalf("want a locked refusal, got locked=%v err=%v", listed.locked, listed.err)
+	}
+	if !strings.Contains(listed.err.Error(), "press U to unlock") {
+		t.Fatalf("status: want it to name the unlock key, got %q", listed.err.Error())
+	}
+
+	_, vs := newVaultTestSkeleton("", socketPath)
+	_, _ = vs.Update(listed)
+	for _, d := range vs.visibleButtons() {
+		if d.id == vBtnInit {
+			t.Fatal("a locked vault must not be offered Init")
+		}
+	}
+}
+
 func TestVaultScreenHasModal(t *testing.T) {
 	_, vs := newVaultTestSkeleton("/tmp/vault.json", "/tmp/agent.sock")
 	if vs.HasModal() {

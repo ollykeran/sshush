@@ -31,7 +31,7 @@ Gaps: `internal/kdf`, `internal/server`, `internal/theme` and `internal/vault` h
 ```go
 // Package config loads and creates sshush configuration.
 // Config is read from TOML at ~/.config/sshush/config.toml (or $SSHUSH_CONFIG).
-// SetupConfig creates a default config and may append eval $(sshush) to the shell rc on first run.
+// SetupConfig creates a default config and may add the agent startup snippet to the shell rc on first run.
 package config
 ```
 

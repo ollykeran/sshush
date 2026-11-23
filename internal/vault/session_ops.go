@@ -33,6 +33,18 @@ func AddPrivateKeyFile(s *agent.Session, path string, autoload bool) error {
 	return nil
 }
 
+// AddPrivateKeyPEM is AddPrivateKeyFile for an unencrypted OpenSSH private
+// key already in memory, such as one the caller decrypted; path records where
+// it came from. The caller still owns, and should zero, pemData.
+func AddPrivateKeyPEM(s *agent.Session, pemData []byte, path string, autoload bool) error {
+	payload := buildAddKeyOptsPayloadPEM(pemData, path, autoload)
+	defer clear(payload)
+	if _, err := s.Op(agent.OpAddKey, payload); err != nil {
+		return fmt.Errorf("vault: add key to vault: %w", err)
+	}
+	return nil
+}
+
 // SetAutoload persists whether the identity with the given fingerprint is
 // loaded automatically when the vault is unlocked.
 func SetAutoload(s *agent.Session, fingerprint string, on bool) error {
@@ -58,6 +70,18 @@ func SessionLoad(s *agent.Session, fingerprint string) error {
 func SessionUnload(s *agent.Session, fingerprint string) error {
 	_, err := s.Op(agent.OpSessionUnload, []byte(fingerprint))
 	return err
+}
+
+// Identities returns every identity in the vault behind s, whether or not it is
+// loaded in this session, so a client can show and select from a vault whose
+// file it cannot read. A locked vault reports [agent.ErrVaultLocked], and an
+// sshushd older than the operation reports [agent.ErrOpUnknown].
+func Identities(s *agent.Session) (Listing, error) {
+	data, err := s.Op(agent.OpListIdentities, nil)
+	if err != nil {
+		return Listing{}, err
+	}
+	return decodeListing(data)
 }
 
 // UnlockWithRecoveryPhrase unlocks the vault behind s with its 24-word BIP-39

@@ -9,8 +9,7 @@ type LoadResult struct {
 
 // SessionLoad makes non-autoload identities visible in the running agent until
 // that agent restarts, so ssh can use them without the PEM file. A selector is
-// a SHA256 fingerprint, or — when a vault path is configured — an exact comment
-// or a path to the private key file.
+// a SHA256 fingerprint, an exact comment, or a path to the private key file.
 //
 // SessionLoad stops at the first failure; identities loaded before it stay
 // loaded.
@@ -25,10 +24,10 @@ func SessionLoad(env Env, selectors []string) (LoadResult, error) {
 	for _, selector := range selectors {
 		fingerprint, err := c.resolveFingerprint(selector)
 		if err != nil {
-			return res, describe(err, "load", selector)
+			return res, c.describe(err, selector)
 		}
 		if err := vault.SessionLoad(c.session, fingerprint); err != nil {
-			return res, describe(err, "load", selector)
+			return res, c.describe(err, selector)
 		}
 		res.Loaded = append(res.Loaded, fingerprint)
 	}
@@ -58,10 +57,10 @@ func SetAutoload(env Env, selectors []string, on bool) (AutoloadResult, error) {
 	for _, selector := range selectors {
 		fingerprint, err := c.resolveFingerprint(selector)
 		if err != nil {
-			return res, describe(err, "autoload", selector)
+			return res, c.describe(err, selector)
 		}
 		if err := vault.SetAutoload(c.session, fingerprint, on); err != nil {
-			return res, describe(err, "autoload", selector)
+			return res, c.describe(err, selector)
 		}
 		res.Changed = append(res.Changed, fingerprint)
 	}
