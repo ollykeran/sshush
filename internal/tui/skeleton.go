@@ -114,7 +114,7 @@ const (
 	defaultKeyTableHeight       = 10
 	defaultExportAgentKeysRows  = 5
 	agentLoadedKeysMaxRows      = 10
-	foundKeysMaxVisible         = 6
+	foundKeysMinVisible         = 6 // Found Keys shows at least this many rows, more if the screen allows
 )
 
 var themePresetOrder = theme.PresetNamesOrdered()
