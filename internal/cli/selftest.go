@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/style"
-	"github.com/ollykeran/sshush/internal/transport"
 	"github.com/ollykeran/sshush/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -29,26 +28,6 @@ func newSelftestCommand() *cobra.Command {
 	}
 }
 
-// authSockEnvLine describes what SSH_AUTH_SOCK holds in this process against the
-// socket the agent is on, and whether that is what ssh needs to find the agent.
-// persisted is the value new processes will get when the system keeps one
-// (Windows; see platform.PersistedEnv), which explains the commonest surprise
-// there: the variable was just set for the user, and this window predates it.
-func authSockEnvLine(authSock, persisted, socketPath string) (line string, ok bool) {
-	switch {
-	case authSock == socketPath:
-		return fmt.Sprintf("SSH_AUTH_SOCK=%s  ✓", authSock), true
-	case authSock != "":
-		return fmt.Sprintf("SSH_AUTH_SOCK=%s (differs from socket)", authSock), false
-	case persisted == socketPath:
-		return "SSH_AUTH_SOCK not set in this window; new windows have it", false
-	case persisted != "":
-		return fmt.Sprintf("SSH_AUTH_SOCK not set in this window; new windows get %s (differs from socket)", persisted), false
-	default:
-		return "SSH_AUTH_SOCK not set", false
-	}
-}
-
 func runSelftest(cmd *cobra.Command, _ []string) error {
 	cfg := configFrom(cmd)
 	if cfg == nil {
@@ -59,83 +38,21 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("cli: get socket path: %w", err)
 	}
 
-	out := style.NewOutput()
-
 	persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
-	envLine, envOK := authSockEnvLine(os.Getenv("SSH_AUTH_SOCK"), persisted, socketPath)
-	if envOK {
-		out.Add(style.Focus("env:    ") + style.Success(envLine))
-	} else {
-		out.Add(style.Focus("env:    ") + style.Err(envLine))
-	}
+	report := selftest.Run(socketPath, os.Getenv("SSH_AUTH_SOCK"), persisted)
 
-	session, sessionErr := agent.Open(socketPath)
-	if sessionErr == nil {
-		defer session.Close()
-	}
-	var backend agent.Backend
-	liveOK := false
-	if sessionErr == nil {
-		if b, err := session.Backend(); err == nil {
-			backend, liveOK = b, true
+	out := style.NewOutput()
+	for _, c := range report.Checks {
+		out.Add(style.Focus(fmt.Sprintf("%-8s", c.Name+":")) + styleFor(c.Status)(c.Detail))
+		if c.Hint != "" {
+			out.Add(style.Focus("        ") + style.Err(c.Hint))
 		}
 	}
-	if liveOK {
-		out.Add(style.Focus("agent:  ") + style.Success(backend.Mode+"  ✓"))
-	} else {
-		out.Add(style.Focus("agent:  ") + style.Err("unreachable"))
-	}
-
-	if backend.Mode == "vault" {
-		if backend.VaultLocked {
-			out.Add(style.Focus("state:  ") + style.Err("locked"))
-		} else {
-			out.Add(style.Focus("state:  ") + style.Success("unlocked  ✓"))
-		}
-	} else if liveOK {
-		out.Add(style.Focus("state:  ") + style.Success("ready  ✓"))
-	}
-
-	// A named pipe is not a file to stat: it exists exactly when it can be dialled.
-	socketMissing := sessionErr != nil
-	if !transport.IsPipe(socketPath) {
-		_, statErr := os.Stat(socketPath)
-		socketMissing = statErr != nil
-	}
-	if socketMissing {
-		out.Add(style.Focus("socket: ") + style.Err(fmt.Sprintf("%s  ✗", socketPath)))
-		out.Add(style.Focus("        ") + style.Err("agent is not running (try sshush start)"))
+	// Checksum only after every check passed as far as signing.
+	if last := report.Checks[len(report.Checks)-1]; last.Name != "sign" || last.Status != selftest.OK {
 		out.Print()
 		return nil
 	}
-	out.Add(style.Focus("socket: ") + style.Success(fmt.Sprintf("%s  ✓", socketPath)))
-
-	// The socket file can exist while the dial failed (a stale socket), so the
-	// os.Stat check above does not guarantee a session.
-	if sessionErr != nil {
-		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", sessionErr)))
-		out.Print()
-		return nil
-	}
-	keys, err := session.List()
-	if err != nil {
-		out.Add(style.Focus("list:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
-		out.Print()
-		return nil
-	}
-	if len(keys) == 0 {
-		out.Add(style.Focus("list:   ") + style.Warn("no keys loaded"))
-		out.Print()
-		return nil
-	}
-	out.Add(style.Focus("list:   ") + style.Success(fmt.Sprintf("%d key(s) loaded  ✓", len(keys))))
-
-	if _, err := session.Sign(keys[0], []byte("sshush-test")); err != nil {
-		out.Add(style.Focus("sign:   ") + style.Err(fmt.Sprintf("✗ %v", err)))
-		out.Print()
-		return nil
-	}
-	out.Add(style.Focus("sign:   ") + style.Success(fmt.Sprintf("%s  ✓", keys[0].Comment)))
 
 	integrity, integErr := version.VerifyBinaryChecksum()
 	switch {
@@ -149,4 +66,15 @@ func runSelftest(cmd *cobra.Command, _ []string) error {
 
 	out.Print()
 	return nil
+}
+
+func styleFor(s selftest.Status) func(string) string {
+	switch s {
+	case selftest.OK:
+		return style.Success
+	case selftest.Warn:
+		return style.Warn
+	default:
+		return style.Err
+	}
 }

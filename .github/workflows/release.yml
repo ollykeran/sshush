@@ -47,10 +47,24 @@ jobs:
       - name: Generate checksums
         run: just checksums
 
+      # The msix job packs these very binaries, so the Store build matches the
+      # published checksums that sshush selftest compares against.
+      - name: Keep the Windows binaries for the MSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-amd64-binaries
+          path: build/windows-amd64/*.exe
+          if-no-files-found: error
+
+      # A tag with a suffix, such as v0.1.1-test.1, makes a draft pre-release:
+      # the whole pipeline runs, MSIX included, but only maintainers see the
+      # result until it is published or deleted.
       - name: Release
         if: ${{ !env.ACT }}
         uses: softprops/action-gh-release@v3
         with:
+          draft: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             build/sshush-*-linux-amd64.tar.gz
@@ -60,3 +74,90 @@ jobs:
             build/sshush-*.rpm
             build/sshush-*.pkg.tar.zst
             build/*.sha256
+
+  # The MSIX for the Microsoft Store, packed from the release job's Windows
+  # binaries. It is unsigned (the Store signs what it publishes), so it is kept
+  # as a workflow artifact to upload in Partner Center rather than attached to
+  # the GitHub release, where nobody could install it. The package identity
+  # comes from repository variables holding what Partner Center reserved for
+  # the app; see packaging/msix/README.md.
+  msix:
+    needs: release
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-amd64-binaries
+          path: build/windows-amd64
+
+      - name: Build the MSIX
+        env:
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+          MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME }}
+        run: |
+          version="${GITHUB_REF#refs/tags/v}"
+          if [ -z "$MSIX_IDENTITY_NAME" ] || [ -z "$MSIX_PUBLISHER" ]; then
+            echo "::warning::MSIX_IDENTITY_NAME or MSIX_PUBLISHER is not set, so this package has a local identity the Store will refuse"
+          fi
+          bash scripts/msix.sh stage "$version" x64 build/windows-amd64 build/msix-amd64
+          bash scripts/msix.sh pack build/msix-amd64 "build/sshush-$version-windows-amd64.msix"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sshush-msix
+          path: build/sshush-*-windows-amd64.msix
+          if-no-files-found: error
+
+  # Sends the package to the Microsoft Store: a suffixed tag (v1.2.3-rc.1) to
+  # the package flight, a plain tag to everyone. It runs only once
+  # MSSTORE_APP_ID is set, and in the store environment, whose required
+  # reviewer approves each submission before it starts; the Partner Center
+  # credentials are that environment's secrets. See packaging/msix/README.md.
+  store:
+    needs: msix
+    if: vars.MSSTORE_APP_ID != ''
+    runs-on: windows-latest
+    environment: store
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sshush-msix
+          path: build
+
+      - uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Submit to the Store
+        env:
+          MSSTORE_APP_ID: ${{ vars.MSSTORE_APP_ID }}
+          MSSTORE_FLIGHT_ID: ${{ vars.MSSTORE_FLIGHT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          msix=(build/sshush-*-windows-amd64.msix)
+          [ -f "${msix[0]}" ] || { echo "::error::no .msix in the sshush-msix artifact"; exit 1; }
+          target=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            if [ -z "$MSSTORE_FLIGHT_ID" ]; then
+              echo "::error::$GITHUB_REF_NAME is a pre-release, which goes to a package flight, and MSSTORE_FLIGHT_ID is not set"
+              exit 1
+            fi
+            target=(--flightId "$MSSTORE_FLIGHT_ID")
+            echo "Submitting ${msix[0]} to flight $MSSTORE_FLIGHT_ID"
+          else
+            echo "Submitting ${msix[0]} to the Store listing"
+          fi
+          msstore reconfigure --tenantId "$TENANT_ID" --sellerId "$SELLER_ID" \
+            --clientId "$CLIENT_ID" --clientSecret "$CLIENT_SECRET"
+          msstore publish "${msix[0]}" --appId "$MSSTORE_APP_ID" "${target[@]}"

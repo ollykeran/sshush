@@ -19,6 +19,23 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v9
 
+  # The _windows.go files, and the internal/tray code only they call, which
+  # .golangci.yml leaves out of the unused check on other GOOS values.
+  lint-windows:
+    runs-on: ubuntu-latest
+    env:
+      GOOS: windows
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+      - name: unused in internal/tray
+        uses: golangci/golangci-lint-action@v9
+        with:
+          args: --no-config --default=none --enable=unused ./internal/tray/...
+
   lint-yml:
     runs-on: ubuntu-latest
     steps:

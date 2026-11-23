@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ssh "golang.org/x/crypto/ssh"
@@ -132,5 +133,41 @@ func TestDisplayPath(t *testing.T) {
 	}
 	if got := DisplayPath(""); got != "" {
 		t.Errorf("empty: got %q", got)
+	}
+}
+
+func TestWSLPath(t *testing.T) {
+	tests := []struct {
+		in, distro, linux string
+		ok                bool
+	}{
+		{`\\wsl.localhost\Debian\home\olly\.ssh\id_ed25519`, "Debian", "/home/olly/.ssh/id_ed25519", true},
+		{`\\wsl$\Ubuntu-24.04\root\key`, "Ubuntu-24.04", "/root/key", true},
+		{`\\WSL.LOCALHOST\Debian\tmp`, "Debian", "/tmp", true},
+		{`//wsl.localhost/Debian/tmp/k`, "Debian", "/tmp/k", true},
+		{`\\wsl.localhost\Debian`, "Debian", "/", true},
+		{`\\wsl.localhost\`, "", "", false},
+		{`\\server\share\key`, "", "", false},
+		{`C:\Users\olly\.ssh\id_rsa`, "", "", false},
+		{`/home/olly/.ssh/id_rsa`, "", "", false},
+	}
+	for _, tc := range tests {
+		distro, linux, ok := WSLPath(tc.in)
+		if distro != tc.distro || linux != tc.linux || ok != tc.ok {
+			t.Errorf("WSLPath(%q) = %q, %q, %v; want %q, %q, %v", tc.in, distro, linux, ok, tc.distro, tc.linux, tc.ok)
+		}
+	}
+}
+
+func TestDisplayPathShowsWSLPathsAsLinux(t *testing.T) {
+	if got := DisplayPath(`\\wsl.localhost\Debian\srv\keys\id_ed25519`); got != "/srv/keys/id_ed25519" {
+		t.Errorf("got %q", got)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || filepath.Separator != '/' {
+		return // only a Linux home can lie inside a distro
+	}
+	if got := DisplayPath(`\\wsl.localhost\Debian` + strings.ReplaceAll(home, "/", `\`) + `\.ssh\id`); got != "~/.ssh/id" {
+		t.Errorf("path under home: got %q", got)
 	}
 }

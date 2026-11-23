@@ -10,6 +10,10 @@ build arch="": deps
       if [ "$os" = "windows" ]; then ext=".exe"; fi
       CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshushd$ext" ./cmd/sshushd
       CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush$ext" ./cmd/sshush
+      if [ "$os" = "windows" ]; then
+        # GUI subsystem: Windows opens no console window for the tray.
+        CGO_ENABLED=0 GOOS="$os" GOARCH="$goarch" go build "$@" -ldflags "-H=windowsgui -X github.com/ollykeran/sshush/internal/version.Version={{ version }}" -o "$out_dir/sshush-tray$ext" ./cmd/sshush-tray
+      fi
     }
     case "{{ arch }}" in
       dev)
@@ -67,7 +71,8 @@ build arch="": deps
         ;;
     esac
 
-# Package: `just pkg tarball`, `just pkg zip-windows`, `just pkg deb`, `just pkg all`
+# `just pkg msix` needs the Windows SDK, so `all` leaves it out; see packaging/msix/README.md.
+# Package: `just pkg tarball`, `just pkg zip-windows`, `just pkg msix`, `just pkg deb`, `just pkg all`
 pkg target="": (build "linux")
     #!/usr/bin/env bash
     set -euo pipefail
@@ -81,9 +86,9 @@ pkg target="": (build "linux")
       local out="$(cd "{{ build_dir }}" && pwd)/sshush-{{ version }}-${suffix}.zip"
       rm -f "$out"
       if command -v zip >/dev/null 2>&1; then
-        (cd "{{ build_dir }}/${src_dir}" && zip -q "$out" sshush.exe sshushd.exe)
+        (cd "{{ build_dir }}/${src_dir}" && zip -q "$out" sshush.exe sshushd.exe sshush-tray.exe)
       else
-        (cd "{{ build_dir }}/${src_dir}" && python3 -m zipfile -c "$out" sshush.exe sshushd.exe)
+        (cd "{{ build_dir }}/${src_dir}" && python3 -m zipfile -c "$out" sshush.exe sshushd.exe sshush-tray.exe)
       fi
     }
     case "{{ target }}" in
@@ -105,6 +110,14 @@ pkg target="": (build "linux")
         just build windows
         echo "Creating Windows amd64 zip..."
         make_zip "windows-amd64" "windows-amd64"
+        ;;
+      msix)
+        # The Windows SDK's makeappx packs it, so this runs on Windows (or WSL
+        # with the SDK installed); see packaging/msix/README.md.
+        just build windows
+        echo "Creating Windows amd64 MSIX..."
+        bash scripts/msix.sh stage "{{ version }}" x64 "{{ build_dir }}/windows-amd64" "{{ build_dir }}/msix-amd64"
+        bash scripts/msix.sh pack "{{ build_dir }}/msix-amd64" "{{ build_dir }}/sshush-{{ version }}-windows-amd64.msix"
         ;;
       tarball-all)
         just build darwin-all
@@ -152,15 +165,37 @@ pkg target="": (build "linux")
         VERSION={{ version }} nfpm pkg --packager archlinux --target {{ build_dir }}/sshush-{{ version }}-amd64.pkg.tar.zst
         ;;
       "")
-        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|deb|rpm|source|archlinux|all]" >&2
+        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|msix|deb|rpm|source|archlinux|all]" >&2
         exit 1
         ;;
       *)
         echo "Unknown target: {{ target }}" >&2
-        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|deb|rpm|source|archlinux|all]" >&2
+        echo "Usage: just pkg [tarball|tarball-darwin-arm64|tarball-darwin-amd64|tarball-all|zip-windows|msix|deb|rpm|source|archlinux|all]" >&2
         exit 1
         ;;
     esac
+
+# Unsigned and unpacked, so it needs Developer Mode but not the Windows SDK.
+# Install the Windows build as an MSIX package for this user, to try the Store package
+msix-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just build windows
+    bash scripts/msix.sh stage "{{ version }}" x64 "{{ build_dir }}/windows-amd64" "{{ build_dir }}/msix-amd64"
+    bash scripts/msix.sh register "{{ build_dir }}/msix-amd64"
+
+# Needs `bash scripts/msix.sh trust` once per machine; see packaging/msix/README.md.
+# Pack, sign with a local test certificate and install the MSIX, as the Store would
+msix-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just build windows
+    msix="{{ build_dir }}/sshush-{{ version }}-windows-amd64.msix"
+    bash scripts/msix.sh tools >/dev/null
+    bash scripts/msix.sh stage "{{ version }}" x64 "{{ build_dir }}/windows-amd64" "{{ build_dir }}/msix-amd64"
+    bash scripts/msix.sh pack "{{ build_dir }}/msix-amd64" "$msix"
+    bash scripts/msix.sh sign "$msix"
+    bash scripts/msix.sh install "$msix"
 
 # Validate build artifacts exist and have correct format
 check-artifacts ver="dev":
@@ -193,6 +228,7 @@ check-artifacts ver="dev":
     check "$dir/darwin-amd64/sshushd"                   "Mach-O"
     check "$dir/windows-amd64/sshush.exe"               "PE32+"
     check "$dir/windows-amd64/sshushd.exe"              "PE32+"
+    check "$dir/windows-amd64/sshush-tray.exe"          "PE32+"
     check "$dir/sshush-{{ ver }}-linux-amd64.tar.gz"   "gzip"
     check "$dir/sshush-{{ ver }}-darwin-arm64.tar.gz"  "gzip"
     check "$dir/sshush-{{ ver }}-darwin-amd64.tar.gz"  "gzip"

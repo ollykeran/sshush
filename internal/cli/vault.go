@@ -36,30 +36,17 @@ func newVaultCommand() *cobra.Command {
 // than refused.
 func vaultEnv(cmd *cobra.Command) (vaultops.Env, error) {
 	cfg := configFrom(cmd)
-	var vaultPath string
-	named := cmd.Flags().Changed("vault-path")
-	if named {
-		vaultPath, _ = cmd.Flags().GetString("vault-path")
-	} else if cfg != nil {
-		vaultPath = cfg.VaultPath
-	}
 	socketPath, err := getSocketPath(cfg)
 	if err != nil {
 		return vaultops.Env{}, style.NewOutput().Error("failed to get socket path").AsError()
 	}
-	agentVaultPath := ""
-	if cfg != nil && cfg.IsVault() {
-		agentVaultPath = cfg.VaultPath
+	env := vaultops.EnvFromConfig(cfg, socketPath)
+	if cmd.Flags().Changed("vault-path") {
+		env.VaultPath, _ = cmd.Flags().GetString("vault-path")
+		env.NamedVault = true
 	}
-	return vaultops.Env{
-		VaultPath:      vaultPath,
-		NamedVault:     named,
-		SocketPath:     socketPath,
-		AgentVaultPath: agentVaultPath,
-		AgentUnmanaged: cfg != nil && cfg.IsExternal(),
-		AgentElsewhere: cfg != nil && !cfg.OwnsAgentKeys() && cfg.AgentType != "",
-		AskPassphrase:  readPassphrase,
-	}, nil
+	env.AskPassphrase = readPassphrase
+	return env, nil
 }
 
 // vaultError renders a vaultops failure as sshush's standard styled error: the

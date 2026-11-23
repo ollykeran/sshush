@@ -31,6 +31,8 @@ type IdentityView struct {
 	Filepath    string
 	Autoload    bool
 	Loaded      LoadState
+	// PublicKey is the wire-format public key, as an agent lists it.
+	PublicKey []byte
 }
 
 // ListResult is the vault's contents plus the context needed to render them.
@@ -85,6 +87,7 @@ func List(env Env) (ListResult, error) {
 			Filepath:    id.Filepath,
 			Autoload:    id.Autoload,
 			Loaded:      LoadUnknown,
+			PublicKey:   id.PublicKey,
 		}
 		if haveAgent {
 			view.Loaded = LoadNo
