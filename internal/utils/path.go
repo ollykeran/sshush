@@ -113,6 +113,25 @@ func UnreadableDirs(dirs []string) []string {
 	return out
 }
 
+// KeySearchDirs is the list of directories DiscoverKeyPaths searches, in order:
+// searchDirs, then ~/.ssh if ssh is true, then the current directory if cwd is
+// true. It returns a new slice, so the caller's searchDirs (e.g. a config's
+// search_dirs) is never written through.
+func KeySearchDirs(searchDirs []string, cwd bool, ssh bool) []string {
+	dirs := append([]string(nil), searchDirs...)
+	if ssh {
+		if home, err := os.UserHomeDir(); err == nil {
+			dirs = append(dirs, filepath.Join(home, ".ssh"))
+		}
+	}
+	if cwd {
+		if wd, err := os.Getwd(); err == nil {
+			dirs = append(dirs, wd)
+		}
+	}
+	return dirs
+}
+
 // DiscoverKeyPaths finds valid private key files in searchDirs.
 // If cwd is true, adds current directory. If ssh is true, adds ~/.ssh.
 // If recursive is true, walks subdirectories. Directories that are missing or
@@ -165,19 +184,7 @@ func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) [
 	// 	}
 	// }
 
-	// Copy before appending, so the caller's slice (e.g. a config's
-	// search_dirs) is never written through.
-	searchDirs = append([]string(nil), searchDirs...)
-	if ssh {
-		if home, err := os.UserHomeDir(); err == nil {
-			searchDirs = append(searchDirs, filepath.Join(home, ".ssh"))
-		}
-	}
-	if cwd {
-		if cwd, err := os.Getwd(); err == nil {
-			searchDirs = append(searchDirs, cwd)
-		}
-	}
+	searchDirs = KeySearchDirs(searchDirs, cwd, ssh)
 
 	tryAddKey := func(path string) {
 		if seen[path] {

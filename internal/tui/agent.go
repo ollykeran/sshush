@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/config"
@@ -59,6 +60,8 @@ type foundKeysMsg struct {
 	rescan bool
 	// skipped lists configured [agent].search_dirs that could not be read.
 	skipped []string
+	// searched lists every directory the search looked in, in search order.
+	searched []string
 }
 
 type agentLockResultMsg struct {
@@ -123,6 +126,12 @@ type AgentScreen struct {
 	loadedShown  int
 	foundOffset  int
 	foundShown   int
+
+	// searchedDirs and skippedDirs are the directories the last key search
+	// looked in and the configured ones it could not read, for the hint
+	// beside the Found Keys title.
+	searchedDirs []string
+	skippedDirs  []string
 
 	fileSelector *FileSelector
 
@@ -312,6 +321,8 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case foundKeysMsg:
 		s.foundKeys = msg.paths
+		s.searchedDirs = msg.searched
+		s.skippedDirs = msg.skipped
 		s.clampFoundFocus()
 		if msg.rescan {
 			s.status = rescanStatus(len(s.visibleFoundKeys()), msg.skipped)
@@ -874,7 +885,7 @@ func (s *AgentScreen) View() tea.View {
 		sections = append(sections, foundContent)
 	} else {
 		sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top,
-			s.sk.Styles().DimStyle.Render("No other keys found ")+s.renderRescanControl()))
+			s.foundTitleLine(s.sk.Styles().DimStyle.Render("No other keys found"), "in", w)))
 	}
 
 	content := strings.Join(sections, "\n")
@@ -948,7 +959,7 @@ func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
 
 func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active bool) string {
 	st := s.sk.Styles()
-	title := st.SectionTitleStyle.Render(" Found Keys") + " " + s.renderRescanControl()
+	title := s.foundTitleLine(st.SectionTitleStyle.Render(" Found Keys"), "from", sectionBoxWidth(width))
 	var lines []string
 	end := min(s.foundOffset+s.foundShown, len(visible))
 	for i := s.foundOffset; i < end; i++ {
@@ -991,6 +1002,47 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 
 // renderRescanControl renders the clickable "[f] search again" control shown
 // beside Found Keys (or in its place when nothing was found).
+// foundTitleLine is the line above Found Keys: label, then the directories the
+// last search looked in (introduced by prep, e.g. "from"), then the re-scan
+// control. The directory list is shortened with "…" so the line fits within
+// maxW columns; the label and control always show in full.
+func (s *AgentScreen) foundTitleLine(label, prep string, maxW int) string {
+	control := s.renderRescanControl()
+	dirs := searchedDirsText(s.searchedDirs, s.skippedDirs)
+	if dirs == "" {
+		return label + " " + control
+	}
+	room := maxW - lipgloss.Width(label) - lipgloss.Width(control) - 2
+	if room < len(prep)+3 { // not even "from x…" fits
+		return label + " " + control
+	}
+	text := ansi.Truncate(prep+" "+dirs, room, "…")
+	return label + " " + s.sk.Styles().DimStyle.Render(text) + " " + control
+}
+
+// searchedDirsText lists the searched directories as they display (~ for home),
+// once each, marking the configured ones that could not be read.
+func searchedDirsText(searched, skipped []string) string {
+	unreadable := make(map[string]bool, len(skipped))
+	for _, d := range skipped {
+		unreadable[d] = true
+	}
+	seen := make(map[string]bool, len(searched))
+	var parts []string
+	for _, d := range searched {
+		shown := utils.DisplayPath(d)
+		if seen[shown] {
+			continue
+		}
+		seen[shown] = true
+		if unreadable[d] {
+			shown += " (unreadable)"
+		}
+		parts = append(parts, shown)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (s *AgentScreen) renderRescanControl() string {
 	label := "[" + KeyRescan[0] + "] search again"
 	return zone.Mark(s.rescanZoneID(), s.sk.Styles().AccentStyle.Render(label))
@@ -1214,9 +1266,10 @@ func discoverKeysCmd(configPath string, rescan bool) tea.Cmd {
 	return func() tea.Msg {
 		dirs := configuredSearchDirs(configPath)
 		return foundKeysMsg{
-			paths:   utils.DiscoverKeyPaths(dirs, true, true, false),
-			rescan:  rescan,
-			skipped: utils.UnreadableDirs(dirs),
+			paths:    utils.DiscoverKeyPaths(dirs, true, true, false),
+			rescan:   rescan,
+			skipped:  utils.UnreadableDirs(dirs),
+			searched: utils.KeySearchDirs(dirs, true, true),
 		}
 	}
 }

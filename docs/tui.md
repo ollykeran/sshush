@@ -191,7 +191,7 @@ VaultScreen's identity table needs 5 columns (fingerprint/loaded/autoload/commen
 | Key | Table focused | Found Keys focused |
 |-----|---------------|-------------------|
 | `up` / `k` | Move cursor up; at first row, return to tab bar | Move selection up; at top, return to table |
-| `down` / `j` | Move cursor down; at last row, enter Found Keys (if any) | Move selection down (clamped to visible rows) |
+| `down` / `j` | Move cursor down; at last row, enter Found Keys (if any) | Move selection down, to the last found key |
 | `backspace` / `delete` / `d` | Remove selected loaded key | — |
 | `f` | Search again for keys (`KeyRescan`) | Search again for keys |
 | Click row | Select row in table | Click found line adds key (unchanged) |
@@ -201,6 +201,10 @@ VaultScreen's identity table needs 5 columns (fingerprint/loaded/autoload/commen
 `d` removes the selected loaded key when the Agent table is focused. On other tabs, when Found Keys is focused, or when a modal is open, `d` enters daemon controls instead — unless the active page implements `HandleDKey() (tea.Cmd, bool)` and claims the key itself (VaultScreen does this for its own identity table; see VaultScreen below).
 
 Loaded keys and Found Keys share the same section layout: title, bordered box at 3/4 content width. The loaded keys block is vertically centered in the screen content area.
+
+Both lists scroll (`scrollOffset`, `internal/tui/scroll.go`): Loaded Keys shows up to 8 rows, and Found Keys at least `foundKeysMinVisible` (6), growing to fill the space below Loaded Keys. The window follows the selection, and a list with more rows than fit ends with a hint such as `↑↓ 5–15 of 25`. Only rows on screen take clicks.
+
+The Found Keys title names the directories the last search looked in (`foundKeysMsg.searched`, from `utils.KeySearchDirs`), e.g. `Found Keys from ~/keys, ~/.ssh, ~/src/app [f] search again`, or `No other keys found in …` when there are none. Configured directories that could not be read are marked `(unreadable)`. The list is shortened with `…` to fit the width; the label and the re-scan control always show.
 
 ### CreateScreen
 

@@ -67,3 +67,31 @@ func TestUnreadableDirs(t *testing.T) {
 		t.Errorf("UnreadableDirs(nil) = %v, want nil", got)
 	}
 }
+
+// TestKeySearchDirs checks the order DiscoverKeyPaths searches in (configured
+// dirs, then ~/.ssh, then the current directory) and that the caller's slice is
+// not written through.
+func TestKeySearchDirs(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := make([]string, 1, 4) // spare capacity: an append would write through
+	configured[0] = "/srv/keys"
+
+	got := KeySearchDirs(configured, true, true)
+	want := []string{"/srv/keys", filepath.Join(home, ".ssh"), wd}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("KeySearchDirs = %v, want %v", got, want)
+	}
+	if extra := configured[:2][1]; extra != "" {
+		t.Fatalf("caller's slice was written through: %q", extra)
+	}
+	if got := KeySearchDirs(nil, false, false); len(got) != 0 {
+		t.Fatalf("no dirs asked for, got %v", got)
+	}
+}
