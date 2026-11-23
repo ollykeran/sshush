@@ -145,11 +145,19 @@ func TestCreateFileExistsWarningSitsBelowSave(t *testing.T) {
 func TestCreateResultBoxesShownBeforeGenerating(t *testing.T) {
 	s, path := newCreateSaveScreen(t, "id_new")
 	before := ansi.Strip(s.View().Content)
-	// Long temp paths wrap inside the boxes, so look for the file names.
-	for _, want := range []string{"Public Key", "Private Key", "Public Key File",
-		"shown here after Save", filepath.Base(path), filepath.Base(path) + ".pub"} {
+	for _, want := range []string{"Public Key", "Private Key", "Public Key File", "shown here after Save"} {
 		if !strings.Contains(before, want) {
 			t.Fatalf("before generating, missing %q:\n%s", want, before)
+		}
+	}
+	// Long temp paths (on Windows especially) wrap mid-name inside the boxes,
+	// and the full view interleaves the two columns, so read the result panel
+	// alone with borders, spacing and line breaks removed.
+	unwrap := strings.NewReplacer("│", "", "╭", "", "╮", "", "╰", "", "╯", "", "─", "", " ", "", "\n", "")
+	panel := unwrap.Replace(ansi.Strip(s.viewResultPanel(60)))
+	for _, p := range []string{path, path + ".pub"} {
+		if want := unwrap.Replace(utils.DisplayPath(p)); !strings.Contains(panel, want) {
+			t.Fatalf("before generating, result panel does not preview %q:\n%s", want, panel)
 		}
 	}
 
