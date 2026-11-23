@@ -25,8 +25,7 @@ const (
 	createFocusType = iota
 	createFocusOptions
 	createFocusComment
-	createFocusDir
-	createFocusFilename
+	createFocusPath
 	createFocusSave
 )
 
@@ -38,17 +37,15 @@ var (
 
 // CreateScreen is the create tab for generating new SSH keypairs.
 type CreateScreen struct {
-	sk         *Skeleton
-	typeRow    ButtonRow
-	optionRow  ButtonRow
-	commentIn  textinput.Model
-	dirInput   textinput.Model
-	filenameIn textinput.Model
-	saveBtn    ButtonRow
+	sk        *Skeleton
+	typeRow   ButtonRow
+	optionRow ButtonRow
+	commentIn textinput.Model
+	pathIn    textinput.Model // where the private key goes; the public key gets .pub added
+	saveBtn   ButtonRow
 
 	zonePrefix  string
 	lastKeyType string
-	fileEdited  bool
 	confirm     confirmDialog // asks before Save overwrites an existing key file
 	ring        FocusRing
 	width       int
@@ -67,16 +64,9 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 	comment.Prompt = ""
 	comment.SetValue(keys.DefaultComment())
 
-	filename := textinput.New()
-	filename.Prompt = ""
-	filename.SetValue("id_ed25519")
-
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".ssh")
-
-	dirIn := textinput.New()
-	dirIn.Prompt = ""
-	dirIn.SetValue(dir)
+	pathIn := textinput.New()
+	pathIn.Prompt = ""
+	pathIn.SetValue(defaultKeyPath("ed25519"))
 
 	typeRow := NewButtonRow(keyTypes...)
 	typeRow.ZonePrefix = prefix + "type-"
@@ -90,13 +80,12 @@ func NewCreateScreen(sk *Skeleton) *CreateScreen {
 		typeRow:     typeRow,
 		optionRow:   optionRow,
 		commentIn:   comment,
-		dirInput:    dirIn,
-		filenameIn:  filename,
+		pathIn:      pathIn,
 		saveBtn:     saveBtn,
 		zonePrefix:  prefix,
 		lastKeyType: "ed25519",
 		confirm:     newConfirmDialog(),
-		ring:        NewFocusRing(6), // type, options, comment, dir, filename, save
+		ring:        NewFocusRing(5), // type, options, comment, path, save
 	}
 	s.ring.SetSkip(func(i int) bool {
 		return i == createFocusOptions && s.currentKeyType() == "ed25519"
@@ -110,7 +99,20 @@ func (s *CreateScreen) HasModal() bool { return s.confirm.active }
 func (s *CreateScreen) ModalTakesEsc() bool { return s.confirm.active }
 
 func (s *CreateScreen) HasActiveTextInput() bool {
-	return s.commentIn.Focused() || s.dirInput.Focused() || s.filenameIn.Focused()
+	return s.commentIn.Focused() || s.pathIn.Focused()
+}
+
+// defaultKeyFile is the file name ssh-keygen would use for a key type.
+func defaultKeyFile(keyType string) string { return "id_" + keyType }
+
+// defaultKeyPath is where a new key of keyType goes by default, as the Path
+// field shows it: ~/.ssh/id_<type>.
+func defaultKeyPath(keyType string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".ssh", defaultKeyFile(keyType))
+	}
+	return utils.ContractHomeDirectory(filepath.Join(home, ".ssh", defaultKeyFile(keyType)))
 }
 
 func (s *CreateScreen) Init() tea.Cmd {
@@ -155,11 +157,8 @@ func (s *CreateScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s.ring.Index() == createFocusComment && s.commentIn.Focused() {
 			return s.handleCommentInput(msg)
 		}
-		if s.ring.Index() == createFocusDir && s.dirInput.Focused() {
-			return s.handleDirInput(msg)
-		}
-		if s.ring.Index() == createFocusFilename && s.filenameIn.Focused() {
-			return s.handleFilenameInput(msg)
+		if s.ring.Index() == createFocusPath && s.pathIn.Focused() {
+			return s.handlePathInput(msg)
 		}
 		return s.handleKeys(msg)
 	}
@@ -194,23 +193,13 @@ func (s *CreateScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 		}
 		return s, cmd
 	}
-	if inZoneBounds(s.zonePrefix+"dir", x, y) {
+	if inZoneBounds(s.zonePrefix+"path", x, y) {
 		s.blurInputs()
-		s.ring.SetIndex(createFocusDir)
+		s.ring.SetIndex(createFocusPath)
 		s.updateButtonFocus()
-		cmd := s.dirInput.Focus()
-		if pos := sectionBoxCursorPos(s.zonePrefix+"dir", x, y); pos >= 0 {
-			s.dirInput.SetCursor(pos)
-		}
-		return s, cmd
-	}
-	if inZoneBounds(s.zonePrefix+"filename", x, y) {
-		s.blurInputs()
-		s.ring.SetIndex(createFocusFilename)
-		s.updateButtonFocus()
-		cmd := s.filenameIn.Focus()
-		if pos := sectionBoxCursorPos(s.zonePrefix+"filename", x, y); pos >= 0 {
-			s.filenameIn.SetCursor(pos)
+		cmd := s.pathIn.Focus()
+		if pos := sectionBoxCursorPos(s.zonePrefix+"path", x, y); pos >= 0 {
+			s.pathIn.SetCursor(pos)
 		}
 		return s, cmd
 	}
@@ -259,10 +248,8 @@ func (s *CreateScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch focus {
 		case createFocusComment:
 			return s, s.commentIn.Focus()
-		case createFocusDir:
-			return s, s.dirInput.Focus()
-		case createFocusFilename:
-			return s, s.filenameIn.Focus()
+		case createFocusPath:
+			return s, s.pathIn.Focus()
 		case createFocusSave:
 			return s.doSave()
 		}
@@ -288,38 +275,20 @@ func (s *CreateScreen) handleCommentInput(msg tea.KeyPressMsg) (tea.Model, tea.C
 	return s, cmd
 }
 
-func (s *CreateScreen) handleDirInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (s *CreateScreen) handlePathInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		s.dirInput.Blur()
+		s.pathIn.Blur()
 		return s, nil
 	case "tab", "down":
-		s.dirInput.Blur()
+		s.pathIn.Blur()
 		return s.focusNext()
 	case "shift+tab", "up":
-		s.dirInput.Blur()
+		s.pathIn.Blur()
 		return s.focusPrev()
 	}
 	var cmd tea.Cmd
-	s.dirInput, cmd = s.dirInput.Update(msg)
-	return s, cmd
-}
-
-func (s *CreateScreen) handleFilenameInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		s.filenameIn.Blur()
-		return s, nil
-	case "tab", "down":
-		s.filenameIn.Blur()
-		return s.focusNext()
-	case "shift+tab", "up":
-		s.filenameIn.Blur()
-		return s.focusPrev()
-	}
-	s.fileEdited = true
-	var cmd tea.Cmd
-	s.filenameIn, cmd = s.filenameIn.Update(msg)
+	s.pathIn, cmd = s.pathIn.Update(msg)
 	return s, cmd
 }
 
@@ -343,18 +312,15 @@ func (s *CreateScreen) focusInput() tea.Cmd {
 	switch s.ring.Index() {
 	case createFocusComment:
 		return s.commentIn.Focus()
-	case createFocusDir:
-		return s.dirInput.Focus()
-	case createFocusFilename:
-		return s.filenameIn.Focus()
+	case createFocusPath:
+		return s.pathIn.Focus()
 	}
 	return nil
 }
 
 func (s *CreateScreen) blurInputs() {
 	s.commentIn.Blur()
-	s.dirInput.Blur()
-	s.filenameIn.Blur()
+	s.pathIn.Blur()
 }
 
 func (s *CreateScreen) updateButtonFocus() {
@@ -386,19 +352,13 @@ func (s *CreateScreen) currentBits() int {
 	return 0
 }
 
-func (s *CreateScreen) updateFilename() {
-	s.filenameIn.SetValue("id_" + s.currentKeyType())
-}
-
 func (s *CreateScreen) syncKeyTypeChange() {
 	kt := s.currentKeyType()
 	if kt == s.lastKeyType {
 		return
 	}
+	s.renameDefaultKeyFile(s.lastKeyType, kt)
 	s.lastKeyType = kt
-	if !s.fileEdited {
-		s.updateFilename()
-	}
 	switch kt {
 	case "rsa":
 		s.optionRow = NewButtonRow(rsaOptions...)
@@ -409,15 +369,42 @@ func (s *CreateScreen) syncKeyTypeChange() {
 	}
 }
 
-// savePath is the directory and file name Save writes the private key to (the
-// public key goes beside it with .pub added), and the two joined.
-func (s *CreateScreen) savePath() (dir, filename, fullPath string) {
-	dir = s.dirInput.Value()
-	filename = s.filenameIn.Value()
-	if filename == "" {
-		filename = "id_" + s.currentKeyType()
+// renameDefaultKeyFile follows a key type change in the Path field: when it
+// still ends in the default file name for the old type (id_ed25519), that is
+// swapped for the new type's (id_rsa), keeping the directory. A file name the
+// user typed is left alone.
+func (s *CreateScreen) renameDefaultKeyFile(oldType, newType string) {
+	dir, file := splitKeyPath(s.pathIn.Value())
+	if file != defaultKeyFile(oldType) {
+		return
 	}
-	return dir, filename, filepath.Join(dir, filename)
+	s.pathIn.SetValue(dir + defaultKeyFile(newType))
+}
+
+// splitKeyPath splits a Path field value after its last separator, keeping the
+// value's own spelling (~, either slash on Windows) for the directory part.
+func splitKeyPath(value string) (dir, file string) {
+	i := strings.LastIndexAny(value, "/"+string(filepath.Separator))
+	return value[:i+1], value[i+1:]
+}
+
+// savePath is the directory and file name Save writes the private key to (the
+// public key goes beside it with .pub added), and the two joined. It reads the
+// Path field with ~ expanded. A Path that is empty, ends in a separator or
+// names an existing directory gets the key type's default file name
+// (id_ed25519) added.
+func (s *CreateScreen) savePath() (dir, filename, fullPath string) {
+	value := strings.TrimSpace(s.pathIn.Value())
+	if value == "" {
+		value = defaultKeyPath(s.currentKeyType())
+	}
+	full := utils.ExpandHomeDirectory(value)
+	_, file := splitKeyPath(value)
+	if info, err := os.Stat(full); file == "" || (err == nil && info.IsDir()) {
+		full = filepath.Join(full, defaultKeyFile(s.currentKeyType()))
+	}
+	full = filepath.Clean(full)
+	return filepath.Dir(full), filepath.Base(full), full
 }
 
 // doSave generates and saves the key, first asking whether to overwrite when
@@ -523,9 +510,7 @@ func (s *CreateScreen) viewCreatePanel(w int, active bool) string {
 
 	sections = append(sections, zone.Mark(s.zonePrefix+"comment", st.SectionBox("Comment", s.commentIn.View(), w, focused(createFocusComment))))
 
-	sections = append(sections, zone.Mark(s.zonePrefix+"dir", st.SectionBox("Directory", s.dirInput.View(), w, focused(createFocusDir))))
-
-	sections = append(sections, zone.Mark(s.zonePrefix+"filename", st.SectionBox("Filename", s.filenameIn.View(), w, focused(createFocusFilename))))
+	sections = append(sections, zone.Mark(s.zonePrefix+"path", st.SectionBox("Path", s.pathIn.View(), w, focused(createFocusPath))))
 
 	sections = append(sections, " "+s.saveBtn.View(st))
 

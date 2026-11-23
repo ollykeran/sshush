@@ -204,7 +204,11 @@ Loaded keys and Found Keys share the same section layout: title, bordered box at
 
 ### CreateScreen
 
-FocusRing: Type → Options (skip for ed25519) → Comment → Dir → Filename → Save.
+FocusRing: Type → Options (skip for ed25519) → Comment → Path → Save.
+
+**Path** is one field for where the private key goes (the public key gets `.pub` added), starting at `~/.ssh/id_ed25519`. `~` is expanded on Save. A Path that is empty, ends in a separator, or names an existing directory gets the key type's default file name (`id_ed25519`, `id_rsa`, `id_ecdsa`). Changing the key type swaps a default file name for the new type's and keeps the directory; a file name the user typed is left alone.
+
+Save over an existing file opens `confirmDialog` (Yes/No, No selected) before writing. Before a key is generated, the result boxes preview the paths Save will write.
 
 ### EditScreen
 
