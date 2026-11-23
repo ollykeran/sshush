@@ -82,3 +82,28 @@ Inside WSL you can set sshush up as on any other Linux, with its own daemon and 
 Or the distro can use the agent that sshush runs on Windows, so both sides share one vault and one unlock. Set `[agent].type = "windows"` in the distro's config and keep the same `eval $(sshush)` line in your shell's startup file: it then starts a relay in the distro, starts sshush on Windows if it is not running, and asks for the vault's passphrase if it is locked. See [Windows: Using it from WSL](windows.md#using-it-from-wsl).
 
 Starting the daemon waits for it to confirm it's actually ready rather than guessing on a fixed delay, so this works reliably even when the shell startup environment is busy (many rc scripts launching at once). If startup does fail, the error shown is the daemon's actual failure reason (bad config, a vault problem, and so on), not a generic timeout. See [Architecture: Daemon startup](architecture.md#daemon-startup) for how this works.
+
+## Clipboard
+
+Copying a public key (`sshush` CLI and TUI) or a fresh recovery phrase (`sshush vault init`) runs:
+
+| Platform | Command | Package |
+| --- | --- | --- |
+| Linux, Wayland (`WAYLAND_DISPLAY` set) | `wl-copy` | `wl-clipboard` |
+| Linux, X11 | `xclip -selection clipboard` | `xclip` |
+| macOS | `pbcopy` | built in |
+| Windows | the clipboard API | built in |
+
+Neither Linux tool is required: the `.deb`, `.rpm` and Arch packages only suggest them, so install the one for your session if you want copying to work.
+
+To copy some other way, set `SSHUSH_COPY_CMD` to a command that reads the text on its standard input:
+
+```sh
+export SSHUSH_COPY_CMD='xsel --clipboard --input'   # X11 without xclip
+export SSHUSH_COPY_CMD='tmux load-buffer -'         # into the tmux paste buffer, e.g. over SSH
+export SSHUSH_COPY_CMD='clip.exe'                   # from WSL, into the Windows clipboard
+```
+
+The value is split into a program and its arguments on spaces, with single or double quotes keeping a part together (`"/opt/My Tools/copy" --in`); it is not run through a shell, so `$VAR`, `|` and `>` are passed to the program as they are. For a pipeline, name a shell yourself: `sh -c 'xclip -selection clipboard && notify-send copied'`. A value that is empty or only spaces counts as unset. If the command fails, the error names it.
+
+It applies on every platform, Windows included, and to the recovery phrase too. On Windows the default marks a copied recovery phrase so it stays out of clipboard history (Win+V) and cloud sync; a command from `SSHUSH_COPY_CMD` does whatever it does instead, so those marks are not set. `clip.exe` in particular reads its input in the console code page, so non-ASCII text (an accented key comment) can arrive mangled.

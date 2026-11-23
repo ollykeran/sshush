@@ -105,6 +105,8 @@ The editor has to stay in the foreground until you close the file. For VS Code t
 
 Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install. The recovery phrase that `sshush vault init` copies is marked so that Windows keeps it out of clipboard history (Win+V) and does not sync it to your other devices; a clipboard manager that ignores those marks can still record it.
 
+`SSHUSH_COPY_CMD` replaces the clipboard API with a command of your own that reads the text on stdin, as on Linux and macOS (see [Setup: Clipboard](setup.md#clipboard)). That command gets the recovery phrase too, without the marks: only the default keeps it out of history and cloud sync.
+
 ## The tray
 
 `sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do:
