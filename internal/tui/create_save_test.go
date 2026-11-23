@@ -18,8 +18,7 @@ func newCreateSaveScreen(t *testing.T, name string) (*CreateScreen, string) {
 	s := newCreateTestScreen()
 	s.width, s.height = 120, 40
 	dir := t.TempDir()
-	s.dirInput.SetValue(dir)
-	s.filenameIn.SetValue(name)
+	s.pathIn.SetValue(filepath.Join(dir, name))
 	s.ring.SetIndex(createFocusSave)
 	s.updateButtonFocus()
 	return s, filepath.Join(dir, name)
