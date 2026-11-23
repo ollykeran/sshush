@@ -7,9 +7,26 @@ act cmd ver="" branch="":
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
+    # Pull the runner image once and run act with --pull=false: act otherwise re-pulls it for
+    # every job, and under WSL its pulls use Docker Desktop's desktop.exe credential helper,
+    # which Docker Hub rejects or rate-limits. A failed pull is fine when the image is cached.
+    image=catthehacker/ubuntu:act-latest
+    docker pull -q --platform linux/amd64 "$image" || docker image inspect "$image" >/dev/null
+    # .actrc runs jobs as 1000:1000, but act's tool cache volume is created root-owned,
+    # so setup-go cannot write /opt/hostedtoolcache. Hand the volume to that user.
+    docker run --rm -u 0 --platform linux/amd64 -v act-toolcache:/opt/hostedtoolcache "$image" \
+      chown -R 1000:1000 /opt/hostedtoolcache
+    # Under WSL, containers cannot reach the address act serves artifacts and caches on (the
+    # distro's own IP), so uploads time out. Docker Desktop's host.docker.internal does reach
+    # the distro's loopback, but act cannot bind to that name: bind loopback, hand jobs the URL.
+    act_args=(--rm --pull=false)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      export ACTIONS_RUNTIME_URL=http://host.docker.internal:34567/
+      act_args+=(--artifact-server-addr 127.0.0.1 --no-cache-server)
+    fi
     run_act() {
       local event="$1" file="$2" extra="${3:-}"
-      act "$event" --rm -W ".github/workflows/$file" --artifact-server-path .act-artifacts $extra
+      act "$event" "${act_args[@]}" -W ".github/workflows/$file" --artifact-server-path .act-artifacts $extra
     }
     run_all() {
       local event="$1"
@@ -62,7 +79,7 @@ act cmd ver="" branch="":
         fi
         tmp_event=$(mktemp)
         printf '{"ref":"refs/tags/v%s","before":"0000000000000000000000000000000000000000","after":"%s"}\n' "$ver" "$sha" > "$tmp_event"
-        act push -e "$tmp_event" -W .github/workflows/release.yml --defaultbranch "$br"
+        act push --pull=false -e "$tmp_event" -W .github/workflows/release.yml --defaultbranch "$br"
         rm -f "$tmp_event"
         ;;
       *)
@@ -78,6 +95,23 @@ act-clean event="push":
     #!/usr/bin/env bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
+    # Pull the runner image once and run act with --pull=false: act otherwise re-pulls it for
+    # every job, and under WSL its pulls use Docker Desktop's desktop.exe credential helper,
+    # which Docker Hub rejects or rate-limits. A failed pull is fine when the image is cached.
+    image=catthehacker/ubuntu:act-latest
+    docker pull -q --platform linux/amd64 "$image" || docker image inspect "$image" >/dev/null
+    # .actrc runs jobs as 1000:1000, but act's tool cache volume is created root-owned,
+    # so setup-go cannot write /opt/hostedtoolcache. Hand the volume to that user.
+    docker run --rm -u 0 --platform linux/amd64 -v act-toolcache:/opt/hostedtoolcache "$image" \
+      chown -R 1000:1000 /opt/hostedtoolcache
+    # Under WSL, containers cannot reach the address act serves artifacts and caches on (the
+    # distro's own IP), so uploads time out. Docker Desktop's host.docker.internal does reach
+    # the distro's loopback, but act cannot bind to that name: bind loopback, hand jobs the URL.
+    act_args=(--rm --pull=false)
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+      export ACTIONS_RUNTIME_URL=http://host.docker.internal:34567/
+      act_args+=(--artifact-server-addr 127.0.0.1 --no-cache-server)
+    fi
     tmp=$(mktemp -d)
     git worktree add --detach "$tmp" HEAD >/dev/null
     trap 'git worktree remove --force "$tmp"; rm -rf "$tmp"' EXIT
@@ -85,5 +119,5 @@ act-clean event="push":
     for f in lint.yml test.yml build.yml; do
       echo "Running act {{ event }} on fresh checkout: $tmp ($f)"
       cd "$tmp"
-      act {{ event }} --rm -W ".github/workflows/$f" --artifact-server-path "$tmp/.act-artifacts"
+      act {{ event }} "${act_args[@]}" -W ".github/workflows/$f" --artifact-server-path "$tmp/.act-artifacts"
     done
