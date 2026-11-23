@@ -4,17 +4,19 @@
   placeholders (see packaging/msix/README.md) and packs it with the binaries
   and Assets/.
 
-  Two applications share one package:
-  - Tray: sshush-tray.exe, the Start menu entry, with the StartupTask that
-    starts it at sign-in. A package cannot write the user's Run key (its
-    registry writes go to a private copy), so this is how the tray starts
-    with Windows. The task must belong to this application, not one of its
-    own: Windows looks a task up by the application asking, and the tray's
-    "Start at sign-in" checkbox switches it. A start by the task passes no
+  One application, Tray: sshush-tray.exe, the Start menu entry, with
+  - the StartupTask that starts it at sign-in. A package cannot write the
+    user's Run key (its registry writes go to a private copy), so this is how
+    the tray starts with Windows. The task must belong to this application:
+    Windows looks a task up by the application asking, and the tray's "Start
+    at sign-in" checkbox switches it. A start by the task passes no
     arguments; the tray asks Windows how it was activated instead.
-  - Cli: sshush.exe, reachable from any shell as "sshush" through an app
-    execution alias. sshushd.exe sits beside it, which is where sshush looks
-    for the daemon first.
+  - the "sshush" app execution alias, which runs sshush.exe from any shell.
+    An extension can name its own executable, as Windows Terminal's wt.exe
+    does, so the command line needs no application of its own: the Store
+    refuses one hidden from Start (AppListEntry="none") without a waiver.
+    sshushd.exe sits beside sshush.exe, where sshush looks for the daemon
+    first.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -58,18 +60,6 @@
         <desktop:Extension Category="windows.startupTask" Executable="sshush-tray.exe" EntryPoint="Windows.FullTrustApplication">
           <desktop:StartupTask TaskId="SshushTray" Enabled="true" DisplayName="@DISPLAY_NAME@" />
         </desktop:Extension>
-      </Extensions>
-    </Application>
-
-    <Application Id="Cli" Executable="sshush.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements
-        DisplayName="sshush (command line)"
-        Description="sshush command line"
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png"
-        AppListEntry="none" />
-      <Extensions>
         <uap3:Extension Category="windows.appExecutionAlias" Executable="sshush.exe" EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
             <desktop:ExecutionAlias Alias="sshush.exe" />

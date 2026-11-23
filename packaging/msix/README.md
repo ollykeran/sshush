@@ -10,12 +10,14 @@ sshush for Windows ships through the Microsoft Store as an MSIX package. The Sto
 
 ## What is in the package
 
-`sshush.exe`, `sshushd.exe` and `sshush-tray.exe` side by side, as two applications:
+`sshush.exe`, `sshushd.exe` and `sshush-tray.exe` side by side, in one application, `Tray`:
 
-| Application | Runs | How it is reached |
-|---|---|---|
-| `Tray` | `sshush-tray.exe` | the Start menu entry "sshush", and at sign-in through the `SshushTray` StartupTask |
-| `Cli` | `sshush.exe` | the `sshush` app execution alias, from PowerShell, cmd and WSL |
+| Runs | How it is reached |
+|---|---|
+| `sshush-tray.exe` | the Start menu entry, and at sign-in through the `SshushTray` StartupTask |
+| `sshush.exe` | the `sshush` app execution alias, from PowerShell, cmd and WSL |
+
+The alias is an extension of `Tray` naming its own executable, as Windows Terminal's `wt.exe` is. A separate application for the command line would have to be hidden from Start (`AppListEntry="none"`), and the Store refuses that without a "headless app" waiver.
 
 `sshush start` finds `sshushd.exe` beside itself, inside the package, and the daemon keeps running after the CLI exits.
 
