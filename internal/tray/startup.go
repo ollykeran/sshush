@@ -43,5 +43,5 @@ func startupResult(want bool, got startupTaskState) error {
 	case taskDisabledByPolicy, taskEnabledByPolicy:
 		return errStartupByPolicy
 	}
-	return errors.New("Windows did not change it")
+	return errors.New("the setting stayed as it was: Windows did not change it")
 }

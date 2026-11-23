@@ -165,20 +165,24 @@ type lvItem struct {
 
 // nmHdr is NMHDR, and nmLVKeyDown NMLVKEYDOWN.
 type nmHdr struct {
-	hwndFrom uintptr
-	idFrom   uintptr
-	code     uint32
+	_      uintptr // hwndFrom
+	idFrom uintptr
+	code   uint32
 }
 
 type nmLVKeyDown struct {
-	hdr   nmHdr
-	vkey  uint16
-	flags uint32
+	_    nmHdr
+	vkey uint16
+	_    uint32 // flags
 }
 
 // minMaxInfo is MINMAXINFO.
 type minMaxInfo struct {
-	reserved, maxSize, maxPosition, minTrackSize, maxTrackSize [2]int32
+	_            [2]int32 // ptReserved
+	_            [2]int32 // ptMaxSize
+	_            [2]int32 // ptMaxPosition
+	minTrackSize [2]int32
+	_            [2]int32 // ptMaxTrackSize
 }
 
 // windowPlacement is WINDOWPLACEMENT.

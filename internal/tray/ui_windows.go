@@ -33,7 +33,6 @@ var (
 	procGetDC                = user32.NewProc("GetDC")
 	procReleaseDC            = user32.NewProc("ReleaseDC")
 	procGetWindowRect        = user32.NewProc("GetWindowRect")
-	procMapWindowPoints      = user32.NewProc("MapWindowPoints")
 	procImageListCreate      = comctl32.NewProc("ImageList_Create")
 	procImageListReplaceIcon = comctl32.NewProc("ImageList_ReplaceIcon")
 	procImageListDestroy     = comctl32.NewProc("ImageList_Destroy")
@@ -82,12 +81,12 @@ type nmLVCustomDraw struct {
 	hdr       nmHdr
 	drawStage uint32
 	hdc       uintptr
-	rc        [4]int32
+	_         [4]int32 // rc
 	itemSpec  uintptr
-	itemState uint32
-	itemParam uintptr
+	_         uint32  // uItemState
+	_         uintptr // lItemParam
 	clrText   colorRef
-	clrTextBk colorRef
+	_         colorRef // clrTextBk
 }
 
 type bitmapInfoHeader struct {
@@ -345,13 +344,6 @@ func renderGlyph(glyph rune, px int, color colorRef) uintptr {
 	info := iconInfo{fIcon: 1, hbmMask: mask, hbmColor: color32}
 	icon, _, _ := procCreateIconIndirect.Call(uintptr(unsafe.Pointer(&info)))
 	return icon
-}
-
-// rectIn returns child's rectangle in parent's client coordinates.
-func rectIn(parent, child uintptr) (r [4]int32) {
-	procGetWindowRect.Call(child, uintptr(unsafe.Pointer(&r)))
-	procMapWindowPoints.Call(0, parent, uintptr(unsafe.Pointer(&r)), 2)
-	return r
 }
 
 // textWidth measures text, without its mnemonic marker, in the dialog's font.

@@ -116,7 +116,7 @@ func await(op comObject, result unsafe.Pointer) error {
 		switch status {
 		case asyncStarted:
 			if time.Now().After(deadline) {
-				return errors.New("Windows did not answer in time")
+				return errors.New("no answer from Windows in time")
 			}
 			time.Sleep(10 * time.Millisecond)
 			continue
