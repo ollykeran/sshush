@@ -36,6 +36,21 @@ type agentDaemonStateMsg struct {
 	running bool
 }
 
+// daemonStartedForAddMsg reports the outcome of starting sshushd so a key the user
+// picked while the agent was stopped can be added to it. err is nil when the daemon
+// is up (including when it turned out to be running already).
+type daemonStartedForAddMsg struct {
+	path string
+	err  error
+}
+
+// Seams over the daemon and agent calls the add-key flow makes; tests replace them.
+var (
+	startDaemon          = sshushd.StartDaemon
+	daemonAlreadyRunning = sshushd.CheckAlreadyRunning
+	addKeyToAgent        = addKeyToAgentCmd
+)
+
 // foundKeysMsg carries the result of a key search (see discoverKeysCmd).
 type foundKeysMsg struct {
 	paths []utils.KeyPath
@@ -171,7 +186,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg, daemonStartedForAddMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -193,7 +208,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileSelectedMsg:
 		s.fileSelector.Hide()
 		s.focus = agentFocusTable
-		return s, addKeyToAgentCmd(s.socketPath, msg.Path)
+		return s, s.addKeyCmd(msg.Path)
 
 	case FilePickerCancelledMsg:
 		s.fileSelector.Hide()
@@ -224,6 +239,20 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ButtonFlashDoneMsg:
 		s.buttons.ClearPress()
 		return s, nil
+
+	case daemonStartedForAddMsg:
+		if msg.err != nil {
+			s.status = "start failed: " + msg.err.Error()
+			s.statusErr = true
+			return s, tea.Batch(checkDaemonCmd(s.socketPath), checkVaultStateCmd(s.socketPath))
+		}
+		s.status = "started, adding key..."
+		s.statusErr = false
+		// Record the daemon as running exactly as a daemon state check would (footer
+		// widget, fresh vault poll chain). The add's own status message then refreshes
+		// keys, daemon state and vault state as after any add.
+		_, stateCmd := s.Update(agentDaemonStateMsg{running: true})
+		return s, tea.Batch(stateCmd, checkVaultStateCmd(s.socketPath), addKeyToAgent(s.socketPath, msg.path))
 
 	case agentKeysMsg:
 		if msg.err != nil {
@@ -624,7 +653,19 @@ func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 		return s, nil
 	}
 	kp := visible[s.foundSelected]
-	return s, addKeyToAgentCmd(s.socketPath, kp.Path)
+	return s, s.addKeyCmd(kp.Path)
+}
+
+// addKeyCmd adds the key file at path to the agent. When the daemon is not running
+// it is started first (the same start as the Start control), then the key is added
+// once daemonStartedForAddMsg reports it up.
+func (s *AgentScreen) addKeyCmd(path string) tea.Cmd {
+	if s.daemonRunning {
+		return addKeyToAgent(s.socketPath, path)
+	}
+	s.status = "starting agent..."
+	s.statusErr = false
+	return startDaemonThenAddCmd(s.configPath, s.socketPath, path)
 }
 
 // rescanKeys searches ~/.ssh, the current directory and the configured
@@ -965,6 +1006,18 @@ func startDaemonCmd(configPath, socketPath string) tea.Cmd {
 			return agentStatusMsg{text: err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "started"}
+	}
+}
+
+// startDaemonThenAddCmd starts sshushd and reports back with daemonStartedForAddMsg so
+// the key at path can be added. A daemon that is already up (the cached state was
+// stale) counts as started.
+func startDaemonThenAddCmd(configPath, socketPath, path string) tea.Cmd {
+	return func() tea.Msg {
+		if daemonAlreadyRunning(socketPath) {
+			return daemonStartedForAddMsg{path: path}
+		}
+		return daemonStartedForAddMsg{path: path, err: startDaemon(configPath, socketPath)}
 	}
 }
 
