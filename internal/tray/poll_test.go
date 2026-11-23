@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,7 +18,13 @@ import (
 // path. The keyring speaks no sshush-op extension, like somebody else's agent.
 func serveKeyring(t *testing.T, kr sshagent.Agent) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "agent.sock")
+	// Not t.TempDir(): its path can be too long for a Unix socket on macOS.
+	dir, err := os.MkdirTemp("/tmp", "sshush-tray-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "agent.sock")
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
