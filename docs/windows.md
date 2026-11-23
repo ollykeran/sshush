@@ -21,7 +21,7 @@ The SSH server gives whoever signs in a shell on a pseudo-terminal, with process
 
 ## Quick start
 
-Install sshush from the Microsoft Store, or unpack the release zip into a folder on your `PATH` (see [Installing](#installing)). Then in PowerShell:
+Unpack the release zip into a folder on your `PATH` (see [Installing](#installing); a Microsoft Store package is coming soon). Then in PowerShell:
 
 ```powershell
 sshush start --shell powershell | Invoke-Expression
@@ -215,9 +215,9 @@ Everything in the list above then works the same way, except that `sshush start`
 
 ## Installing
 
-### From the Microsoft Store
+### From the Microsoft Store (coming soon)
 
-sshush is in the Microsoft Store as **sshush agent**. The Store installs and updates it, and it runs where Windows blocks an unsigned program downloaded from the internet. It puts the tray in the Start menu, starts it at sign-in, and makes `sshush` a command in PowerShell, cmd and WSL.
+sshush is on its way to the Microsoft Store as **sshush agent**; this section describes it for when it is listed. The Store installs and updates it, and it runs where Windows blocks an unsigned program downloaded from the internet. It puts the tray in the Start menu, starts it at sign-in, and makes `sshush` a command in PowerShell, cmd and WSL.
 
 To stop the tray starting at sign-in, untick "Start at sign-in" in it, or turn it off in Settings > Apps > Startup. Once it has been turned off in Settings, only Settings can turn it back on; the tray opens that page for you.
 

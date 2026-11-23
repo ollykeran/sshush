@@ -77,7 +77,7 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 | **Debian/Ubuntu** | `sudo dpkg -i sshush-*-amd64.deb` |
 | **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
-| **Windows** | install **sshush agent** from the Microsoft Store, or unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md#installing) |
+| **Windows** | unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md#installing). A Microsoft Store package is coming soon. |
 
 ### From source
 
