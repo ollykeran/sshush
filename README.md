@@ -115,4 +115,4 @@ Go 1.27+, [`just`](https://github.com/casey/just) optional but recommended.
 just build
 ```
 
-Builds `sshush` and `sshushd` for the machine you are on, into `build/<os>-<arch>/` (e.g. `build/darwin-arm64/`). From the repo, run e.g. `./build/darwin-arm64/sshush` or install the artifacts the same way you do other static binaries. Other targets: `just build linux` (linux/amd64), `just build darwin` (darwin/arm64), `just build all`. Packaging: `just pkg all` (see [justfile](justfile)).
+Builds `sshush` and `sshushd` for the machine you are on, into `build/<os>-<arch>/` (e.g. `build/darwin-arm64/`). From the repo, run e.g. `./build/darwin-arm64/sshush` or install the artifacts the same way you do other static binaries. Other targets: `just build linux` (linux/amd64), `just build darwin` (darwin/arm64), `just build windows` (windows/amd64), `just build all`. Packaging: `just pkg all` (see [justfile](justfile)).

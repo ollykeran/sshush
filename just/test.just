@@ -1,19 +1,70 @@
 # Run tests with race detection (optional: specific package, --nocache to bypass Go's test cache).
+# `just test all` adds everything else this host can check: `just check-windows`, and
+# `just e2e-wsl` inside a WSL distro. ./... already takes in test/e2e.
 # Output is formatted as readable sentences by gotestdox (pinned as a go.mod tool).
 test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     args=({{ args }})
     pkg="./..."
+    all=""
     extra=()
     for a in "${args[@]+"${args[@]}"}"; do
       if [ "$a" = "--nocache" ]; then
         extra+=(-count=1)
+      elif [ "$a" = "all" ]; then
+        all=1
       else
         pkg="$a"
       fi
     done
     just _dox "$pkg" -race "${extra[@]+"${extra[@]}"}"
+    if [ -z "$all" ]; then exit 0; fi
+    just check-windows
+    # The same two conditions e2e-wsl insists on; anywhere else check-windows has
+    # already said that the interop tests were not run.
+    if ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; then
+      case "$(pwd)" in
+        /mnt/*) just e2e-wsl ;;
+        *) echo "Skipping just e2e-wsl: the checkout is not on a Windows drive (/mnt/c/...)" >&2 ;;
+      esac
+    fi
+
+# Windows tests only run on Windows. This is the rest: what a macOS or Linux host
+# can find out about the Windows build before windows-tests.yml does.
+# Build, vet, lint and link every test binary for Windows, without running any of them
+check-windows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="$(go env GOPATH)/bin:$PATH"
+    if ! command -v golangci-lint >/dev/null 2>&1; then
+        echo "Installing golangci-lint..."
+        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    fi
+    export CGO_ENABLED=0
+    for goarch in amd64 arm64; do
+      echo "windows/${goarch}: build..."
+      GOOS=windows GOARCH="$goarch" go build ./...
+      echo "windows/${goarch}: vet..."
+      GOOS=windows GOARCH="$goarch" go vet ./...
+      # -c links each test binary and runs none; /dev/null is the one output
+      # go test accepts for several packages that share a name.
+      echo "windows/${goarch}: link test binaries..."
+      GOOS=windows GOARCH="$goarch" go test -c -o /dev/null ./... | { grep -v 'no test files' || true; }
+    done
+    echo "windows/amd64: lint..."
+    GOOS=windows GOARCH=amd64 golangci-lint run ./...
+    # The WSL job runs this binary inside the distro, whatever the host that built it.
+    echo "linux/amd64: link the e2e test binary the WSL job runs..."
+    GOOS=linux GOARCH=amd64 go test -c -o /dev/null ./test/e2e
+    echo
+    echo "Windows code builds, vets, lints and links."
+    if [ "$(go env GOHOSTOS)" != "windows" ]; then
+      echo "Not run, because this host is not Windows:"
+      echo "  - the Windows tests themselves, unit and e2e (CI: windows / test-windows)"
+      echo "  - the WSL interop e2e tests (CI: windows / test-wsl; on Windows: just e2e-wsl)"
+      echo "  - either of those jobs under act, which runs Linux containers only"
+    fi
 
 # Run tests with coverage report (saved to benchmarks/), output formatted by gotestdox
 test-cover:
