@@ -26,6 +26,7 @@ import (
 
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/tray"
+	"github.com/ollykeran/sshush/internal/vaultops"
 	"golang.org/x/sys/windows"
 )
 
@@ -47,7 +48,7 @@ func main() {
 	// A Store install starts at sign-in through its StartupTask, which passes
 	// no arguments, so it asks Windows instead of reading -background.
 	openWindow := !*background && !tray.StartedAtSignIn()
-	tray.Run(tray.EnvFor(cfg, socketPath), tray.Options{OpenWindow: openWindow, KeyPaths: cfg.KeyPaths})
+	tray.Run(vaultops.EnvFromConfig(cfg, socketPath), tray.Options{OpenWindow: openWindow, KeyPaths: cfg.KeyPaths})
 }
 
 // fatal reports in a message box: a GUI program has no console to print to.
