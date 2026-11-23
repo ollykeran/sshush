@@ -62,6 +62,8 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 **Config file:** `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml`, or override with `-c` / `SSHUSH_CONFIG`. Reference: [Config](docs/config.md).
 
+**Clipboard:** copying uses `wl-copy` (package `wl-clipboard`) under Wayland or `xclip` under X11 on Linux, `pbcopy` on macOS and the clipboard API on Windows. Set `SSHUSH_COPY_CMD` to use another command that reads the text on stdin, such as `xsel --clipboard --input` or `tmux load-buffer -`. See [Setup: Clipboard](docs/setup.md#clipboard).
+
 **Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before upgrading.
 
 ## Installation
@@ -78,6 +80,8 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 | **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
 | **Windows** | unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md#installing). A Microsoft Store package is coming soon. |
+
+On Linux the packages suggest, but do not install, `wl-clipboard` and `xclip` for copying keys to the clipboard; install the one your session uses, or set `SSHUSH_COPY_CMD` (see [Setup: Clipboard](docs/setup.md#clipboard)).
 
 ### From source
 
@@ -96,7 +100,7 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 
 ## Docs
 
-- [Setup](docs/setup.md) – shell, eval, config path
+- [Setup](docs/setup.md) – shell, eval, config path, clipboard
 - [Windows](docs/windows.md) – Store and zip installs, the tray, named pipe, PowerShell, sharing one agent with WSL, what is not supported yet
 - [Config](docs/config.md) – options, reload, flat TOML migration
 - [Vault](docs/vault.md) – optional vault

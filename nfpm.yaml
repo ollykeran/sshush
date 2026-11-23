@@ -9,3 +9,10 @@ contents:
     dst: /usr/bin/sshush
   - src: build/linux-amd64/sshushd
     dst: /usr/bin/sshushd
+# Copying a public key or a recovery phrase runs wl-copy (Wayland) or xclip
+# (X11). Suggested, not required: a headless host has no clipboard to copy to,
+# and SSHUSH_COPY_CMD can name another tool. nfpm writes these as Suggests for
+# deb and rpm and as optdepends for Arch.
+suggests:
+  - wl-clipboard
+  - xclip

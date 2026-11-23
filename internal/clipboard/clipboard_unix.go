@@ -5,27 +5,31 @@ package clipboard
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 )
 
 func copyText(text string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
+	argv, err := defaultCommand(runtime.GOOS)
+	if err != nil {
+		return err
+	}
+	return runCommand(argv, text)
+}
+
+// defaultCommand is the command that copies on goos when $SSHUSH_COPY_CMD does
+// not say otherwise.
+func defaultCommand(goos string) ([]string, error) {
+	switch goos {
 	case "linux":
 		if os.Getenv("WAYLAND_DISPLAY") != "" {
-			cmd = exec.Command("wl-copy")
-		} else {
-			cmd = exec.Command("xclip", "-selection", "clipboard")
+			return []string{"wl-copy"}, nil
 		}
+		return []string{"xclip", "-selection", "clipboard"}, nil
 	case "darwin":
-		cmd = exec.Command("pbcopy")
+		return []string{"pbcopy"}, nil
 	default:
-		return fmt.Errorf("clipboard not supported on %s", runtime.GOOS)
+		return nil, fmt.Errorf("clipboard not supported on %s (set %s to a command that copies its input)", goos, CopyCmdEnv)
 	}
-	cmd.Stdin = strings.NewReader(text)
-	return cmd.Run()
 }
 
 func copySecret(text string) error {
