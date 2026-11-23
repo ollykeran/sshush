@@ -117,6 +117,13 @@ type AgentScreen struct {
 	foundSelected int
 	loadedFPs     map[string]bool
 
+	// Scroll state, kept by syncScroll on each render: the first row drawn and
+	// how many rows fit, for the Loaded Keys table and the Found Keys list.
+	loadedOffset int
+	loadedShown  int
+	foundOffset  int
+	foundShown   int
+
 	fileSelector *FileSelector
 
 	passInput  textinput.Model
@@ -541,8 +548,9 @@ func (s *AgentScreen) handleMouse(x, y int, release bool) (tea.Model, tea.Cmd) {
 		}
 		return s, s.rescanKeys()
 	}
+	// Only rows on screen are clickable; zones of rows scrolled away are stale.
 	rows := s.keyTable.Table.Rows()
-	for i := range rows {
+	for i := s.loadedOffset; i < min(s.loadedOffset+s.loadedShown, len(rows)); i++ {
 		if inZoneBounds(fmt.Sprintf("%skey-%d", s.zonePrefix, i), x, y) {
 			s.focus = agentFocusTable
 			s.keyTable.Table.SetCursor(i)
@@ -550,14 +558,8 @@ func (s *AgentScreen) handleMouse(x, y int, release bool) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 	}
-	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
-		s.focus = agentFocusTable
-		s.keyTable.Table.SetCursor(row)
-		s.syncTableSelection()
-		return s, nil
-	}
 	visible := s.visibleFoundKeys()
-	for i := range visible {
+	for i := s.foundOffset; i < min(s.foundOffset+s.foundShown, len(visible)); i++ {
 		if inZoneBounds(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), x, y) {
 			s.focus = agentFocusFound
 			s.foundSelected = i
@@ -755,15 +757,49 @@ func (s *AgentScreen) loadedKeysTableHeight() int {
 	return h
 }
 
+// foundKeysMaxIndex is the last selectable Found Keys row. Every found key can
+// be selected; rows past the bottom of the list scroll into view.
 func (s *AgentScreen) foundKeysMaxIndex(visible []utils.KeyPath) int {
-	if len(visible) == 0 {
-		return 0
+	return max(len(visible)-1, 0)
+}
+
+// loadedKeysRows is how many key rows the Loaded Keys table shows at once: its
+// height less the header row and rule.
+func (s *AgentScreen) loadedKeysRows() int {
+	return max(s.loadedKeysTableHeight()-2, 1)
+}
+
+// foundKeysRows is how many Found Keys rows to draw for total found keys: all
+// of them if they fit under Loaded Keys, otherwise what fits (keeping a line
+// for the scroll hint), and never fewer than foundKeysMinVisible.
+func (s *AgentScreen) foundKeysRows(total int) int {
+	h := s.height
+	if h < 1 {
+		h = defaultViewHeight
 	}
-	maxIdx := len(visible) - 1
-	if maxIdx >= foundKeysMaxVisible {
-		maxIdx = foundKeysMaxVisible - 1
+	// Loaded Keys: title, border top and bottom, table; plus its scroll hint.
+	used := 1 + 2 + s.loadedKeysTableHeight()
+	if len(s.keyTable.Table.Rows()) > s.loadedKeysRows() {
+		used++
 	}
-	return maxIdx
+	// The blank line between sections, then the Found Keys title and border.
+	avail := h - used - 1 - 3
+	if total <= max(avail, foundKeysMinVisible) {
+		return total
+	}
+	return min(max(avail-1, foundKeysMinVisible), total)
+}
+
+// syncScroll keeps the selected row of each list inside its scroll window. It
+// runs on every render, after keys, focus or the window size have changed.
+func (s *AgentScreen) syncScroll() {
+	rows := len(s.keyTable.Table.Rows())
+	s.loadedShown = min(s.loadedKeysRows(), rows)
+	s.loadedOffset = scrollOffset(s.loadedOffset, s.keyTable.Table.Cursor(), rows, s.loadedShown)
+
+	total := len(s.visibleFoundKeys())
+	s.foundShown = s.foundKeysRows(total)
+	s.foundOffset = scrollOffset(s.foundOffset, s.foundSelected, total, s.foundShown)
 }
 
 func sectionBoxWidth(width int) int {
@@ -825,6 +861,8 @@ func (s *AgentScreen) View() tea.View {
 	if w < 1 {
 		w = defaultViewWidth
 	}
+
+	s.syncScroll()
 
 	var sections []string
 	sections = append(sections, s.renderLoadedKeys(w, active))
@@ -900,7 +938,11 @@ func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
 		border = st.FocusedBorderStyle
 	}
 
-	content := border.Render(s.keyTable.AgentViewMarked(s.zonePrefix, focused, st))
+	table := s.keyTable.AgentViewWindow(s.zonePrefix, focused, st, s.loadedOffset, s.loadedShown)
+	if rows := len(s.keyTable.Table.Rows()); rows > s.loadedShown {
+		table += "\n" + st.DimStyle.Render(" "+scrollHint(s.loadedOffset, s.loadedShown, rows))
+	}
+	content := border.Render(table)
 	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top, title+"\n"+content)
 }
 
@@ -908,11 +950,8 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 	st := s.sk.Styles()
 	title := st.SectionTitleStyle.Render(" Found Keys") + " " + s.renderRescanControl()
 	var lines []string
-	maxShow := foundKeysMaxVisible
-	if len(visible) < maxShow {
-		maxShow = len(visible)
-	}
-	for i := 0; i < maxShow; i++ {
+	end := min(s.foundOffset+s.foundShown, len(visible))
+	for i := s.foundOffset; i < end; i++ {
 		linePrefix := "  "
 		selected := active && s.focus == agentFocusFound && i == s.foundSelected
 		if selected {
@@ -937,8 +976,8 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 		rendered := zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), line)
 		lines = append(lines, rendered)
 	}
-	if len(visible) > maxShow {
-		lines = append(lines, st.DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
+	if len(visible) > s.foundShown {
+		lines = append(lines, st.DimStyle.Render(" "+scrollHint(s.foundOffset, s.foundShown, len(visible))))
 	}
 	content := strings.Join(lines, "\n")
 	boxW := sectionBoxWidth(width)

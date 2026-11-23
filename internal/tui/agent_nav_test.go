@@ -337,7 +337,7 @@ func TestAgentMouseSelectsTableRow(t *testing.T) {
 	}
 }
 
-func TestAgentFoundKeysSelectionClampedToVisible(t *testing.T) {
+func TestAgentFoundKeysSelectionReachesEveryKey(t *testing.T) {
 	_, agent := newAgentTestSkeleton()
 	agent.focus = agentFocusFound
 	agent.foundKeys = make([]utils.KeyPath, 10)
@@ -345,10 +345,13 @@ func TestAgentFoundKeysSelectionClampedToVisible(t *testing.T) {
 		agent.foundKeys[i] = utils.KeyPath{Path: fmt.Sprintf("/tmp/key%d", i)}
 	}
 	agent.loadedFPs = map[string]bool{}
-	agent.foundSelected = foundKeysMaxVisible - 1
+	agent.foundSelected = foundKeysMinVisible - 1
 
-	_, _ = agent.Update(tea.KeyPressMsg{Code: 'j'})
-	if agent.foundSelected != foundKeysMaxVisible-1 {
-		t.Fatalf("foundSelected=%d, want clamp at %d", agent.foundSelected, foundKeysMaxVisible-1)
+	// Past the first screenful, down keeps moving until the last key, then stops.
+	for range 10 {
+		_, _ = agent.Update(tea.KeyPressMsg{Code: 'j'})
+	}
+	if agent.foundSelected != 9 {
+		t.Fatalf("foundSelected=%d, want 9 (the last found key)", agent.foundSelected)
 	}
 }
