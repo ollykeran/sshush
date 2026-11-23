@@ -202,8 +202,15 @@ tools() {
 }
 
 # find_tool prints the SDK program name.exe to use: the one in $env_var, one
-# on PATH, the newest in an installed Windows SDK, or the build tools that
-# tools fetched.
+# on PATH, the build tools that tools fetched, or the newest in an installed
+# Windows SDK.
+#
+# The build tools come first: they are the version this script is tested
+# with, and always complete. An installed SDK may not be. Installing only
+# some of its features (the App Certification Kit, say) gives a bin folder
+# with signtool and appxsip.dll but no appxpackaging.dll, and signtool there
+# fails on an .msix with "This file format cannot be signed because it is not
+# recognized". So an SDK folder without appxpackaging.dll is skipped.
 find_tool() {
   local name="$1" env_var="$2"
   if [ -n "${!env_var:-}" ]; then
@@ -217,24 +224,24 @@ find_tool() {
       return
     fi
   done
-  found=""
   local root candidate
-  for root in "/c/Program Files (x86)/Windows Kits/10/bin" "/mnt/c/Program Files (x86)/Windows Kits/10/bin"; do
-    for candidate in "$root"/10.*/x64/"$name.exe"; do
-      [ -f "$candidate" ] && found="$candidate"
-    done
-  done
-  # The glob sorts the SDK versions, so the last one found is the newest.
-  if [ -n "$found" ]; then
-    echo "$found"
-    return
-  fi
   if command -v powershell.exe >/dev/null 2>&1; then
     root="$(windows_dir "sshush-msix-tools/$buildtools_version")"
     if [ -f "$root/.verified" ] && [ -f "$root/$name.exe" ]; then
       echo "$root/$name.exe"
       return
     fi
+  fi
+  found=""
+  for root in "/c/Program Files (x86)/Windows Kits/10/bin" "/mnt/c/Program Files (x86)/Windows Kits/10/bin"; do
+    for candidate in "$root"/10.*/x64/"$name.exe"; do
+      [ -f "$candidate" ] && [ -f "$(dirname "$candidate")/appxpackaging.dll" ] && found="$candidate"
+    done
+  done
+  # The glob sorts the SDK versions, so the last one found is the newest.
+  if [ -n "$found" ]; then
+    echo "$found"
+    return
   fi
   return 1
 }
