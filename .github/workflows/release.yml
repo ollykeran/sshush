@@ -73,7 +73,7 @@ jobs:
             build/sshush-*.deb
             build/sshush-*.rpm
             build/sshush-*.pkg.tar.zst
-            build/*.sha256
+            build/checksums.txt
 
   # The MSIX for the Microsoft Store, packed from the release job's Windows
   # binaries. It is unsigned (the Store signs what it publishes), so it is kept

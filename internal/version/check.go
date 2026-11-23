@@ -99,8 +99,8 @@ var SumDBLookupURL = "https://sum.golang.org/lookup/"
 // VerifyBinaryChecksum checks the running binary against what was published for
 // its version.
 //
-// A release build is compared byte for byte with the SHA-256 on the GitHub
-// release. A go install build cannot be: the go command compiled it locally, with
+// A release build is compared byte for byte with its SHA-256 in the GitHub
+// release's checksums.txt. A go install build cannot be: the go command compiled it locally, with
 // different settings, so its bytes never match. Instead the module source hash Go
 // embedded in it is compared with the Go checksum database, which the go command
 // checks downloaded modules against by default. That proves the binary was built
@@ -122,25 +122,49 @@ func VerifyBinaryChecksum() (ChecksumResult, error) {
 	}
 	platformKey := platformKeyFor(binPath)
 
-	url := fmt.Sprintf("https://github.com/ollykeran/sshush/releases/download/v%s/%s.sha256", Version, platformKey)
+	url := fmt.Sprintf(ReleaseChecksumsURL, Version)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return ChecksumResult{}, fmt.Errorf("version: fetch checksum: %w", err)
+		return ChecksumResult{}, fmt.Errorf("version: fetch checksums: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return ChecksumResult{}, fmt.Errorf("version: no checksum available for v%s/%s", Version, platformKey)
+		return ChecksumResult{}, fmt.Errorf("version: no checksums published for v%s", Version)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return ChecksumResult{}, fmt.Errorf("version: fetch checksum: HTTP %d", resp.StatusCode)
+		return ChecksumResult{}, fmt.Errorf("version: fetch checksums: HTTP %d", resp.StatusCode)
 	}
 
-	if _, err := verifyChecksum(binPath, resp.Body); err != nil {
+	hash, err := checksumFor(resp.Body, platformKey)
+	if err != nil {
+		return ChecksumResult{}, fmt.Errorf("version: %w for v%s", err, Version)
+	}
+	if _, err := verifyChecksum(binPath, strings.NewReader(hash)); err != nil {
 		return ChecksumResult{}, err
 	}
 	return ChecksumResult{Verified: true, Message: "binary checksum verified"}, nil
+}
+
+// ReleaseChecksumsURL is where a release's checksums.txt is published; the
+// version, without its leading v, fills the %s.
+var ReleaseChecksumsURL = "https://github.com/ollykeran/sshush/releases/download/v%s/checksums.txt"
+
+// checksumFor finds name's hash in a checksums.txt, written by sha256sum: one
+// "hash  name" line per file, the name prefixed with * in binary mode.
+func checksumFor(r io.Reader, name string) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(r, 1<<16))
+	if err != nil {
+		return "", fmt.Errorf("read checksums: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
+			return f[0], nil
+		}
+	}
+	return "", fmt.Errorf("no checksum published for %s", name)
 }
 
 // verifyModuleSum looks m up in the Go checksum database and compares the h1:
@@ -199,7 +223,7 @@ func escapeModulePath(path string) string {
 	return b.String()
 }
 
-// platformKeyFor names the release checksum for the binary at binPath:
+// platformKeyFor names the binary at binPath in a release's checksums.txt:
 // "sshush-linux-amd64", and likewise "sshush-windows-amd64" for sshush.exe.
 func platformKeyFor(binPath string) string {
 	name := strings.TrimSuffix(filepath.Base(binPath), ".exe")

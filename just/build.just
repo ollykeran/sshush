@@ -241,26 +241,35 @@ check-artifacts ver="dev":
     echo "$pass passed, $fail failed"
     [ "$fail" -eq 0 ]
 
-# Generate SHA256 checksum files for all built binaries
+# Write checksums.txt: the SHA-256 of every built binary and release package
 checksums:
     #!/usr/bin/env bash
     set -euo pipefail
+    shopt -s nullglob
     dir="{{ build_dir }}"
-    count=0
-    for plat in linux-amd64 darwin-arm64 darwin-amd64 windows-amd64; do
-        # sshush-tray is built for Windows only; the -f check skips it elsewhere.
-        for bin in sshush sshushd sshush-tray; do
-            f="$dir/$plat/$bin"
-            # The checksum is named without .exe; see platformKeyFor in internal/version.
-            if [ "$plat" = "windows-amd64" ]; then f="$f.exe"; fi
-            if [ -f "$f" ]; then
-                sha=$(sha256sum "$f" | cut -d' ' -f1)
-                echo "$sha" > "$dir/${bin}-${plat}.sha256"
-                count=$((count + 1))
-            fi
+    out="$dir/checksums.txt"
+    {
+        for plat in linux-amd64 darwin-arm64 darwin-amd64 windows-amd64; do
+            # sshush-tray is built for Windows only; the -f check skips it elsewhere.
+            for bin in sshush sshushd sshush-tray; do
+                f="$dir/$plat/$bin"
+                # Listed as bin-os-arch, without .exe: what `sshush selftest`
+                # looks up (see platformKeyFor in internal/version).
+                if [ "$plat" = "windows-amd64" ]; then f="$f.exe"; fi
+                if [ -f "$f" ]; then
+                    printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$bin-$plat"
+                fi
+            done
         done
-    done
-    echo "Generated $count .sha256 files in $dir"
+        # The packages attached to the release, so `sha256sum -c --ignore-missing
+        # checksums.txt` checks whichever were downloaded.
+        cd "$dir"
+        for f in sshush-*.tar.gz sshush-*.zip sshush-*.deb sshush-*.rpm sshush-*.pkg.tar.zst; do
+            sha256sum "$f"
+        done
+    } > "$out.tmp"
+    mv "$out.tmp" "$out"
+    echo "Wrote $(wc -l < "$out") checksums to $out"
 
 # Remove all build artifacts
 clean:

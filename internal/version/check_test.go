@@ -344,3 +344,90 @@ func mustFileSHA256(t *testing.T, path string) string {
 	}
 	return h
 }
+
+func TestChecksumFor(t *testing.T) {
+	t.Parallel()
+	sums := "aaaa  sshush-0.3.0-linux-amd64.tar.gz\n" +
+		"bbbb  sshush-linux-amd64\n" +
+		"cccc *sshush-tray-windows-amd64\n" +
+		"dddd  sshushd-linux-amd64\n"
+	tests := []struct{ name, want string }{
+		{"sshush-linux-amd64", "bbbb"},
+		{"sshushd-linux-amd64", "dddd"},
+		{"sshush-tray-windows-amd64", "cccc"},
+	}
+	for _, tt := range tests {
+		got, err := checksumFor(strings.NewReader(sums), tt.name)
+		if err != nil {
+			t.Errorf("checksumFor(%q): %v", tt.name, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("checksumFor(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+	if _, err := checksumFor(strings.NewReader(sums), "sshush-darwin-arm64"); err == nil {
+		t.Error("expected an error for a name not in checksums.txt")
+	}
+}
+
+// withReleaseChecksums points the release's checksums.txt at a test server
+// answering with status and body, and returns the path of the last request.
+func withReleaseChecksums(t *testing.T, status int, body string) *string {
+	t.Helper()
+	var requested string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = r.URL.Path
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	orig := ReleaseChecksumsURL
+	ReleaseChecksumsURL = server.URL + "/v%s/checksums.txt"
+	t.Cleanup(func() { ReleaseChecksumsURL = orig })
+	return &requested
+}
+
+func TestVerifyBinaryChecksum_releaseBuild(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := platformKeyFor(self)
+	sums := "0000  sshush-1.2.3-linux-amd64.tar.gz\n" + mustFileSHA256(t, self) + "  " + key + "\n"
+
+	withBuild(t, "1.2.3", false, debug.Module{})
+	requested := withReleaseChecksums(t, http.StatusOK, sums)
+	result, err := VerifyBinaryChecksum()
+	if err != nil {
+		t.Fatalf("VerifyBinaryChecksum: %v", err)
+	}
+	if !result.Verified {
+		t.Errorf("expected Verified, got %+v", result)
+	}
+	if *requested != "/v1.2.3/checksums.txt" {
+		t.Errorf("requested %q", *requested)
+	}
+}
+
+func TestVerifyBinaryChecksum_releaseBuildMismatch(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := strings.Repeat("0", 64) + "  " + platformKeyFor(self) + "\n"
+
+	withBuild(t, "1.2.3", false, debug.Module{})
+	withReleaseChecksums(t, http.StatusOK, sums)
+	if _, err := VerifyBinaryChecksum(); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("expected a checksum mismatch, got %v", err)
+	}
+}
+
+func TestVerifyBinaryChecksum_releaseBuildNotListed(t *testing.T) {
+	withBuild(t, "1.2.3", false, debug.Module{})
+	withReleaseChecksums(t, http.StatusOK, "0000  something-else\n")
+	if _, err := VerifyBinaryChecksum(); err == nil || !strings.Contains(err.Error(), "no checksum published") {
+		t.Fatalf("expected no checksum published, got %v", err)
+	}
+}
