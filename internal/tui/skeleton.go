@@ -321,6 +321,14 @@ func (s *Skeleton) pageHasModal() bool {
 	return false
 }
 
+// pageModalTakesEsc reports whether the active page's open modal handles esc
+// and q itself (a confirm popup answers no), rather than the skeleton moving
+// focus to the tab bar as it does for the file picker.
+func (s *Skeleton) pageModalTakesEsc() bool {
+	m, ok := s.activeModel().(interface{ ModalTakesEsc() bool })
+	return ok && m.ModalTakesEsc()
+}
+
 func (s *Skeleton) pageHasActiveTextInput() bool {
 	if p, ok := s.activeModel().(Page); ok {
 		return p.HasActiveTextInput()
@@ -645,7 +653,7 @@ func (s *Skeleton) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if s.pageHasModal() {
-			if (key == "q" || key == "esc") && s.navFocus == navFocusScreen {
+			if (key == "q" || key == "esc") && s.navFocus == navFocusScreen && !s.pageModalTakesEsc() {
 				s.navFocus = navFocusTabs
 				return s, nil
 			}
