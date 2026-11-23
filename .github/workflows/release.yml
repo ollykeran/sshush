@@ -115,6 +115,27 @@ jobs:
           path: build/sshush-*-windows-amd64.msix
           if-no-files-found: error
 
+      # The certification Partner Center runs after a submission, run here
+      # first so a failing package stops before the store job asks for
+      # approval. Only when the store job will run, under the same condition:
+      # nothing else uses the result. It tests a test-signed copy; the
+      # artifact above stays unsigned.
+      - name: Certify the MSIX (Windows App Certification Kit)
+        if: vars.MSSTORE_APP_ID != ''
+        env:
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+        run: |
+          msix=(build/sshush-*-windows-amd64.msix)
+          bash scripts/msix.sh certify "${msix[0]}" build/wack-report.xml
+
+      - name: Keep the certification report
+        if: always() && vars.MSSTORE_APP_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: wack-report
+          path: build/wack-report.xml
+          if-no-files-found: ignore
+
   # Sends the package to the Microsoft Store: a suffixed tag (v1.2.3-rc.1) to
   # the package flight, a plain tag to everyone. It runs only once
   # MSSTORE_APP_ID is set, and in the store environment, whose required

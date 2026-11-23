@@ -9,6 +9,7 @@
 #   scripts/msix.sh sign     <msix_file>
 #   scripts/msix.sh trust
 #   scripts/msix.sh install  <msix_file>
+#   scripts/msix.sh certify  <msix_file> <report_xml>
 #
 # version prints the MSIX version a release version becomes (see msix_version).
 # stage fills out_dir with the binaries, the logos and an AppxManifest.xml.
@@ -20,7 +21,8 @@
 # fetches makeappx and signtool (no Windows SDK needed). sign signs the
 # package with a local self-signed certificate for its Publisher, trust lets
 # this machine install packages signed by it (it asks for an administrator),
-# and install installs it. Everything but stage and pack on Linux runs on
+# and install installs it. certify runs the Windows App Certification Kit on
+# the package, as the Store does after a submission. Everything but stage and pack on Linux runs on
 # Windows (Git Bash) or under WSL.
 #
 # The package identity comes from the environment, so a Store build can use
@@ -202,8 +204,15 @@ tools() {
 }
 
 # find_tool prints the SDK program name.exe to use: the one in $env_var, one
-# on PATH, the newest in an installed Windows SDK, or the build tools that
-# tools fetched.
+# on PATH, the build tools that tools fetched, or the newest in an installed
+# Windows SDK.
+#
+# The build tools come first: they are the version this script is tested
+# with, and always complete. An installed SDK may not be. Installing only
+# some of its features (the App Certification Kit, say) gives a bin folder
+# with signtool and appxsip.dll but no appxpackaging.dll, and signtool there
+# fails on an .msix with "This file format cannot be signed because it is not
+# recognized". So an SDK folder without appxpackaging.dll is skipped.
 find_tool() {
   local name="$1" env_var="$2"
   if [ -n "${!env_var:-}" ]; then
@@ -217,24 +226,24 @@ find_tool() {
       return
     fi
   done
-  found=""
   local root candidate
-  for root in "/c/Program Files (x86)/Windows Kits/10/bin" "/mnt/c/Program Files (x86)/Windows Kits/10/bin"; do
-    for candidate in "$root"/10.*/x64/"$name.exe"; do
-      [ -f "$candidate" ] && found="$candidate"
-    done
-  done
-  # The glob sorts the SDK versions, so the last one found is the newest.
-  if [ -n "$found" ]; then
-    echo "$found"
-    return
-  fi
   if command -v powershell.exe >/dev/null 2>&1; then
     root="$(windows_dir "sshush-msix-tools/$buildtools_version")"
     if [ -f "$root/.verified" ] && [ -f "$root/$name.exe" ]; then
       echo "$root/$name.exe"
       return
     fi
+  fi
+  found=""
+  for root in "/c/Program Files (x86)/Windows Kits/10/bin" "/mnt/c/Program Files (x86)/Windows Kits/10/bin"; do
+    for candidate in "$root"/10.*/x64/"$name.exe"; do
+      [ -f "$candidate" ] && [ -f "$(dirname "$candidate")/appxpackaging.dll" ] && found="$candidate"
+    done
+  done
+  # The glob sorts the SDK versions, so the last one found is the newest.
+  if [ -n "$found" ]; then
+    echo "$found"
+    return
   fi
   return 1
 }
@@ -335,6 +344,112 @@ install() {
   echo "  powershell.exe -Command \"Get-AppxPackage $name | Remove-AppxPackage\""
 }
 
+# certify runs the Windows App Certification Kit on msix, as Partner Center
+# does after a submission, and writes its report to report. It fails unless
+# the report's overall result is PASS, listing the tests that did not pass.
+#
+# The kit installs the package to test it, so it tests a copy signed with the
+# test certificate (see sign), which this machine must trust (see trust; it is
+# done here when it is not). msix itself is left as it was. The kit needs an
+# administrator: Windows asks, unless this already is one (a CI runner).
+certify() {
+  local msix="$1" report="$2"
+  local appcert="${APPCERT:-}" candidate
+  if [ -z "$appcert" ]; then
+    for candidate in "/c/Program Files (x86)/Windows Kits/10/App Certification Kit/appcert.exe" \
+                     "/mnt/c/Program Files (x86)/Windows Kits/10/App Certification Kit/appcert.exe"; do
+      [ -f "$candidate" ] && appcert="$candidate"
+    done
+  fi
+  [ -n "$appcert" ] ||
+    die "appcert.exe not found: install the Windows SDK with its App Certification Kit, or set APPCERT"
+  local work
+  work="$(windows_dir "sshush-msix-certify")"
+  rm -rf "$work"
+  mkdir -p "$work"
+  cp "$msix" "$work/package.msix"
+  sign "$work/package.msix"
+  local thumbprint
+  thumbprint="$(test_certificate | tail -1)"
+  if [ "$(ps "Test-Path Cert:\\LocalMachine\\TrustedPeople\\$thumbprint")" != "True" ]; then
+    trust
+  fi
+  # An elevated process's output does not come back here, so it keeps a
+  # transcript, printed afterwards, and leaves the kit's exit code in a file.
+  local w_work
+  w_work="$(ps_quote "$(windows_path "$work")")"
+  cat > "$work/run.ps1" <<EOF
+\$kit = '$(ps_quote "$(windows_path "$appcert")")'
+Start-Transcript -Path '$w_work\\run.log' | Out-Null
+& \$kit reset
+& \$kit test -appxpackagepath '$w_work\\package.msix' -reportoutputpath '$w_work\\report.xml'
+Set-Content -Path '$w_work\\exit' -Value \$LASTEXITCODE
+Stop-Transcript | Out-Null
+EOF
+  ps "Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$w_work\\run.ps1'"
+  [ -f "$work/run.log" ] && tr -d '\r' < "$work/run.log"
+  [ -f "$work/report.xml" ] || die "the App Certification Kit wrote no report (exit code $(cat "$work/exit" 2>/dev/null || echo unknown))"
+  mkdir -p "$(dirname "$report")"
+  cp "$work/report.xml" "$report"
+  # The report as lines: the overall result, the kit's version, then one
+  # line per test of result, optional, name and messages, tab-separated.
+  local result
+  result="$(ps "\$r = [xml](Get-Content -Raw -Path '$w_work\\report.xml')
+      \$r.REPORT.OVERALL_RESULT
+      \$r.REPORT.VERSION
+      \$r.SelectNodes('//TEST') | ForEach-Object {
+        \$m = (\$_.SelectNodes('.//MESSAGE') | ForEach-Object { \$_.TEXT }) -join ' / '
+        (\$_.RESULT.'#cdata-section', \$_.OPTIONAL, \$_.NAME, (\$m -replace '\\s+', ' ')) -join [char]9
+      }")"
+  rm -rf "$work"
+  certify_report "$result" "$report"
+}
+
+# certify_report reports what certify's report says: every test that did not
+# pass, on stdout and, in GitHub Actions, as an annotation (an error for a
+# required test, a warning for an optional one) and in the job summary, so
+# they show on the run's page, where the store job's reviewer approves it.
+# It fails unless the overall result is PASS. A PASS can still have optional
+# tests that did not pass: they are warnings, which do not fail it.
+certify_report() {
+  local result="$1" report="$2"
+  local overall version tests
+  overall="$(sed -n 1p <<<"$result")"
+  version="$(sed -n 2p <<<"$result")"
+  tests="$(sed -n '3,$p' <<<"$result")"
+  local res opt name msgs label level flagged=0 rows=""
+  while IFS=$'\t' read -r res opt name msgs; do
+    [ -n "$name" ] || continue
+    label="$name"
+    [ "$opt" = "TRUE" ] && label="$name (optional)"
+    rows+="| $res | $label | ${msgs//|/\\|} |"$'\n'
+    [ "$res" = "PASS" ] && continue
+    flagged=$((flagged + 1))
+    echo "  $res: $label"
+    [ -z "$msgs" ] || echo "      $msgs"
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+      level=error
+      [ "$opt" = "TRUE" ] && level=warning
+      echo "::$level title=App Certification Kit: $name::$res${msgs:+: $msgs}"
+    fi
+  done <<<"$tests"
+  echo "App Certification Kit $version: $overall, $flagged test(s) flagged; report in $report"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "### Windows App Certification Kit: $overall"
+      echo
+      echo "Kit $version. $flagged of $(grep -c . <<<"$tests") tests did not pass; the full report is the \`wack-report\` artifact."
+      echo
+      echo "| Result | Test | Messages |"
+      echo "|---|---|---|"
+      # The tests that did not pass first.
+      grep -v '^| PASS |' <<<"$rows" | grep . || true
+      grep '^| PASS |' <<<"$rows" || true
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+  [ "$overall" = "PASS" ] || die "the package did not pass certification"
+}
+
 register() {
   local stage_dir="$1"
   command -v powershell.exe >/dev/null 2>&1 || die "powershell.exe not found: register runs on Windows or under WSL"
@@ -375,5 +490,6 @@ case "$cmd" in
   sign)     [ $# -eq 1 ] || die "usage: sign <msix_file>"; sign "$@" ;;
   trust)    [ $# -eq 0 ] || die "usage: trust"; trust ;;
   install)  [ $# -eq 1 ] || die "usage: install <msix_file>"; install "$@" ;;
-  *) die "usage: msix.sh version|stage|pack|register|tools|sign|trust|install ..." ;;
+  certify)  [ $# -eq 2 ] || die "usage: certify <msix_file> <report_xml>"; certify "$@" ;;
+  *) die "usage: msix.sh version|stage|pack|register|tools|sign|trust|install|certify ..." ;;
 esac

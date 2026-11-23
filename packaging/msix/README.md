@@ -58,6 +58,16 @@ The `msix` job in `.github/workflows/release.yml` packs the release job's own Wi
 
 `build.yml` packs a dev build on every push, which validates the manifest against the schema.
 
+When the release will go to the Store (`MSSTORE_APP_ID` is set), the `msix` job also runs the [Windows App Certification Kit](https://learn.microsoft.com/en-us/windows/uwp/debug-test-perf/windows-app-certification-kit) on the package, the tests Partner Center runs after a submission, so a package that would fail stops there, before the `store` job asks for approval. Every test that did not pass shows on the run's page, where the approval is given: as an annotation (an error for a required test, a warning for an optional one) and in a table in the job summary. A required test failing fails the job; an optional one does not, so read the warnings before approving. The full report is kept as the `wack-report` workflow artifact. It adds about a minute to the job. `windows-latest` has the kit already, as part of its Windows SDK.
+
+To run it locally, install the Windows SDK with its App Certification Kit, build the `.msix` with the `MSIX_*` variables set, and:
+
+```sh
+bash scripts/msix.sh certify build/sshush-<version>-windows-amd64.msix build/wack-report.xml
+```
+
+It tests a copy signed with your test certificate, trusting that first if needed, and Windows asks for an administrator for the kit itself.
+
 ## Publishing to the Store
 
 ### Once
