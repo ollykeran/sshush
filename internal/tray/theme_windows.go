@@ -34,6 +34,9 @@ var (
 	procCreateSolidBrush            = gdi32.NewProc("CreateSolidBrush")
 	procSetBkColor                  = gdi32.NewProc("SetBkColor")
 	childThemeCallback              = windows.NewCallback(themeChild)
+	procSetWindowSubclass           = comctl32.NewProc("SetWindowSubclass")
+	procDefSubclassProc             = comctl32.NewProc("DefSubclassProc")
+	listViewSubclassProc            = windows.NewCallback(listViewSubclass)
 	darkWindowBrush, darkFieldBrush uintptr
 	brushesOnce                     sync.Once
 )
@@ -288,6 +291,10 @@ func themeChild(child, lParam uintptr) uintptr {
 			allowDark(header, dark)
 			setWindowTheme(header, darkOr(dark, "DarkMode_ItemsView", ""))
 		}
+		// The dark header style darkens the header but keeps its light-mode
+		// text colour; the subclass sets it. Installing it again only
+		// replaces it.
+		procSetWindowSubclass.Call(child, listViewSubclassProc, listViewSubclassID, 0)
 		bk, text := sysColor(colorWindow), sysColor(colorWindowText)
 		if dark {
 			bk, text = darkField, darkText
@@ -297,6 +304,30 @@ func themeChild(child, lParam uintptr) uintptr {
 		procSendMessageW.Call(child, lvmSetTextColor, 0, uintptr(text))
 	}
 	return 1 // keep enumerating
+}
+
+const listViewSubclassID = 1
+
+// listViewSubclass colours a list's column headings in dark mode. The header
+// sends its custom-draw notifications to the list, its parent, not to the
+// dialog, so the list is subclassed to answer them: each heading is drawn as
+// usual but with the dark theme's text colour, as Windows' own dark Win32
+// programs do. Everything else goes on to the list.
+func listViewSubclass(hwnd, msg, wParam, lParam, _, _ uintptr) uintptr {
+	if msg == wmNotify && darkNow() {
+		cd := *(**nmLVCustomDraw)(unsafe.Pointer(&lParam))
+		if cd.hdr.code == nmCustomDraw {
+			switch cd.drawStage {
+			case cddsPrePaint:
+				return cdrfNotifyItemDrw
+			case cddsItemPrePaint:
+				procSetTextColor.Call(cd.hdc, uintptr(darkText))
+				return cdrfDoDefault
+			}
+		}
+	}
+	r, _, _ := procDefSubclassProc.Call(hwnd, msg, wParam, lParam)
+	return r
 }
 
 func darkOr(dark bool, darkName, lightName string) string {
