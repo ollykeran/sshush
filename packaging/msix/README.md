@@ -72,10 +72,23 @@ The `msix` job in `.github/workflows/release.yml` packs the release job's own Wi
 
    A build without them uses `sshush.dev` / `CN=sshush-dev`, which the Store refuses. Export the same four for `just msix-local`.
 
-### Each release
+### Version numbers
+
+Every package uploaded for the app needs its own version, higher than the last for an update to reach anyone, and the Store requires the fourth part to be 0. So a pre-release cannot share its release's number, and `scripts/msix.sh` multiplies the patch number by 100 to make room:
+
+| Tag | MSIX version |
+|---|---|
+| `v0.1.1` | `0.1.199.0` |
+| `v0.1.2-rc.1` | `0.1.201.0` (the last number in the suffix, 0 to 98) |
+| `v0.1.2-rc.2` | `0.1.202.0` |
+| `v0.1.2` | `0.1.299.0` |
+
+A pre-release sorts after the previous release and before its own, so flight testers move onto the release when it is published. Windows shows this number under *Settings > Apps*; `sshush version` and `sshush selftest` use the binaries' own version. `scripts/msix.sh version <tag>` prints the mapping.
+
+### The first release, by hand
 
 1. Tag it. The release workflow's `msix` job produces `sshush-<version>-windows-amd64.msix`; download it from the run's artifacts.
-2. In Partner Center, start a submission and upload it under *Packages*. Each submission needs a higher version than the last; `scripts/msix.sh` turns `1.2.3` into `1.2.3.0` (the Store requires the fourth part to be 0) and drops a `-rc1` suffix.
+2. In Partner Center, start a submission and upload it under *Packages*.
 3. The first submission also needs these, which later ones carry over:
    - pricing: free;
    - category: Developer tools;
@@ -84,17 +97,39 @@ The `msix` job in `.github/workflows/release.yml` packs the release job's own Wi
    - a privacy policy URL, since sshush can fetch release checksums from GitHub and run an SSH server.
 4. `runFullTrust` is a restricted capability, so the submission asks why it is needed. Something like: *sshush is a desktop SSH agent. It runs a background agent process that serves a named pipe to OpenSSH, reads the user's SSH keys from their profile, and provides a command line tool through an app execution alias, none of which is possible in an app container.*
 
-Certification usually takes up to three business days. Once published, the Store updates installs itself.
+5. To publish the app without anyone finding it yet, set its visibility to private or not discoverable under *Availability*.
 
-### Submitting from CI (optional, later)
+Certification can take up to three business days the first time, when someone reads the `runFullTrust` justification; updates usually pass within hours. Once published, the Store updates installs itself.
 
-Uploading by hand needs no API key. To have the release workflow submit each version itself, Partner Center needs API access:
+### Later releases, from CI
 
-1. Associate a Microsoft Entra ID tenant with the Partner Center account (*Account settings > Tenants*), or create one there.
-2. Add an Entra application to the account with the *Manager* role (*Account settings > User management > Microsoft Entra applications*), and create a client secret for it.
-3. Store four values as repository secrets: the tenant ID, the client ID, the client secret, and the seller ID (*Account settings > Legal info > Developer settings*).
+The release workflow's `store` job submits each tag's package with the Microsoft Store Developer CLI (`msstore publish`):
 
-The workflow would then run the Microsoft Store Developer CLI (`msstore publish`) with the `.msix`. The first submission still has to be made by hand: the API updates an existing app, and it does not fill in the listing, age rating or capability justification.
+| Tag | Goes to |
+|---|---|
+| `v1.2.3-rc.1`, any tag with a suffix | the package flight `MSSTORE_FLIGHT_ID`, for its testers only |
+| `v1.2.3` | everyone |
+
+The submission is committed and certification starts at once; Partner Center emails when it passes or fails. A plain release then goes live as its *Publishing options* say, so set those to publish manually to choose when. A pending draft in Partner Center is replaced by the submission.
+
+The job does nothing until `MSSTORE_APP_ID` is set. To set it up, once the first release is published:
+
+1. **API access.** Associate a Microsoft Entra ID tenant with the Partner Center account (*Account settings > Tenants*), or create one there. Add an Entra application with the *Manager* role (*Account settings > User management > Microsoft Entra applications*) and create a client secret for it.
+2. **A flight.** Under *Engagement > Customers > Known user groups*, make a group of the testers' Microsoft accounts (those they sign in to the Store with). Under the app's *Package flights*, create a flight for that group and copy its flight ID.
+3. **The `store` environment.** In the repository's *Settings > Environments*, create `store` and add yourself as a required reviewer, so every submission waits for your approval. Put the credentials there, so only that job sees them:
+
+   ```sh
+   gh secret set AZURE_AD_TENANT_ID --env store
+   gh secret set AZURE_AD_APPLICATION_CLIENT_ID --env store
+   gh secret set AZURE_AD_APPLICATION_SECRET --env store
+   gh secret set SELLER_ID --env store    # Account settings > Legal info > Developer settings
+   gh variable set MSSTORE_FLIGHT_ID --body '<flight ID>'
+   gh variable set MSSTORE_APP_ID --body '<Store ID, such as 9N...>'
+   ```
+
+   `MSSTORE_APP_ID` goes last: it is what switches the job on.
+
+A suffixed tag still makes a draft GitHub pre-release, so a flight build is seen only by its testers. Each flight submission is certified too, and uses up its version number (see above).
 
 ## Not done yet
 

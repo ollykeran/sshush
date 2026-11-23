@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds sshush's MSIX package. Called by `just pkg msix` and `just msix-dev`.
 #
+#   scripts/msix.sh version  <version>
 #   scripts/msix.sh stage    <version> <arch> <bin_dir> <out_dir>
 #   scripts/msix.sh pack     <stage_dir> <msix_file>
 #   scripts/msix.sh register <stage_dir>
@@ -9,6 +10,7 @@
 #   scripts/msix.sh trust
 #   scripts/msix.sh install  <msix_file>
 #
+# version prints the MSIX version a release version becomes (see msix_version).
 # stage fills out_dir with the binaries, the logos and an AppxManifest.xml.
 # pack turns it into an .msix with makeappx. register installs the staged
 # directory as it is, unsigned, for trying the package on this machine: that
@@ -47,17 +49,38 @@ sdk_tool() {
 }
 
 # msix_version turns a release version into the four-part one MSIX requires.
-# The Store also requires the fourth part to be 0. A pre-release suffix
-# (1.2.0-rc1) is dropped: MSIX versions are numbers only. Anything that is not
-# a release version, such as "dev", becomes 0.0.1.0.
+# The Store requires the fourth part to be 0, and every package uploaded for
+# the app to have its own version, so a pre-release cannot share its release's
+# number. The patch number is multiplied by 100 to make room for them:
+#
+#   1.2.3-rc.1  -> 1.2.301.0   (the last number in the suffix, 0 to 98)
+#   1.2.3-rc.2  -> 1.2.302.0
+#   1.2.3       -> 1.2.399.0
+#
+# so a pre-release sorts after the previous release and before its own, and a
+# Store flight's testers move onto the release when it is published. Anything
+# that is not a release version, such as "dev", becomes 0.0.1.0.
 msix_version() {
   local v="${1#v}"
-  v="${v%%[-+]*}"
-  if [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "$v.0"
-  else
+  v="${v%%+*}"
+  local base="${v%%-*}" pre=""
+  [[ "$v" == *-* ]] && pre="${v#*-}"
+  if ! [[ "$base" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     echo "0.0.1.0"
+    return
   fi
+  local major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}" n=99
+  if [ -n "$pre" ]; then
+    n=0
+    if [[ "$pre" =~ ([0-9]+)[^0-9]*$ ]]; then n=$((10#${BASH_REMATCH[1]})); fi
+    [ "$n" -le 98 ] || die "$1: a pre-release number above 98 does not fit the MSIX version"
+  fi
+  local build=$((10#$patch * 100 + n))
+  # Each part of an MSIX version is 16 bits.
+  if [ $((10#$major)) -gt 65535 ] || [ $((10#$minor)) -gt 65535 ] || [ "$build" -gt 65535 ]; then
+    die "$1 does not fit an MSIX version (each part at most 65535, the patch at most 654)"
+  fi
+  echo "$((10#$major)).$((10#$minor)).$build.0"
 }
 
 # xml_escape makes a value safe to put in an attribute or element.
@@ -85,19 +108,20 @@ stage() {
   app_name="$(xml_escape "${MSIX_DISPLAY_NAME:-sshush}")"
   # Bash substitution rather than sed: a publisher such as
   # "CN=Jane, O=Example, C=GB" holds characters sed would need escaped.
-  local manifest
+  local msixv manifest
+  msixv="$(msix_version "$version")"
   manifest="$(<"$template")"
   manifest="${manifest//@IDENTITY_NAME@/$name}"
   manifest="${manifest//@PUBLISHER@/$publisher}"
   manifest="${manifest//@PUBLISHER_DISPLAY_NAME@/$display}"
   manifest="${manifest//@DISPLAY_NAME@/$app_name}"
-  manifest="${manifest//@VERSION@/$(msix_version "$version")}"
+  manifest="${manifest//@VERSION@/$msixv}"
   manifest="${manifest//@ARCH@/$arch}"
   if grep -qE '@[A-Z_]+@' <<<"$manifest"; then
     die "unfilled placeholder in the manifest: $(grep -oE '@[A-Z_]+@' <<<"$manifest" | head -1)"
   fi
   printf '%s\n' "$manifest" >"$out_dir/AppxManifest.xml"
-  echo "Staged $(msix_version "$version") ($arch) in $out_dir"
+  echo "Staged $msixv ($arch) in $out_dir"
 }
 
 # windows_path converts a path for a Windows program: wslpath under WSL,
@@ -343,6 +367,7 @@ register() {
 cmd="${1:-}"
 shift || true
 case "$cmd" in
+  version)  [ $# -eq 1 ] || die "usage: version <version>"; msix_version "$1" ;;
   stage)    [ $# -eq 4 ] || die "usage: stage <version> <arch> <bin_dir> <out_dir>"; stage "$@" ;;
   pack)     [ $# -eq 2 ] || die "usage: pack <stage_dir> <msix_file>"; pack "$@" ;;
   register) [ $# -eq 1 ] || die "usage: register <stage_dir>"; register "$@" ;;
@@ -350,5 +375,5 @@ case "$cmd" in
   sign)     [ $# -eq 1 ] || die "usage: sign <msix_file>"; sign "$@" ;;
   trust)    [ $# -eq 0 ] || die "usage: trust"; trust ;;
   install)  [ $# -eq 1 ] || die "usage: install <msix_file>"; install "$@" ;;
-  *) die "usage: msix.sh stage|pack|register|tools|sign|trust|install ..." ;;
+  *) die "usage: msix.sh version|stage|pack|register|tools|sign|trust|install ..." ;;
 esac

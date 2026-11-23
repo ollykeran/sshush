@@ -114,3 +114,50 @@ jobs:
           name: sshush-msix
           path: build/sshush-*-windows-amd64.msix
           if-no-files-found: error
+
+  # Sends the package to the Microsoft Store: a suffixed tag (v1.2.3-rc.1) to
+  # the package flight, a plain tag to everyone. It runs only once
+  # MSSTORE_APP_ID is set, and in the store environment, whose required
+  # reviewer approves each submission before it starts; the Partner Center
+  # credentials are that environment's secrets. See packaging/msix/README.md.
+  store:
+    needs: msix
+    if: vars.MSSTORE_APP_ID != ''
+    runs-on: windows-latest
+    environment: store
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sshush-msix
+          path: build
+
+      - uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Submit to the Store
+        env:
+          MSSTORE_APP_ID: ${{ vars.MSSTORE_APP_ID }}
+          MSSTORE_FLIGHT_ID: ${{ vars.MSSTORE_FLIGHT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          msix=(build/sshush-*-windows-amd64.msix)
+          [ -f "${msix[0]}" ] || { echo "::error::no .msix in the sshush-msix artifact"; exit 1; }
+          target=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            if [ -z "$MSSTORE_FLIGHT_ID" ]; then
+              echo "::error::$GITHUB_REF_NAME is a pre-release, which goes to a package flight, and MSSTORE_FLIGHT_ID is not set"
+              exit 1
+            fi
+            target=(--flightId "$MSSTORE_FLIGHT_ID")
+            echo "Submitting ${msix[0]} to flight $MSSTORE_FLIGHT_ID"
+          else
+            echo "Submitting ${msix[0]} to the Store listing"
+          fi
+          msstore reconfigure --tenantId "$TENANT_ID" --sellerId "$SELLER_ID" \
+            --clientId "$CLIENT_ID" --clientSecret "$CLIENT_SECRET"
+          msstore publish "${msix[0]}" --appId "$MSSTORE_APP_ID" "${target[@]}"
