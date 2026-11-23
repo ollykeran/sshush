@@ -324,7 +324,7 @@ func TestAgentMouseSelectsTableRow(t *testing.T) {
 	x := (z.StartX + z.EndX) / 2
 	clickY := z.StartY
 
-	updated, cmd := agent.handleMouse(x, clickY)
+	updated, cmd := agent.handleMouse(x, clickY, false)
 	agent = updated.(*AgentScreen)
 	if cmd != nil {
 		t.Fatal("mouse select should not trigger an action cmd")

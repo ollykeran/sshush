@@ -40,6 +40,10 @@ type Config struct {
 	AgentType  string   // From [agent].type: "vault", "keys", "external", or "windows".
 	Shell      string   // From [agent].shell: syntax of the SSH_AUTH_SOCK line ("posix", "fish", "powershell"); empty means posix.
 	VaultPath  string   // From [vault].vault_path; set whenever the file lists a path (also for CLI when AgentType is not "vault").
+	// SearchDirs is [agent].search_dirs: extra directories searched for private
+	// keys (the TUI's Found Keys and 'sshush find'), on top of ~/.ssh and the
+	// current directory. Missing or unreadable directories are skipped.
+	SearchDirs []string
 	// WindowsSSHush is [agent].windows_sshush: sshush.exe as WSL sees it, for
 	// AgentType "windows". Empty means sshush.exe on PATH.
 	WindowsSSHush string
@@ -84,6 +88,8 @@ type agentSection struct {
 	KeyPaths   []string `toml:"key_paths"`
 	Type       string   `toml:"type"`
 	Shell      string   `toml:"shell,omitempty"`
+	// SearchDirs lists extra directories to look for private keys in.
+	SearchDirs []string `toml:"search_dirs,omitempty"`
 	// WindowsSSHush is only meaningful for type = "windows".
 	WindowsSSHush string `toml:"windows_sshush,omitempty"`
 }
@@ -118,6 +124,7 @@ func toDocument(cfg Config) configDocument {
 		KeyPaths:   cfg.KeyPaths,
 		Type:       cfg.AgentType,
 		Shell:      cfg.Shell,
+		SearchDirs: cfg.SearchDirs,
 
 		WindowsSSHush: cfg.WindowsSSHush,
 	}
@@ -209,8 +216,25 @@ func LoadConfig(path string) (Config, error) {
 	for i, p := range cfg.KeyPaths {
 		cfg.KeyPaths[i] = utils.ExpandHomeDirectory(p)
 	}
+	cfg.SearchDirs = expandSearchDirs(cfg.SearchDirs)
 
 	return cfg, nil
+}
+
+// expandSearchDirs expands ~ in each [agent].search_dirs entry and drops blank
+// ones. Directories are not checked here: one that is missing now may exist by
+// the time keys are searched for, and discovery skips any it cannot read.
+func expandSearchDirs(dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d = utils.ExpandHomeDirectory(d); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // VaultPathForAgent returns the vault file path when the agent should use the vault backend; otherwise empty.
@@ -284,6 +308,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		KeyPaths:             doc.Agent.KeyPaths,
 		AgentType:            doc.Agent.Type,
 		Shell:                doc.Agent.Shell,
+		SearchDirs:           doc.Agent.SearchDirs,
 		VaultPath:            vaultPath,
 		WindowsSSHush:        doc.Agent.WindowsSSHush,
 		Theme:                doc.Theme,

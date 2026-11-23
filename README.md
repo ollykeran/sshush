@@ -35,7 +35,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
 - **Keys**: create, edit comment, find, export public key, validate. Editing a key's comment (`sshush edit`, or the TUI's `e` key on a loaded agent key) also updates its `.pub` companion file when one exists alongside the private key, so the two stay in sync.
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
-- **TUI**: `sshush tui` for interactive key management.
+- **TUI**: `sshush tui` for interactive key management. The Agent tab offers keys found in `~/.ssh`, the current directory and any `[agent].search_dirs`; press `f` to search again.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
 - **Windows and WSL**: runs natively on Windows for `ssh.exe` and PowerShell, with a tray for the agent and its keys, and a WSL distro can use that same agent, so one vault and one unlock cover both. See [docs/windows.md](docs/windows.md).

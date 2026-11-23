@@ -104,7 +104,7 @@ Messages flow from tea.Cmd functions to Update. Custom message types carry async
 | agentKeysMsg | fetchAgentKeysCmd | Keys loaded from socket (or error) |
 | agentStatusMsg | start/stop/reload/add/remove cmds | Status text for banner |
 | agentDaemonStateMsg | checkDaemonCmd | Daemon running/stopped |
-| foundKeysMsg | discoverKeysCmd | Discovered key paths from config |
+| foundKeysMsg | discoverKeysCmd | Key paths found in `~/.ssh`, the cwd and `[agent].search_dirs` (at Init, and on `f` / the re-scan control) |
 | agentLockResultMsg | lockAgentCmd | Lock result |
 | agentUnlockResultMsg | unlockAgentCmd | Unlock result |
 | ButtonFlashDoneMsg | ButtonFlashCmd | Button flash animation done |
@@ -193,7 +193,10 @@ VaultScreen's identity table needs 5 columns (fingerprint/loaded/autoload/commen
 | `up` / `k` | Move cursor up; at first row, return to tab bar | Move selection up; at top, return to table |
 | `down` / `j` | Move cursor down; at last row, enter Found Keys (if any) | Move selection down (clamped to visible rows) |
 | `backspace` / `delete` / `d` | Remove selected loaded key | — |
+| `f` | Search again for keys (`KeyRescan`) | Search again for keys |
 | Click row | Select row in table | Click found line adds key (unchanged) |
+
+`f` (or clicking `[f] search again`, beside the Found Keys title, or under the loaded keys when nothing else was found) re-runs `discoverKeysCmd`. It re-reads the config, so `[agent].search_dirs` edited while the TUI runs take effect, and the status line reports how many keys not already in the agent were found and any configured directory that could not be read. The search at Init does the same but leaves the status line alone.
 
 `d` removes the selected loaded key when the Agent table is focused. On other tabs, when Found Keys is focused, or when a modal is open, `d` enters daemon controls instead — unless the active page implements `HandleDKey() (tea.Cmd, bool)` and claims the key itself (VaultScreen does this for its own identity table; see VaultScreen below).
 

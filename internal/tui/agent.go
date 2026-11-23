@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -50,8 +51,14 @@ var (
 	addKeyToAgent        = addKeyToAgentCmd
 )
 
+// foundKeysMsg carries the result of a key search (see discoverKeysCmd).
 type foundKeysMsg struct {
 	paths []utils.KeyPath
+	// rescan is true when the search was asked for (KeyRescan or a click), so
+	// its result is reported in the status line; the search at startup is quiet.
+	rescan bool
+	// skipped lists configured [agent].search_dirs that could not be read.
+	skipped []string
 }
 
 type agentLockResultMsg struct {
@@ -172,7 +179,7 @@ func (s *AgentScreen) Init() tea.Cmd {
 		fetchAgentKeysCmd(s.socketPath, false),
 		checkDaemonCmd(s.socketPath),
 		checkVaultStateCmd(s.socketPath),
-		discoverKeysCmd(),
+		discoverKeysCmd(s.configPath, false),
 	)
 }
 
@@ -278,15 +285,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = fmt.Sprintf("%d key(s) loaded", len(rows))
 		}
-		if s.focus == agentFocusFound {
-			visible := s.visibleFoundKeys()
-			if len(visible) == 0 {
-				s.focusFirstLoadedKey()
-				s.foundSelected = 0
-			} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
-				s.foundSelected = s.foundKeysMaxIndex(visible)
-			}
-		}
+		s.clampFoundFocus()
 		return s, nil
 
 	case agentStatusMsg:
@@ -306,6 +305,11 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case foundKeysMsg:
 		s.foundKeys = msg.paths
+		s.clampFoundFocus()
+		if msg.rescan {
+			s.status = rescanStatus(len(s.visibleFoundKeys()), msg.skipped)
+			s.statusErr = false
+		}
 		return s, nil
 
 	case agentLockResultMsg:
@@ -370,13 +374,13 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
-		return s.handleMouse(msg.X, msg.Y)
+		return s.handleMouse(msg.X, msg.Y, false)
 
 	case tea.MouseReleaseMsg:
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
-		return s.handleMouse(msg.X, msg.Y)
+		return s.handleMouse(msg.X, msg.Y, true)
 
 	case commentOverlaySavedMsg:
 		s.commentOverlay.Hide()
@@ -411,6 +415,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if KeyMatches(msg, KeyRescan) {
+		return s, s.rescanKeys()
+	}
 	switch msg.String() {
 	case "q", "esc":
 		return s, tea.Quit
@@ -524,7 +531,16 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	return s, cmd
 }
 
-func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+// handleMouse handles a left click (release false) or its release (release
+// true); both arrive for one click. The re-scan control acts on the release
+// only, so one click searches once.
+func (s *AgentScreen) handleMouse(x, y int, release bool) (tea.Model, tea.Cmd) {
+	if inZoneBounds(s.rescanZoneID(), x, y) {
+		if !release {
+			return s, nil
+		}
+		return s, s.rescanKeys()
+	}
 	rows := s.keyTable.Table.Rows()
 	for i := range rows {
 		if inZoneBounds(fmt.Sprintf("%skey-%d", s.zonePrefix, i), x, y) {
@@ -652,6 +668,55 @@ func (s *AgentScreen) addKeyCmd(path string) tea.Cmd {
 	return startDaemonThenAddCmd(s.configPath, s.socketPath, path)
 }
 
+// rescanKeys searches ~/.ssh, the current directory and the configured
+// [agent].search_dirs again for keys to offer under Found Keys. The config is
+// read afresh, so search_dirs edited while the TUI runs take effect.
+func (s *AgentScreen) rescanKeys() tea.Cmd {
+	s.status = "searching for keys..."
+	s.statusErr = false
+	return discoverKeysCmd(s.configPath, true)
+}
+
+// rescanZoneID is the bubblezone id of the clickable re-scan control.
+func (s *AgentScreen) rescanZoneID() string { return s.zonePrefix + "rescan" }
+
+// clampFoundFocus keeps the Found Keys selection inside the visible list, and
+// moves focus back to the loaded keys when that list has emptied.
+func (s *AgentScreen) clampFoundFocus() {
+	if s.focus != agentFocusFound {
+		return
+	}
+	visible := s.visibleFoundKeys()
+	if len(visible) == 0 {
+		s.focusFirstLoadedKey()
+		s.foundSelected = 0
+	} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
+		s.foundSelected = s.foundKeysMaxIndex(visible)
+	}
+}
+
+// rescanStatus is the status line after a re-scan: how many keys not already
+// in the agent were found, and which configured directories were skipped.
+func rescanStatus(found int, skipped []string) string {
+	var text string
+	switch found {
+	case 0:
+		text = "no new keys found"
+	case 1:
+		text = "found 1 new key"
+	default:
+		text = fmt.Sprintf("found %d new keys", found)
+	}
+	if len(skipped) > 0 {
+		display := make([]string, len(skipped))
+		for i, d := range skipped {
+			display[i] = utils.DisplayPath(d)
+		}
+		text += " (skipped unreadable: " + strings.Join(display, ", ") + ")"
+	}
+	return text
+}
+
 func (s *AgentScreen) focusFirstLoadedKey() {
 	s.focus = agentFocusTable
 	if rows := s.keyTable.Table.Rows(); len(rows) > 0 {
@@ -765,10 +830,13 @@ func (s *AgentScreen) View() tea.View {
 	sections = append(sections, s.renderLoadedKeys(w, active))
 
 	visible := s.visibleFoundKeys()
+	sections = append(sections, "")
 	if len(visible) > 0 {
-		sections = append(sections, "")
 		foundContent := s.renderFoundKeys(visible, w, active)
 		sections = append(sections, foundContent)
+	} else {
+		sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top,
+			s.sk.Styles().DimStyle.Render("No other keys found ")+s.renderRescanControl()))
 	}
 
 	content := strings.Join(sections, "\n")
@@ -838,7 +906,7 @@ func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
 
 func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active bool) string {
 	st := s.sk.Styles()
-	title := st.SectionTitleStyle.Render(" Found Keys")
+	title := st.SectionTitleStyle.Render(" Found Keys") + " " + s.renderRescanControl()
 	var lines []string
 	maxShow := foundKeysMaxVisible
 	if len(visible) < maxShow {
@@ -882,11 +950,19 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 		title+"\n"+border.Width(boxW-4).Render(content))
 }
 
+// renderRescanControl renders the clickable "[f] search again" control shown
+// beside Found Keys (or in its place when nothing was found).
+func (s *AgentScreen) renderRescanControl() string {
+	label := "[" + KeyRescan[0] + "] search again"
+	return zone.Mark(s.rescanZoneID(), s.sk.Styles().AccentStyle.Render(label))
+}
+
 func (s *AgentScreen) HelpEntries() []string {
 	st := s.sk.Styles()
 	return []string{
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow(KeyRescan[0], "Search again for keys"),
 		st.HelpRow("e", "Edit comment"),
 		st.HelpRow("d / bksp", "Remove key"),
 		st.HelpRow("L", "Lock vault"),
@@ -1091,8 +1167,30 @@ func pollVaultStateCmd(socketPath string, gen int) tea.Cmd {
 	})
 }
 
-func discoverKeysCmd() tea.Cmd {
+// discoverKeysCmd searches ~/.ssh, the current directory and the
+// [agent].search_dirs of the config at configPath for private keys. A config
+// that is missing or does not load adds no directories; configured directories
+// that cannot be read are skipped and reported in foundKeysMsg.skipped.
+func discoverKeysCmd(configPath string, rescan bool) tea.Cmd {
 	return func() tea.Msg {
-		return foundKeysMsg{paths: utils.DiscoverKeyPaths([]string{}, true, true, false)}
+		dirs := configuredSearchDirs(configPath)
+		return foundKeysMsg{
+			paths:   utils.DiscoverKeyPaths(dirs, true, true, false),
+			rescan:  rescan,
+			skipped: utils.UnreadableDirs(dirs),
+		}
 	}
+}
+
+// configuredSearchDirs returns [agent].search_dirs from the config at
+// configPath, or nil when there is no config or it does not load.
+func configuredSearchDirs(configPath string) []string {
+	if configPath == "" {
+		return nil
+	}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil
+	}
+	return cfg.SearchDirs
 }
