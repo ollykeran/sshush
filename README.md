@@ -38,7 +38,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **TUI**: `sshush tui` for interactive key management.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
-- **Windows and WSL**: runs natively on Windows for `ssh.exe` and PowerShell, and a WSL distro can use that same agent, so one vault and one unlock cover both. See [docs/windows.md](docs/windows.md).
+- **Windows and WSL**: runs natively on Windows for `ssh.exe` and PowerShell, with a tray for the agent and its keys, and a WSL distro can use that same agent, so one vault and one unlock cover both. See [docs/windows.md](docs/windows.md).
 - **Reload**: `sshush reload` drops keys not in `config.toml` and adds new ones; changing `[agent].socket_path` can restart the daemon.
 - **First run**: with no config, writes defaults under `$XDG_CONFIG_HOME/sshush` (or `~/.config/sshush`), discovers keys, picks a stable socket path. Regenerate the default file with `sshush generate config` (`--force` to overwrite).
 
@@ -70,14 +70,14 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 ### Releases
 
-[GitHub Releases](https://github.com/ollykeran/sshush/releases): `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `tar.gz` (Linux and macOS arm/amd on the release page), and a `.zip` for Windows. Release archives ship both binaries; install or unpack as usual.
+[GitHub Releases](https://github.com/ollykeran/sshush/releases): `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `tar.gz` (Linux and macOS arm/amd on the release page), and a `.zip` for Windows. Release archives ship both binaries, and the Windows zip the tray as well; install or unpack as usual.
 
 | Package | |
 | --- | --- |
 | **Debian/Ubuntu** | `sudo dpkg -i sshush-*-amd64.deb` |
 | **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
-| **Windows** | unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md) |
+| **Windows** | install **sshush agent** from the Microsoft Store, or unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md#installing) |
 
 ### From source
 
@@ -97,7 +97,7 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 ## Docs
 
 - [Setup](docs/setup.md) – shell, eval, config path
-- [Windows](docs/windows.md) – named pipe, PowerShell, sharing one agent with WSL, what is not supported yet
+- [Windows](docs/windows.md) – Store and zip installs, the tray, named pipe, PowerShell, sharing one agent with WSL, what is not supported yet
 - [Config](docs/config.md) – options, reload, flat TOML migration
 - [Vault](docs/vault.md) – optional vault
 - [TUI](docs/tui.md) – TUI structure

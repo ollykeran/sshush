@@ -13,6 +13,7 @@ See also: [Setup](setup.md) | [Config](config.md)
 | PowerShell integration (`--shell powershell`) | yes |
 | Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | yes |
 | TUI, key creation and editing, clipboard | yes |
+| Tray (`sshush-tray.exe`): agent state, unlock, keys and vault in a window | yes |
 | One agent shared with WSL (`[agent].type = "windows"` in the distro) | yes |
 | SSH server (`sshush server`) | no: it refuses to start |
 
@@ -20,7 +21,7 @@ The SSH server gives whoever signs in a shell on a pseudo-terminal, with process
 
 ## Quick start
 
-Put `sshush.exe` and `sshushd.exe` in the same directory, on your `PATH`, then in PowerShell:
+Install sshush from the Microsoft Store, or unpack the release zip into a folder on your `PATH` (see [Installing](#installing)). Then in PowerShell:
 
 ```powershell
 sshush start --shell powershell | Invoke-Expression
@@ -104,6 +105,20 @@ The editor has to stay in the foreground until you close the file. For VS Code t
 
 Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install. The recovery phrase that `sshush vault init` copies is marked so that Windows keeps it out of clipboard history (Win+V) and does not sync it to your other devices; a clipboard manager that ignores those marks can still record it.
 
+## The tray
+
+`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do:
+
+- start and stop the agent, and lock or unlock a vault;
+- list the agent's keys, or the vault's, with the selected key's details beside them;
+- add a key file, create a new key, or set up a vault when there is none;
+- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key;
+- run `sshush selftest`.
+
+The window follows Windows' light or dark mode. "Start at sign-in" starts the tray, without opening the window, when you sign in. Starting the tray again replaces the one already running rather than adding a second icon.
+
+The tray is a client of the agent, as the CLI is: closing it, or it crashing, leaves the agent running. It reads the same `~\.config\sshush\config.toml` and talks to the same pipe, so the tray, PowerShell and WSL all see one agent.
+
 ## Stopping the daemon
 
 `sshush stop` asks the daemon to exit and waits for it. If the daemon is killed some other way (Task Manager, a reboot) its pidfile is left behind; the next `sshush start` notices and starts normally.
@@ -151,6 +166,8 @@ socket_path = "~/.ssh/sshush-windows.sock"
 windows_sshush = "/mnt/c/Tools/sshush/sshush.exe"
 ```
 
+With sshush installed from the Store, `sshush.exe` on the Windows `PATH` is the package's app execution alias, `%LOCALAPPDATA%\Microsoft\WindowsApps\sshush.exe`, and WSL runs it like any other Windows program. To name it in `windows_sshush`, use the path as WSL sees it, such as `/mnt/c/Users/<you>/AppData/Local/Microsoft/WindowsApps/sshush.exe`.
+
 If something does not work:
 
 - **"the sshush agent on Windows is not answering"**: the relay in the distro is up and the agent behind it is not. `sshush start`, in the distro or in PowerShell, starts it.
@@ -196,9 +213,23 @@ socket_path = "~/.ssh/sshush-windows.sock"
 
 Everything in the list above then works the same way, except that `sshush start`, `stop` and `reload` refuse: neither the relay nor the agent is sshush's to manage there.
 
-## Installing from a release
+## Installing
 
-Releases include `sshush-<version>-windows-amd64.zip`, holding `sshush.exe` and `sshushd.exe`. Unpack both into one folder and add it to your `PATH`. Each binary has a published checksum (`sshush-windows-amd64.sha256`), which `sshush selftest` checks for you.
+### From the Microsoft Store
+
+sshush is in the Microsoft Store as **sshush agent**. The Store installs and updates it, and it runs where Windows blocks an unsigned program downloaded from the internet. It puts the tray in the Start menu, starts it at sign-in, and makes `sshush` a command in PowerShell, cmd and WSL.
+
+To stop the tray starting at sign-in, untick "Start at sign-in" in it, or turn it off in Settings > Apps > Startup. Once it has been turned off in Settings, only Settings can turn it back on; the tray opens that page for you.
+
+Your config, keys and vault are kept in your profile as usual, not in the package, so uninstalling the app leaves them where they are.
+
+### From a release
+
+Releases include `sshush-<version>-windows-amd64.zip`, holding `sshush.exe`, `sshushd.exe` and `sshush-tray.exe`. Unpack them into one folder and add it to your `PATH`. Each binary has a published checksum (`sshush-windows-amd64.sha256`), which `sshush selftest` checks for you.
+
+Run `sshush-tray.exe` for the tray; its "Start at sign-in" adds it to your user's `Run` key.
+
+If both are installed, the Store's `sshush` comes first on `PATH`, ahead of the one from the zip.
 
 ## Building
 
@@ -208,4 +239,4 @@ Cross-compile from any platform:
 just build windows
 ```
 
-which writes `build/windows-amd64/sshush.exe` and `sshushd.exe`; `just pkg zip-windows` zips them as a release does.
+which writes `build/windows-amd64/sshush.exe`, `sshushd.exe` and `sshush-tray.exe`; `just pkg zip-windows` zips them as a release does. The Store package is built by `scripts/msix.sh`; [packaging/msix/README.md](../packaging/msix/README.md) has how to build and try it locally.
