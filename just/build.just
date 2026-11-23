@@ -248,7 +248,8 @@ checksums:
     dir="{{ build_dir }}"
     count=0
     for plat in linux-amd64 darwin-arm64 darwin-amd64 windows-amd64; do
-        for bin in sshush sshushd; do
+        # sshush-tray is built for Windows only; the -f check skips it elsewhere.
+        for bin in sshush sshushd sshush-tray; do
             f="$dir/$plat/$bin"
             # The checksum is named without .exe; see platformKeyFor in internal/version.
             if [ "$plat" = "windows-amd64" ]; then f="$f.exe"; fi
