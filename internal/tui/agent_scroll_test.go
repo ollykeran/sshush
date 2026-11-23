@@ -55,6 +55,13 @@ func seedFoundKeys(agent *AgentScreen, n int) {
 	agent.loadedFPs = map[string]bool{}
 }
 
+// foundRow is found key i as its row in the list reads: its display path (which
+// differs per platform, e.g. D:\tmp\key0 on Windows) and the space after it,
+// so key1 does not also match key10.
+func foundRow(i int) string {
+	return utils.DisplayPath(fmt.Sprintf("/tmp/key%d", i)) + " "
+}
+
 func agentPlainView(agent *AgentScreen) string {
 	return ansi.Strip(agent.View().Content)
 }
@@ -142,7 +149,7 @@ func TestAgentFoundKeysScrollToSelectionAndClick(t *testing.T) {
 	agent.foundSelected = 0
 
 	view := agentPlainView(agent)
-	if !strings.Contains(view, "/tmp/key0") || strings.Contains(view, "/tmp/key25") {
+	if !strings.Contains(view, foundRow(0)) || strings.Contains(view, foundRow(25)) {
 		t.Fatalf("top of list should show key0 and not key25:\n%s", view)
 	}
 
@@ -154,7 +161,7 @@ func TestAgentFoundKeysScrollToSelectionAndClick(t *testing.T) {
 	}
 	content := agent.View().Content
 	view = ansi.Strip(content)
-	if !strings.Contains(view, "/tmp/key25") || strings.Contains(view, "/tmp/key0\n") {
+	if !strings.Contains(view, foundRow(25)) || strings.Contains(view, foundRow(0)) {
 		t.Fatalf("after scrolling, key25 should show and key0 should not:\n%s", view)
 	}
 
