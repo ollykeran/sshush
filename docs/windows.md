@@ -225,7 +225,7 @@ Your config, keys and vault are kept in your profile as usual, not in the packag
 
 ### From a release
 
-Releases include `sshush-<version>-windows-amd64.zip`, holding `sshush.exe`, `sshushd.exe` and `sshush-tray.exe`. Unpack them into one folder and add it to your `PATH`. Each binary has a published checksum (`sshush-windows-amd64.sha256`, `sshushd-windows-amd64.sha256` and `sshush-tray-windows-amd64.sha256`); `sshush selftest` checks its own for you.
+Releases include `sshush-<version>-windows-amd64.zip`, holding `sshush.exe`, `sshushd.exe` and `sshush-tray.exe`. Unpack them into one folder and add it to your `PATH`. The release's `checksums.txt` lists the SHA-256 of the zip and of each binary in it (as `sshush-windows-amd64`, `sshushd-windows-amd64` and `sshush-tray-windows-amd64`); `sshush selftest` checks its own for you.
 
 Run `sshush-tray.exe` for the tray; its "Start at sign-in" adds it to your user's `Run` key.
 
