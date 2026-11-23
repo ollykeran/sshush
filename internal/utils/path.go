@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,9 +93,30 @@ type KeyPath struct {
 	IsSymlink bool
 }
 
+// UnreadableDirs returns the entries of dirs that cannot be listed as a
+// directory: missing, not a directory, or without permission. DiscoverKeyPaths
+// skips these silently; callers use this to say which ones were skipped.
+func UnreadableDirs(dirs []string) []string {
+	var out []string
+	for _, d := range dirs {
+		f, err := os.Open(d)
+		if err != nil {
+			out = append(out, d)
+			continue
+		}
+		_, err = f.ReadDir(1)
+		f.Close()
+		if err != nil && err != io.EOF {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // DiscoverKeyPaths finds valid private key files in searchDirs.
 // If cwd is true, adds current directory. If ssh is true, adds ~/.ssh.
-// If recursive is true, walks subdirectories.
+// If recursive is true, walks subdirectories. Directories that are missing or
+// cannot be read are skipped.
 //
 // Entries are deduped by resolved (symlink-following) real path: a symlink
 // and its target discovered separately collapse into a single KeyPath, shown
@@ -143,6 +165,9 @@ func DiscoverKeyPaths(searchDirs []string, cwd bool, ssh bool, recursive bool) [
 	// 	}
 	// }
 
+	// Copy before appending, so the caller's slice (e.g. a config's
+	// search_dirs) is never written through.
+	searchDirs = append([]string(nil), searchDirs...)
 	if ssh {
 		if home, err := os.UserHomeDir(); err == nil {
 			searchDirs = append(searchDirs, filepath.Join(home, ".ssh"))
