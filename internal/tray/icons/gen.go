@@ -123,21 +123,26 @@ func inside(s style, u, v float64) bool {
 		}
 		return true
 	}
-	// Shackle: a ring arc above the body; the open one rises and shifts left.
+	// Shackle: a ring arc above the body. The open one is lifted: its left
+	// leg still runs down into the body, and its right leg stops short of it,
+	// leaving a gap.
 	cx, cy := 0.5, 0.42
 	if s.open {
-		cx, cy = 0.34, 0.3
+		cy = 0.32
 	}
 	r := math.Hypot(u-cx, v-cy)
 	if r > 0.2 && r < 0.3 && v < cy {
 		return true
 	}
-	// Shackle legs down into the body.
 	legBottom := 0.46
 	if math.Abs(u-(cx-0.25)) < 0.05 && v >= cy && v < legBottom {
 		return true
 	}
-	if !s.open && math.Abs(u-(cx+0.25)) < 0.05 && v >= cy && v < legBottom {
+	rightBottom := legBottom
+	if s.open {
+		rightBottom = cy + 0.04
+	}
+	if math.Abs(u-(cx+0.25)) < 0.05 && v >= cy && v < rightBottom {
 		return true
 	}
 	if s.slash && math.Abs((u-v)/math.Sqrt2) < 0.05 {
