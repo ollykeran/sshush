@@ -80,6 +80,11 @@ func runStartDaemon(cmd *cobra.Command) error {
 	if cfg.RelaysToWindows() {
 		return runStartRelay(&cfg, absConfigPath, authSockLine)
 	}
+	if !cfg.IsExternal() {
+		if err := sshushd.WindowsAgentConflict(cfg.SocketPath); err != nil {
+			return style.NewOutput().Error(err.Error()).AsError()
+		}
+	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		printAuthSockLine(authSockLine)
 		out := style.NewOutput().

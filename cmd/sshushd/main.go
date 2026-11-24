@@ -44,6 +44,11 @@ func main() {
 		return
 	}
 
+	if err := sshushd.WindowsAgentConflict(cfg.SocketPath); err != nil {
+		ready.Fail(err)
+		style.NewOutput().Error("sshushd: " + err.Error()).PrintErr()
+		os.Exit(1)
+	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		err := fmt.Errorf("agent already running at %s", utils.DisplayPath(cfg.SocketPath))
 		ready.Fail(err)
