@@ -10,9 +10,20 @@ import (
 const (
 	// SocketFileName is the default Unix socket filename under the runtime data dir.
 	SocketFileName = "sshush.sock"
-	// WindowsPipeName is the default agent endpoint on Windows: a named pipe,
-	// which is what ssh.exe expects SSH_AUTH_SOCK to name there.
-	WindowsPipeName = `\\.\pipe\sshush-agent`
+	// WindowsPipeName is the default agent endpoint on Windows: the named pipe
+	// of Windows' own OpenSSH agent, which ssh.exe uses when SSH_AUTH_SOCK is
+	// unset, so ssh finds sshush with no setup at all. It is one name for the
+	// whole machine, and only one agent can hold it: the Windows "OpenSSH
+	// Authentication Agent" service has to be stopped for sshush to serve it.
+	WindowsPipeName = OpenSSHAgentPipeName
+	// OpenSSHAgentPipeName is the pipe Windows' OpenSSH agent serves.
+	OpenSSHAgentPipeName = `\\.\pipe\openssh-ssh-agent`
+	// SSHushPipeName is a pipe only sshush uses, for when Windows' own agent or
+	// another one needs OpenSSHAgentPipeName.
+	SSHushPipeName = `\\.\pipe\sshush-agent`
+	// OpenSSHAgentService is the service name of Windows' own agent, shown in
+	// the Services list as "OpenSSH Authentication Agent".
+	OpenSSHAgentService = "ssh-agent"
 	// PidFileName is the sshushd pidfile name under the runtime data dir.
 	PidFileName = "sshush.pid"
 	// ConfigFileName is the config file name inside the config directory.
@@ -59,6 +70,20 @@ func DefaultSocketPath() string {
 		return WindowsPipeName
 	}
 	return filepath.Join(RuntimeDataDir(), SocketFileName)
+}
+
+// IsOpenSSHAgentPipe reports whether path names OpenSSHAgentPipeName. Windows
+// ignores case in pipe names and takes either slash, so it can be written
+// several ways.
+func IsOpenSSHAgentPipe(path string) bool {
+	return strings.EqualFold(strings.ReplaceAll(strings.TrimSpace(path), "/", `\`), OpenSSHAgentPipeName)
+}
+
+// WindowsAgentHoldsPipe reports whether path is OpenSSHAgentPipeName while
+// Windows' own agent service is running, which means the pipe is the
+// service's and not sshush's: the service creates it as it starts.
+func WindowsAgentHoldsPipe(path string) bool {
+	return IsOpenSSHAgentPipe(path) && WindowsServiceRunning(OpenSSHAgentService)
 }
 
 // DefaultPidFilePath returns the default absolute path to the sshushd pidfile.

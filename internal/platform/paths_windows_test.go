@@ -24,10 +24,11 @@ func TestConfigDir_isUnderTheProfile(t *testing.T) {
 	}
 }
 
-// The agent's endpoint is a named pipe wherever the config and runtime dirs are.
+// The agent's endpoint is Windows' own agent's named pipe wherever the config
+// and runtime dirs are.
 func TestDefaultSocketPath_isTheNamedPipe(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	if got := DefaultSocketPath(); got != `\\.\pipe\sshush-agent` {
+	if got := DefaultSocketPath(); got != `\\.\pipe\openssh-ssh-agent` {
 		t.Fatalf("DefaultSocketPath: got %q", got)
 	}
 }

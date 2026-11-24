@@ -1,6 +1,16 @@
 # Example config.toml
 [agent]
+{{- if .WindowsAgentPipe }}
+# socket_path: sshush serves \\.\pipe\openssh-ssh-agent, the pipe Windows' own OpenSSH
+#              agent uses, so ssh.exe finds sshush with no SSH_AUTH_SOCK or IdentityAgent.
+#              Only one agent can hold it: the "OpenSSH Authentication Agent" service must
+#              be stopped. If that gets in the way of another agent you use, switch to the
+#              line below to give sshush a pipe of its own (then point SSH_AUTH_SOCK at it).
+socket_path = '{{ .SocketPath }}'
+# socket_path = '{{ .AltSocketPath }}'
+{{- else }}
 socket_path = {{ printf "%q" .SocketPath }}
+{{- end }}
 type = "keys"
 # type options: "keys" (load key_paths into an in-memory keyring, default)
 #               "vault" (use [vault].vault_path as the agent backend instead of key_paths)

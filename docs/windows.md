@@ -44,34 +44,42 @@ On Unix the agent listens on a socket file. Windows OpenSSH talks to its agent o
 
 ```toml
 [agent]
-socket_path = '\\.\pipe\sshush-agent'
+socket_path = '\\.\pipe\openssh-ssh-agent'
 ```
 
-Single quotes make it a TOML literal string, so the backslashes need no escaping. Forward slashes (`"//./pipe/sshush-agent"`) work as well.
+Single quotes make it a TOML literal string, so the backslashes need no escaping. Forward slashes (`"//./pipe/openssh-ssh-agent"`) work as well.
 
 Only you (and the SYSTEM account) can connect to the pipe.
 
-That covers a pipe sshush is serving. The name, though, belongs to whichever account creates it first, and `\\.\pipe\sshush-agent` is one name for the whole machine, not one per user. So before sending anything, sshush also checks who owns the pipe it has connected to, and refuses to talk to one served by another account: your passphrase and keys are not handed to whoever got to the name before your agent did. (A pipe owned by SYSTEM or by the Administrators group is accepted, since that is what a service or a daemon started from an administrator prompt looks like.) On a machine several people use, the first to start sshush holds the default name and everyone else is refused, so give each user a `socket_path` of their own, such as `'\\.\pipe\sshush-agent-alice'`.
+That covers a pipe sshush is serving. The name, though, belongs to whichever account creates it first, and a pipe name is one name for the whole machine, not one per user. So before sending anything, sshush also checks who owns the pipe it has connected to, and refuses to talk to one served by another account: your passphrase and keys are not handed to whoever got to the name before your agent did. (A pipe owned by SYSTEM or by the Administrators group is accepted, since that is what a service or a daemon started from an administrator prompt looks like.) On a machine several people use, the first to start sshush holds the default name and everyone else is refused, so give each user a `socket_path` of their own, such as `'\\.\pipe\sshush-agent-alice'`.
 
-`\\.\pipe\sshush-agent` is the default. Programs find it through `SSH_AUTH_SOCK`, which is why the PowerShell line above matters. Two alternatives:
+### The default: Windows' own agent's pipe
 
-- Name the pipe for one host or all of them in `~\.ssh\config`, which needs no environment variable. Write it with forward slashes there: `ssh` treats a backslash in its config as an escape, so `\\.\pipe\sshush-agent` as written is not found.
+`\\.\pipe\openssh-ssh-agent` is the default. It is the pipe Windows' own OpenSSH agent uses, and the one `ssh.exe` talks to when `SSH_AUTH_SOCK` is unset, so `ssh`, Git and anything else built on Windows OpenSSH find sshush with no `SSH_AUTH_SOCK` and no `IdentityAgent`. The config sshush writes on its first run says so above `socket_path`.
 
-  ```
-  Host *
-      IdentityAgent //./pipe/sshush-agent
-  ```
+Only one agent can hold the name, so the Windows "OpenSSH Authentication Agent" service (`ssh-agent`) has to be stopped. sshush says so on its first run if the service is running, and `sshush start` refuses with the same advice rather than mistaking that agent for its own. To stop it for good, from an administrator PowerShell:
 
-  sshush adds this block for you the first time it runs, if you have a `~\.ssh` folder and its `config` does not set `IdentityAgent` already. It is written once, for the default pipe: if you change `socket_path` later, change it here too.
+```powershell
+Stop-Service ssh-agent; Set-Service ssh-agent -StartupType Disabled
+```
 
-  It does not add it when another agent looks to be in use, since `IdentityAgent` would take `ssh` away from that agent. That means either of:
+### A pipe of its own
 
-  - the Windows "OpenSSH Authentication Agent" service (`ssh-agent`) is running;
-  - `SSH_AUTH_SOCK` is already set to something other than sshush's pipe, in the shell sshush was run from or for new programs (`setx`, System Properties).
+If you would rather keep Windows' agent, or another agent needs that pipe, give sshush its own. The generated config has the line ready, commented out under the default:
 
-  sshush then says which it saw, leaves `~\.ssh\config` alone and prints the block for you to add yourself. The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the block applies to it as well.
+```toml
+socket_path = '\\.\pipe\openssh-ssh-agent'
+# socket_path = '\\.\pipe\sshush-agent'
+```
 
-- Set `socket_path = '\\.\pipe\openssh-ssh-agent'`. That is the pipe `ssh.exe` uses when `SSH_AUTH_SOCK` is unset, so everything finds sshush with no setup at all. It only works while the Windows "OpenSSH Authentication Agent" service is stopped, since the two cannot share the name.
+Swap which one is commented out. Programs then find sshush through `SSH_AUTH_SOCK`, which the PowerShell line above sets, or through `~\.ssh\config`, which needs no environment variable. Write the pipe with forward slashes there: `ssh` treats a backslash in its config as an escape, so `\\.\pipe\sshush-agent` as written is not found.
+
+```
+Host *
+    IdentityAgent //./pipe/sshush-agent
+```
+
+The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the block applies to it as well. Adding `IdentityAgent` takes `ssh` away from whichever agent it used before, so sshush leaves this to you.
 
 A path that is not a pipe name is treated as a Unix socket, which Windows supports but `ssh.exe` does not.
 
@@ -188,7 +196,7 @@ export SSH_AUTH_SOCK="$HOME/.ssh/sshush-windows.sock"
 if ! ss -lx 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
     rm -f "$SSH_AUTH_SOCK"
     (setsid socat UNIX-LISTEN:"$SSH_AUTH_SOCK",fork \
-        EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork &) >/dev/null 2>&1
+        EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork &) >/dev/null 2>&1
 fi
 ```
 
@@ -198,7 +206,7 @@ The same thing for fish, in `~/.config/fish/config.fish`:
 set -gx SSH_AUTH_SOCK $HOME/.ssh/sshush-windows.sock
 if not ss -lx 2>/dev/null | string match -q "*$SSH_AUTH_SOCK*"
     rm -f $SSH_AUTH_SOCK
-    setsid socat UNIX-LISTEN:$SSH_AUTH_SOCK,fork,mode=600 EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork >/dev/null 2>&1 &
+    setsid socat UNIX-LISTEN:$SSH_AUTH_SOCK,fork,mode=600 EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork >/dev/null 2>&1 &
     disown
 end
 ```

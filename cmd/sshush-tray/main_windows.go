@@ -24,6 +24,7 @@ import (
 	"flag"
 	"os"
 
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/tray"
 	"github.com/ollykeran/sshush/internal/vaultops"
@@ -33,6 +34,12 @@ import (
 func main() {
 	background := flag.Bool("background", false, "start in the notification area without opening the window")
 	flag.Parse()
+	// A Store install may never run the CLI, so the tray does its first-run
+	// setup too: the default config (without which sshushd will not start),
+	// ssh's IdentityAgent and the PowerShell profile line. Each step checks
+	// for itself whether it is already done, so whichever of the CLI and the
+	// tray runs first does the work and the other changes nothing.
+	config.SetupConfig()
 	cfg, err := tray.LoadConfig()
 	if err != nil {
 		fatal("could not read the sshush config: " + err.Error())

@@ -134,7 +134,7 @@ flowchart LR
   end
   subgraph windows ["Windows"]
     rl["sshush.exe relay<br/>one per connection"]
-    np(["named pipe, by default<br/>//./pipe/sshush-agent"])
+    np(["named pipe, by default<br/>//./pipe/openssh-ssh-agent"])
     wd["sshushd.exe<br/>keyring or vault"]
     wc["ssh.exe, sshush.exe"]
     rl --> np --> wd

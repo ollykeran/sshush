@@ -95,38 +95,33 @@ func TestSetupConfig_appendsToAnExistingPowerShellProfile(t *testing.T) {
 	}
 }
 
-// On the run that creates the config, SetupConfig points ssh at the agent's
-// pipe when there is a .ssh directory to do it in, and only then.
+// The default pipe is the one ssh.exe uses with no configuration, so the run
+// that creates the config has nothing to add to ~\.ssh\config.
 //
 // What the machine running the test has by way of other agents is put aside:
 // a developer's own may well have the OpenSSH service running.
-func TestSetupConfig_addsIdentityAgentToSSHConfig(t *testing.T) {
+func TestSetupConfig_leavesSSHConfigAloneForDefaultPipe(t *testing.T) {
 	noOtherSSHAgent(t)
-	for _, haveSSHDir := range []bool{true, false} {
-		home := t.TempDir()
-		t.Setenv("USERPROFILE", home)
-		t.Setenv("XDG_CONFIG_HOME", "")
-		sshDir := filepath.Join(home, ".ssh")
-		if haveSSHDir {
-			if err := os.MkdirAll(sshDir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-		}
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
-		SetupConfig()
+	SetupConfig()
 
-		data, err := os.ReadFile(filepath.Join(sshDir, "config"))
-		if !haveSSHDir {
-			if _, statErr := os.Stat(sshDir); !os.IsNotExist(statErr) {
-				t.Fatalf(".ssh must not be created, stat err = %v", statErr)
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "IdentityAgent //./pipe/sshush-agent\n") {
-			t.Fatalf("unexpected ssh config:\n%s", data)
+	if _, err := os.Stat(filepath.Join(sshDir, "config")); !os.IsNotExist(err) {
+		t.Fatalf("ssh config must not be created, stat err = %v", err)
+	}
+	data, err := os.ReadFile(platform.DefaultConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`socket_path = '\\.\pipe\openssh-ssh-agent'`, `# socket_path = '\\.\pipe\sshush-agent'`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("config lacks %q:\n%s", want, data)
 		}
 	}
 }
