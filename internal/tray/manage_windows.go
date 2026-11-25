@@ -480,6 +480,10 @@ func (w *mainWindow) command(id uint16) bool {
 		w.importVault()
 	case idVaultMode:
 		w.switchMode()
+	case idVaultPasswd:
+		w.changePassphrase()
+	case idVaultRecovery:
+		w.newRecoveryPhrase()
 	default:
 		return false
 	}
@@ -825,6 +829,10 @@ func (w *mainWindow) updateButtons() {
 	enable(idVaultCopyPath, va.CopyPath)
 	onVault(idVaultOpenFolder, true)
 	onVault(idVaultCopyPath, true)
+	enable(idVaultPasswd, va.ChangePassphrase)
+	onVault(idVaultPasswd, shown.ChangePassphrase)
+	enable(idVaultRecovery, va.NewRecovery)
+	onVault(idVaultRecovery, shown.NewRecovery)
 	enable(idVaultBackup, va.Backup)
 	onVault(idVaultBackup, w.state.showsVault())
 	enable(idVaultImport, va.Import)
@@ -919,7 +927,7 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	out := map[uint16]int{}
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
 		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
-		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport, idVaultMode} {
+		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport, idVaultMode, idVaultPasswd, idVaultRecovery} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
 		if hasGlyph(id) {
 			content += iconW

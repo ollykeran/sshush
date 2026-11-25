@@ -54,6 +54,8 @@ const (
 	CodeVaultInUse
 	// CodeNotAVault means a file was offered as a vault and is not one.
 	CodeNotAVault
+	// CodeWeakPassphrase means a new passphrase does not meet the policy.
+	CodeWeakPassphrase
 )
 
 // OpError is a vault operation failure phrased once, for both front ends. Msg

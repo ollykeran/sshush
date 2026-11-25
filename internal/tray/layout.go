@@ -54,7 +54,7 @@ const (
 
 // vaultButtons are the Vault page's actions, in reading order. Create vault
 // and Lock share a place: a vault that does not exist yet cannot be locked.
-var vaultButtons = []uint16{idMainCreateVault, idMainLock, idVaultBackup, idVaultImport, idVaultOpenFolder, idVaultCopyPath, idVaultMode}
+var vaultButtons = []uint16{idMainCreateVault, idMainLock, idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport, idVaultOpenFolder, idVaultCopyPath, idVaultMode}
 
 // vaultPage holds every control on the Vault page.
 var vaultPage = func() map[uint16]bool {

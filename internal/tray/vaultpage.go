@@ -34,6 +34,8 @@ type VaultActions struct {
 	// Backup copies the vault file elsewhere; Import brings one in from
 	// elsewhere, in place of the vault there is now, if any.
 	Backup, Import bool
+	// ChangePassphrase and NewRecovery change the vault's secrets.
+	ChangePassphrase, NewRecovery bool
 	// UseVault and UseKeys switch what the agent serves, in config, and
 	// restart it. At most one is set.
 	UseVault, UseKeys bool
@@ -101,6 +103,10 @@ func vaultActions(s MainState) VaultActions {
 		OpenFolder:  path,
 		CopyPath:    path,
 		Backup:      s.showsVault() && s.FileFound,
+		// Either goes through the agent serving the vault, or with none,
+		// to its file.
+		ChangePassphrase: s.showsVault(),
+		NewRecovery:      s.showsVault(),
 		// Importing restarts the agent, as switching does, so both need an
 		// agent this sshush runs.
 		Import:   s.Managed,

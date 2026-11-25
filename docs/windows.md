@@ -129,6 +129,7 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 
 - see the vault's state, where its file is, its size, when it was created and last changed, how many keys it holds, and whether a recovery phrase can unlock it;
 - create a vault when there is none, and lock or unlock it;
+- change the vault's passphrase, or give it a new recovery phrase (each asks for the current passphrase or recovery phrase, and shows the new phrase once);
 - show the vault file in Explorer, or copy its path;
 - back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
 - import a vault from another PC;

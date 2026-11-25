@@ -21,7 +21,7 @@ This page matches the implementation in `internal/vault/` (the store and the age
 | Per-blob encryption | AES-256-GCM, 12-byte random IV prepended to ciphertext | `internal/vault/cipher.go`; GCM is an AEAD mode ([NIST SP 800-38D](https://csrc.nist.gov/publications/detail/sp/800-38d/final)) |
 | Salt generation | 16 random bytes | `kdf.GenerateSalt` |
 | Recovery mnemonic | 256-bit entropy, 24 words | `github.com/tyler-smith/go-bip39` ([BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)) |
-| Passphrase policy for **new** vaults | Non-empty (whitespace-only rejected); minimum length and optional character classes from `DefaultPassphrasePolicy` | `internal/vault/passphrase_policy.go` (policy applies at `vault init` only, not on unlock) |
+| Passphrase policy for **new** vaults | Non-empty (whitespace-only rejected); minimum length and optional character classes from `DefaultPassphrasePolicy` | `internal/vault/passphrase_policy.go` (policy applies to a new passphrase, at `vault init` and `vault passwd`, not on unlock) |
 
 **Signing path**: `Sign` decrypts the identity blob with the master key, builds a signer, signs, and **wipes** the decrypted buffer (`internal/vault/agent.go`). The agent does **not** expose `Signers()` with long-lived decrypted keys; it returns "not implemented" so clients cannot keep raw `ssh.Signer` instances for every key.
 
@@ -68,7 +68,7 @@ The vault agent speaks the standard SSH agent protocol over `SSH_AUTH_SOCK`, ser
 - **rsa-sha2 signing**: RSA identities sign with `rsa-sha2-256` / `rsa-sha2-512` when the client requests them (what `ssh` needs for modern RSA host/client auth). Non-RSA keys and unknown flag values are rejected.
 - **Add constraints**: `ssh-add -t` (lifetime) is honored — the identity expires and is dropped lazily on the next List/Sign. `ssh-add -c` (confirm), constraint extensions, and certificates are **rejected** rather than silently ignored, because the daemon has no confirm UI and cannot store cert identities.
 - **Extensions**: extension replies use the OpenSSH shape — a raw body, or SUCCESS / FAILURE / EXTENSION_FAILURE — never the RFC 9987 type-29 wrapper. The OpenSSH `query` extension returns the supported names: `query`, `sshush-op`.
-- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key, list-identities. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
+- **`sshush-op`**: the single extension carrying every sshush operation — vault-locked, lock, unlock, unlock-recovery, session-load, session-unload, set-autoload, set-comment, add-key, list-identities, change-passphrase, set-recovery. A failed request answers with protocol-level *success* and a status byte in the body, because the agent protocol discards the body of a failed extension reply; that is how a caller learns the vault was locked rather than the identity being absent. Requests are `[version][op][payload]`, responses `[version][status][data]`. It replaces the per-operation extensions that preceded it, so an `sshush` and an `sshushd` from different versions will not interoperate — restart the daemon after upgrading. See [Architecture](architecture.md#why-a-failure-knows-its-own-reason).
 
 ### Lock: wipe vs OpenSSH soft-lock
 
@@ -187,6 +187,24 @@ sshush vault autoload off my-key-comment
 Connects to the agent socket from config and unlocks using the **24-word** recovery phrase (stdin line). Fails if the vault was created with `--no-recovery` or the phrase is wrong.
 
 No subcommand-specific flags beyond global `-c` / `-s`.
+
+### `vault passwd`
+
+Changes the vault's passphrase. The master key is derived from the passphrase, so a new passphrase means a new master key under a new salt. Every identity blob and the canary are encrypted again under it, and the vault is saved once, at the end. If anything fails partway, the file and the running agent are left as they were. The recovery phrase wraps the old master key, so the vault gets a new 24-word phrase, shown once. `--no-recovery` leaves the vault without one.
+
+The change is proved with the current passphrase, or with `--use-recovery` the recovery phrase. It is checked against the vault itself; an unlocked agent is not enough. A running vault agent makes the change, because it holds the vault in memory and would write it back over a change made to the file. It stays locked or unlocked as it was. With no agent running, the vault file is changed directly. If `recovery.txt` is beside the vault, it is rewritten with the new phrase, or removed with `--no-recovery`.
+
+| Flag | Meaning |
+|------|---------|
+| `--vault-path` | Vault file (default: the running agent's vault, else `[vault].vault_path`) |
+| `--use-recovery` | Prove the change with the recovery phrase |
+| `--no-recovery` | Leave the vault without a recovery phrase |
+
+An `sshushd` older than this command reports that it cannot make the change. Restart it with `sshush reload`.
+
+### `vault recovery regenerate`
+
+Gives the vault a new recovery phrase, shown once; the old phrase stops working. The passphrase, and so every key's encryption, is unchanged. Takes `--vault-path` and `--use-recovery` as `vault passwd` does.
 
 ---
 

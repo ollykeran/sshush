@@ -89,13 +89,13 @@ func TestVaultOfStates(t *testing.T) {
 		hasLocate bool
 	}{
 		{"unlocked", vaultUp(), "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"unlocked, file on this PC", onDisk, "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, UseKeys: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"locked", locked, "Vault · locked", "Unlock", true, "/v/vault.json",
-			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"agent down", down, "Vault · agent stopped", "Start the agent", true, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"no vault yet", noVault, "No vault yet", "Create one", false, "/v/vault.json",
 			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
 		{"key files", keys, "Not using a vault", "key files", false, "/v/vault.json",
@@ -155,6 +155,15 @@ func TestImportQuestion(t *testing.T) {
 	st := importedStatus(vaultops.ImportResult{FileSummary: sum, Previous: "/v/vault.json.bak-20261125-101500"})
 	if !strings.Contains(st, "vault.json.bak-20261125-101500") {
 		t.Errorf("status %q", st)
+	}
+}
+
+func TestReplacedRecoveryMessage(t *testing.T) {
+	if m := replacedRecoveryMessage(""); !strings.Contains(m, "old one no longer") || strings.Contains(m, "copy") {
+		t.Errorf("no file: %q", m)
+	}
+	if m := replacedRecoveryMessage("/v/recovery.txt"); !strings.Contains(m, "recovery.txt") {
+		t.Errorf("file: %q", m)
 	}
 }
 

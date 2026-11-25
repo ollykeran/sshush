@@ -216,12 +216,14 @@ func (t *tray) promptRecovery() error {
 // askNewPassphrase asks for a new vault passphrase and for it again, until
 // the two match and are long enough, or the user cancels.
 func askNewPassphrase(owner uintptr) ([]byte, error) {
-	first := inputSpec{
-		title:   "Create vault",
-		message: "Choose a passphrase for the vault. You will type it to unlock your keys, so make it one you will remember.",
-		okLabel: "Next",
-		masked:  true,
-	}
+	return askNewPassphraseFor(owner, "Create vault",
+		"Choose a passphrase for the vault. You will type it to unlock your keys, so make it one you will remember.", "Create")
+}
+
+// askNewPassphraseFor is askNewPassphrase with its own title, opening
+// message, and label for the button that confirms.
+func askNewPassphraseFor(owner uintptr, title, message, doneLabel string) ([]byte, error) {
+	first := inputSpec{title: title, message: message, okLabel: "Next", masked: true}
 	for {
 		pass, button, err := promptInput(owner, first)
 		if err != nil {
@@ -236,7 +238,7 @@ func askNewPassphrase(owner uintptr) ([]byte, error) {
 			continue
 		}
 		confirm, button, err := promptInput(owner, inputSpec{
-			title: "Create vault", message: "Type the passphrase again.", okLabel: "Create", masked: true,
+			title: title, message: "Type the passphrase again.", okLabel: doneLabel, masked: true,
 		})
 		if err != nil || button != idOK {
 			clear(pass)

@@ -66,6 +66,8 @@ const (
 	idVaultBackup
 	idVaultImport
 	idVaultMode
+	idVaultPasswd
+	idVaultRecovery
 	// The Vault page's facts take two IDs each, from here on; see
 	// vaultRowLabel. Nothing may follow this in the list.
 	idVaultRows
@@ -131,6 +133,8 @@ var buttonGlyphs = map[uint16]rune{
 	idVaultBackup:     0xE74E, // Save
 	idVaultImport:     0xE8B5, // Import
 	idVaultMode:       0xE8AB, // Switch
+	idVaultPasswd:     0xE8D7, // Permissions: a key
+	idVaultRecovery:   0xE895, // Sync
 }
 
 // hasGlyph reports whether the button id shows an icon.
@@ -225,6 +229,8 @@ func mainTemplate() []uint16 {
 	items = append(items,
 		hiddenBtn(idMainCreateVault, "Create vault…"),
 		hiddenBtn(idMainLock, "&Lock"),
+		hiddenBtn(idVaultPasswd, "Chan&ge passphrase…"),
+		hiddenBtn(idVaultRecovery, "Ne&w recovery phrase…"),
 		hiddenBtn(idVaultBackup, "&Back up…"),
 		hiddenBtn(idVaultImport, "Import…"),
 		hiddenBtn(idVaultOpenFolder, "Show in E&xplorer"),

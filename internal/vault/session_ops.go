@@ -91,3 +91,24 @@ func UnlockWithRecoveryPhrase(s *agent.Session, mnemonic string) error {
 	_, err := s.Op(agent.OpUnlockRecovery, []byte(mnemonic))
 	return err
 }
+
+// ChangePassphraseOp has the vault agent behind s re-encrypt its vault under
+// newPass, proving the right to with cred, and make newMnemonic its recovery
+// phrase ("" for none). The agent stays locked or unlocked as it was. A wrong
+// credential reports [agent.ErrWrongPassphrase]; an sshushd older than the
+// operation reports [agent.ErrOpUnknown].
+func ChangePassphraseOp(s *agent.Session, cred Credential, newPass []byte, newMnemonic string) error {
+	payload := BuildChangePassphrasePayload(cred, newPass, newMnemonic)
+	defer clear(payload)
+	_, err := s.Op(agent.OpChangePassphrase, payload)
+	return err
+}
+
+// SetRecoveryOp has the vault agent behind s make mnemonic its recovery
+// phrase, proving the right to with cred. The old phrase stops working.
+func SetRecoveryOp(s *agent.Session, cred Credential, mnemonic string) error {
+	payload := BuildSetRecoveryPayload(cred, mnemonic)
+	defer clear(payload)
+	_, err := s.Op(agent.OpSetRecovery, payload)
+	return err
+}
