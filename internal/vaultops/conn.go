@@ -3,6 +3,7 @@ package vaultops
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
@@ -59,6 +60,10 @@ type roster struct {
 	vaultPath   string
 	initialized bool
 	identities  []vault.IdentityInfo
+	// info is what the vault says about itself; hasInfo is false when an
+	// older agent did not say.
+	info    vault.Info
+	hasInfo bool
 }
 
 // open satisfies n for verb and returns a conn the caller must close.
@@ -303,7 +308,15 @@ func (c *conn) readRoster() (roster, error) {
 		}
 		switch {
 		case err == nil:
-			return roster{vaultPath: listing.VaultPath, initialized: true, identities: listing.Identities}, nil
+			r := roster{vaultPath: listing.VaultPath, initialized: true, identities: listing.Identities,
+				info: listing.Info, hasInfo: listing.HasInfo}
+			// An older agent says nothing about the vault itself. When its
+			// file is the one here, the file can say instead.
+			if !r.hasInfo && c.vaultPath != "" && filepath.Clean(listing.VaultPath) == filepath.Clean(c.vaultPath) &&
+				c.openStore() == nil && c.initialized {
+				r.info, r.hasInfo = vault.Describe(c.store), true
+			}
+			return r, nil
 		case errors.Is(err, agent.ErrVaultLocked), errors.Is(err, agent.ErrOpUnknown):
 			refused = err
 		default:
@@ -338,7 +351,7 @@ func (c *conn) readRoster() (roster, error) {
 	if err := c.openStore(); err != nil {
 		return roster{}, err
 	}
-	r := roster{vaultPath: c.vaultPath, initialized: c.initialized}
+	r := roster{vaultPath: c.vaultPath, initialized: c.initialized, info: vault.Describe(c.store), hasInfo: true}
 	if !c.initialized {
 		return r, nil
 	}

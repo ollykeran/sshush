@@ -5,11 +5,13 @@ package tray
 // every control for a client area and the controls' natural widths, and is
 // plain arithmetic, so it is tested on every OS.
 //
-// The window follows the list/details pattern: the keys on the left, and on
-// the right everything about the one selected, with what can be done to it.
-// Above both, a header naming the agent with the buttons that change its
-// state, and a command bar for what is not about one key; below, a status
-// line and a footer of settings.
+// Under a header naming the agent, with the button that starts or stops it,
+// a tab strip switches the body between two pages. The Keys page follows the
+// list/details pattern: a command bar for what is not about one key, the keys
+// on the left, and on the right everything about the one selected, with what
+// can be done to it. The Vault page is about the vault itself: its state, a
+// column of facts, and its actions. Below both, a status line and a footer
+// of settings. Both pages are always placed; the window shows one.
 
 // box is a control's rectangle in client pixels.
 type box struct{ x, y, w, h int }
@@ -46,7 +48,25 @@ const (
 	lyPubMaxLine = 6
 	lyComboW     = 132
 	lyBodyMinH   = 340
+	lyRowH       = 24 // one of the Vault page's facts
+	lyRowLabelW  = 120
 )
+
+// vaultButtons are the Vault page's actions, in reading order. Create vault
+// and Lock share a place: a vault that does not exist yet cannot be locked.
+var vaultButtons = []uint16{idMainCreateVault, idMainLock, idVaultOpenFolder, idVaultCopyPath}
+
+// vaultPage holds every control on the Vault page.
+var vaultPage = func() map[uint16]bool {
+	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true}
+	for _, id := range vaultButtons {
+		m[id] = true
+	}
+	for i := range vaultRowCount {
+		m[vaultRowLabel(i)], m[vaultRowValue(i)] = true, true
+	}
+	return m
+}()
 
 // detailButtons are the selected key's actions, in reading order. Remove is
 // apart from the rest, at the far end, so it is not pressed for its neighbour.
@@ -59,7 +79,7 @@ func scale(px, dpi int) int { return (px*dpi + 48) / 96 }
 func mainMinSize(m layoutMetrics) (w, h int) {
 	s := func(v int) int { return scale(v, m.dpi) }
 	w = s(lyMargin)*2 + s(lyListMinW) + s(lyMargin) + s(lyDetailMinW)
-	h = s(lyMargin) + s(lyTitleH+lyLabelH) + s(lyMargin) + s(lyButtonH) + s(lyGap) +
+	h = s(lyMargin) + s(lyTitleH+lyLabelH) + s(lyGap) + s(lyButtonH) + s(lyGap) + s(lyButtonH) + s(lyGap) +
 		s(lyBodyMinH) + s(lyGap) + s(lyLabelH) + s(lyGap) + s(lyButtonH) + s(lyMargin)
 	return w, h
 }
@@ -78,26 +98,29 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	right := cw - margin
 
 	// Header: the state icon, the agent's name and where its keys are, and
-	// at the right the buttons that change its state.
+	// at the right the button that starts or stops it.
 	out[idMainStateIcon] = box{margin, margin + s(2), s(lyStateIcon), s(lyStateIcon)}
 	x := right
-	for _, id := range []uint16{idMainAgentToggle, idMainLock} {
-		if m.hidden[id] {
-			continue
-		}
-		w := nat(id, 100)
+	if !m.hidden[idMainAgentToggle] {
+		w := nat(idMainAgentToggle, 100)
 		x -= w
-		out[id] = box{x, margin + s(4), w, btnH}
+		out[idMainAgentToggle] = box{x, margin + s(4), w, btnH}
 		x -= gap
 	}
 	textX := margin + s(lyStateIcon) + s(12)
 	out[idMainAgent] = box{textX, margin - s(2), max(x-textX, 0), s(lyTitleH)}
 	out[idMainSource] = box{textX, margin + s(lyTitleH) - s(2), max(x-textX, 0), s(lyLabelH)}
 
+	// The page tabs, side by side, the same width.
+	tabY := margin + s(lyTitleH+lyLabelH) + gap
+	tw := max(nat(idMainTabKeys, 90), nat(idMainTabVault, 90))
+	out[idMainTabKeys] = box{margin, tabY, tw, btnH}
+	out[idMainTabVault] = box{margin + tw, tabY, tw, btnH}
+
 	// Command bar: what is not about one key.
-	barY := margin + s(lyTitleH+lyLabelH) + s(lyMargin)
+	barY := tabY + btnH + gap
 	x = margin
-	for _, id := range []uint16{idMainAdd, idMainCreateVault, idMainCreateKey} {
+	for _, id := range []uint16{idMainAdd, idMainCreateKey} {
 		if m.hidden[id] {
 			continue
 		}
@@ -193,7 +216,50 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 		y += btnH + gap
 	}
 	out[idMainRemove] = box{dx + dw - rw, y, rw, btnH}
+
+	vaultLayout(out, box{margin, barY, inner, max(statusY-gap-barY, 0)}, m)
 	return out
+}
+
+// vaultLayout places the Vault page in body: its title and what it means,
+// the facts as label and value, and the actions in a row that wraps.
+func vaultLayout(out map[uint16]box, body box, m layoutMetrics) {
+	s := func(v int) int { return scale(v, m.dpi) }
+	nat := func(id uint16, fallback int) int {
+		if w, ok := m.natural[id]; ok {
+			return w
+		}
+		return s(fallback)
+	}
+	gap, btnH := s(lyGap), s(lyButtonH)
+	y := body.y
+	out[idVaultTitle] = box{body.x, y, body.w, s(lyDetailH)}
+	y += s(lyDetailH)
+	out[idVaultSub] = box{body.x, y, body.w, 2 * s(lyLabelH)} // it may wrap once
+	y += 2*s(lyLabelH) + s(lyMargin)
+
+	lw := min(s(lyRowLabelW), body.w/3)
+	for i := range vaultRowCount {
+		out[vaultRowLabel(i)] = box{body.x, y, lw, s(lyLabelH)}
+		out[vaultRowValue(i)] = box{body.x + lw + gap, y, max(body.w-lw-gap, 0), s(lyLabelH)}
+		if !m.hidden[vaultRowLabel(i)] {
+			y += s(lyRowH)
+		}
+	}
+	y += s(lyMargin) - (s(lyRowH) - s(lyLabelH))
+
+	x := body.x
+	for _, id := range vaultButtons {
+		if m.hidden[id] {
+			continue
+		}
+		w := nat(id, 100)
+		if x > body.x && x+w > body.x+body.w {
+			x, y = body.x, y+btnH+gap
+		}
+		out[id] = box{x, y, w, btnH}
+		x += w + gap
+	}
 }
 
 // detailButtonRows is how many rows the key's actions take in a pane dw wide.

@@ -117,13 +117,21 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 
 ## The tray
 
-`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do:
+`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do. Its header starts and stops the agent, and two pages sit below it.
 
-- start and stop the agent, and lock or unlock a vault;
+**Keys**
+
 - list the agent's keys, or the vault's, with the selected key's details beside them;
-- add a key file, create a new key, or set up a vault when there is none;
-- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key;
-- run `sshush selftest`.
+- add a key file or create a new key;
+- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key.
+
+**Vault**
+
+- see the vault's state, where its file is, its size, when it was created and last changed, how many keys it holds, and whether a recovery phrase can unlock it;
+- create a vault when there is none, and lock or unlock it;
+- show the vault file in Explorer, or copy its path.
+
+The footer runs `sshush selftest`.
 
 The window follows Windows' light or dark mode. "Start at sign-in" starts the tray, without opening the window, when you sign in. Starting the tray again replaces the one already running rather than adding a second icon.
 

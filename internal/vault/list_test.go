@@ -76,12 +76,72 @@ func TestDecodeListing_ignoresWhatANewerDaemonAdds(t *testing.T) {
 	}
 }
 
+func TestListing_carriesTheVaultsInfo(t *testing.T) {
+	want := Info{CreatedAt: "2026-11-24T10:00:00Z", Recovery: true, FormatVersion: 1}
+	got, err := decodeListing(encodeListing(Listing{
+		VaultPath:  "/v.json",
+		Identities: []IdentityInfo{{Fingerprint: "SHA256:one"}},
+		Info:       want,
+	}))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.HasInfo || got.Info != want {
+		t.Fatalf("want info %+v, got %+v (has %v)", want, got.Info, got.HasInfo)
+	}
+}
+
+// TestDecodeListing_olderDaemonSaysNothingAboutTheVault: a daemon from before
+// the info trailer still lists, and the client knows it was told nothing.
+func TestDecodeListing_olderDaemonSaysNothingAboutTheVault(t *testing.T) {
+	data := ssh.Marshal(struct {
+		VaultPath string
+		Count     uint32
+	}{VaultPath: "/v.json", Count: 0})
+	got, err := decodeListing(data)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.HasInfo {
+		t.Fatalf("want no info from an older daemon, got %+v", got.Info)
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "vault.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Describe(store); got != (Info{FormatVersion: VaultFileVersion}) {
+		t.Fatalf("uninitialized: got %+v", got)
+	}
+	pass := []byte("correct horse battery staple")
+	if err := Init(store, pass); err != nil {
+		t.Fatal(err)
+	}
+	if got := Describe(store); got.CreatedAt == "" || got.Recovery {
+		t.Fatalf("after init without recovery: got %+v", got)
+	}
+	mnemonic, err := GenerateRecoveryMnemonic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableRecoveryWithPassphrase(store, pass, mnemonic); err != nil {
+		t.Fatal(err)
+	}
+	if got := Describe(store); !got.Recovery {
+		t.Fatalf("after enabling recovery: got %+v", got)
+	}
+}
+
 func TestDecodeListing_truncatedIsAnError(t *testing.T) {
 	data := encodeListing(Listing{
 		VaultPath:  "/v.json",
 		Identities: []IdentityInfo{{Fingerprint: "SHA256:one"}, {Fingerprint: "SHA256:two"}},
 	})
-	for _, n := range []int{0, 3, len(data) - 1} {
+	// A cut inside the identities is an error; the info after them is optional.
+	recordsEnd := len(data) - len(ssh.Marshal(wireInfo{Kind: wireInfoKind}))
+	for _, n := range []int{0, 3, recordsEnd - 1} {
 		if _, err := decodeListing(data[:n]); err == nil {
 			t.Errorf("decode of %d of %d bytes: want an error, got nil", n, len(data))
 		}

@@ -40,10 +40,14 @@ func TestMainLayoutFitsAtEverySize(t *testing.T) {
 			for id := range buttonGlyphs {
 				buttons = append(buttons, id)
 			}
-			buttons = append(buttons, idMainLock, idMainAgentToggle, idMainLoad)
+			buttons = append(buttons, idMainLock, idMainAgentToggle, idMainLoad, idMainTabKeys, idMainTabVault)
 			for i, a := range buttons {
 				for _, b := range buttons[i+1:] {
-					if overlaps(boxes[a], boxes[b]) && !(a == idMainAdd && b == idMainCreateVault) && !(b == idMainAdd && a == idMainCreateVault) {
+					// The two pages share the body; only one is shown.
+					if vaultPage[a] != vaultPage[b] {
+						continue
+					}
+					if overlaps(boxes[a], boxes[b]) {
 						t.Errorf("dpi %d, %dx%d: buttons %d and %d overlap", dpi, size[0], size[1], a, b)
 					}
 				}
@@ -127,5 +131,59 @@ func TestFooterControlsDoNotOverlap(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestVaultLayoutFitsAtEverySize(t *testing.T) {
+	for _, dpi := range []int{96, 144, 192} {
+		m := layoutMetrics{dpi: dpi}
+		mw, mh := mainMinSize(m)
+		for _, size := range [][2]int{{mw, mh}, {mw + 300, mh + 200}} {
+			boxes := mainLayout(size[0], size[1], m)
+			status, tabs := boxes[idMainStatus], boxes[idMainTabVault]
+			var ids []uint16
+			for id := range vaultPage {
+				ids = append(ids, id)
+			}
+			for i, a := range ids {
+				b := boxes[a]
+				if b.x < 0 || b.w <= 0 || b.x+b.w > size[0] {
+					t.Errorf("dpi %d, %dx%d: vault control %d at %+v falls outside the window", dpi, size[0], size[1], a, b)
+				}
+				if b.y < tabs.y+tabs.h || b.y+b.h > status.y {
+					t.Errorf("dpi %d, %dx%d: vault control %d at %+v is not between the tabs and the status line", dpi, size[0], size[1], a, b)
+				}
+				for _, c := range ids[i+1:] {
+					if overlaps(b, boxes[c]) {
+						t.Errorf("dpi %d, %dx%d: vault controls %d and %d overlap", dpi, size[0], size[1], a, c)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestVaultLayoutClosesUpHiddenRows(t *testing.T) {
+	all := mainLayout(1000, 700, layoutMetrics{dpi: 96})
+	hidden := map[uint16]bool{}
+	for i := 3; i < vaultRowCount; i++ {
+		hidden[vaultRowLabel(i)], hidden[vaultRowValue(i)] = true, true
+	}
+	few := mainLayout(1000, 700, layoutMetrics{dpi: 96, hidden: hidden})
+	if few[idMainLock].y >= all[idMainLock].y {
+		t.Errorf("hiding rows does not move the buttons up: %d, then %d", all[idMainLock].y, few[idMainLock].y)
+	}
+	if few[idMainLock].y <= few[vaultRowValue(2)].y {
+		t.Error("the buttons are not below the last row shown")
+	}
+}
+
+func TestVaultLayoutCreateAndLockShareAPlace(t *testing.T) {
+	m := layoutMetrics{dpi: 96, hidden: map[uint16]bool{idMainLock: true}}
+	create := mainLayout(1000, 700, m)[idMainCreateVault]
+	m.hidden = map[uint16]bool{idMainCreateVault: true}
+	lock := mainLayout(1000, 700, m)[idMainLock]
+	if create.x != lock.x || create.y != lock.y {
+		t.Errorf("create vault at %+v, lock at %+v: want the same place", create, lock)
 	}
 }

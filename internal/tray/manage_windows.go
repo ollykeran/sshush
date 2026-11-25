@@ -3,6 +3,8 @@ package tray
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -218,6 +220,9 @@ type mainWindow struct {
 	frame [2]int32
 	// hidden holds the controls show has hidden.
 	hidden map[uint16]bool
+	// page is the page shown: pageKeys or pageVault.
+	page  int
+	vault VaultView
 
 	mu     sync.Mutex
 	result *opResult
@@ -235,6 +240,15 @@ type opResult struct {
 	// it leaves the last action's message unless the agent's state moved on.
 	background bool
 }
+
+// The main window's pages.
+const (
+	pageKeys = iota
+	pageVault
+)
+
+// pageValue is the registry value that remembers the page last shown.
+const pageValue = "MainPage"
 
 // activeMain is the window the dialog procedure serves; there is only one.
 var activeMain *mainWindow
@@ -327,12 +341,16 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 				return ctlColorText(msg, wParam, c)
 			}
 		case control(hwnd, idMainSource), control(hwnd, idMainDetailSub), control(hwnd, idMainFpLabel),
-			control(hwnd, idMainPubLabel), control(hwnd, idMainFromLabel), control(hwnd, idMainVersion):
+			control(hwnd, idMainPubLabel), control(hwnd, idMainFromLabel), control(hwnd, idMainVersion),
+			control(hwnd, idVaultSub):
 			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		case control(hwnd, idMainFp), control(hwnd, idMainPub):
 			return fieldCtlColor(wParam)
 		case control(hwnd, idMainStatus):
 			return themedCtlColor(msg, wParam, w.statusErr)
+		}
+		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) {
+			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		}
 		return themedCtlColor(msg, wParam, false)
 
@@ -349,6 +367,7 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 	case wmDestroy:
 		w.savePlacement()
+		saveSetting(pageValue, []byte{byte(w.page)})
 		unthemeWindow(hwnd)
 		return 0
 
@@ -447,6 +466,14 @@ func (w *mainWindow) command(id uint16) bool {
 		w.run("Asking the agent…", nil)
 	case idMainStartup:
 		w.startupToggled()
+	case idMainTabKeys:
+		w.selectPage(pageKeys)
+	case idMainTabVault:
+		w.selectPage(pageVault)
+	case idVaultOpenFolder:
+		w.showVaultInExplorer()
+	case idVaultCopyPath:
+		w.copyVaultPath()
 	default:
 		return false
 	}
@@ -459,6 +486,7 @@ func (w *mainWindow) init() {
 	w.ui = newUICache(w.hwnd)
 	procSendMessageW.Call(control(w.hwnd, idMainAgent), wmSetFont, w.ui.headerFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainDetailTitle), wmSetFont, w.ui.titleFont(), 0)
+	procSendMessageW.Call(control(w.hwnd, idVaultTitle), wmSetFont, w.ui.titleFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainFp), wmSetFont, w.ui.monoFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainPub), wmSetFont, w.ui.monoFont(), 0)
 
@@ -490,6 +518,10 @@ func (w *mainWindow) init() {
 		}
 	}
 	procSendMessageW.Call(control(w.hwnd, idMainStartup), bmSetCheck, boolArg(startupEnabled()), 0)
+	if b := loadSetting(pageValue); len(b) == 1 && b[0] == pageVault {
+		w.page = pageVault
+	}
+	w.checkTab()
 	setText(control(w.hwnd, idMainVersion), "sshush "+version.Version)
 
 	var wr, cr [4]int32
@@ -691,14 +723,18 @@ func (w *mainWindow) updateButtons() {
 			w.setButtonIcon(id, g, on)
 		}
 	}
-	// With no vault yet, creating one is the only way forward, so it stands
-	// where Add would.
+	onKeys := func(id uint16, visible bool) { w.show(id, visible && w.page == pageKeys) }
+	onVault := func(id uint16, visible bool) { w.show(id, visible && w.page == pageVault) }
+	for _, id := range []uint16{idMainCreateKey, idMainRefresh, idMainList, idMainDetailTitle, idMainDetailSub} {
+		onKeys(id, true)
+	}
+
+	// With no vault yet there is nothing to add keys to: the Vault page
+	// creates one.
 	needsVault := w.state.needsVault()
 	enable(idMainAdd, a.Add)
-	enable(idMainCreateVault, a.CreateVault)
 	enable(idMainCreateKey, !w.busy)
-	w.show(idMainAdd, !needsVault)
-	w.show(idMainCreateVault, needsVault)
+	onKeys(idMainAdd, !needsVault)
 	enable(idMainRemove, a.Remove)
 	enable(idMainAutoload, a.Autoload)
 	enable(idMainRename, a.Rename)
@@ -719,9 +755,6 @@ func (w *mainWindow) updateButtons() {
 	} else {
 		setText(control(w.hwnd, idMainLock), "&Lock")
 	}
-	enable(idMainLock, a.Lock || a.Unlock)
-	w.setButtonIcon(idMainLock, lockGlyph(a), a.Lock || a.Unlock)
-	w.show(idMainLock, w.state.isVault())
 	if a.Start || a.Stop {
 		setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(a))
 	}
@@ -741,22 +774,86 @@ func (w *mainWindow) updateButtons() {
 	setText(control(w.hwnd, idMainPub), w.detail.PublicKey)
 	setText(control(w.hwnd, idMainFrom), w.detail.From)
 	for _, id := range detailControls {
-		w.show(id, !w.detail.Empty)
+		onKeys(id, !w.detail.Empty)
 	}
 	if !w.detail.Empty {
 		// Autoload and Remove mean nothing to an agent that is not a vault.
-		w.show(idMainAutoload, w.state.showsVault())
-		w.show(idMainRemove, w.state.showsVault())
+		onKeys(idMainAutoload, w.state.showsVault())
+		onKeys(idMainRemove, w.state.showsVault())
 	}
+
+	// The Vault page. Create vault and Lock share a place: only one shows.
+	va := vaultActions(w.state)
+	if w.busy {
+		va = VaultActions{CopyPath: va.CopyPath, OpenFolder: va.OpenFolder}
+	}
+	w.vault = vaultOf(w.state)
+	setText(control(w.hwnd, idVaultTitle), w.vault.Title)
+	setText(control(w.hwnd, idVaultSub), w.vault.Sub)
+	onVault(idVaultTitle, true)
+	onVault(idVaultSub, true)
+	for i := range vaultRowCount {
+		shown := i < len(w.vault.Rows)
+		if shown {
+			setText(control(w.hwnd, int(vaultRowLabel(i))), w.vault.Rows[i].Label)
+			setText(control(w.hwnd, int(vaultRowValue(i))), w.vault.Rows[i].Value)
+		}
+		onVault(vaultRowLabel(i), shown)
+		onVault(vaultRowValue(i), shown)
+	}
+	enable(idMainCreateVault, va.CreateVault)
+	onVault(idMainCreateVault, needsVault)
+	if va.Unlock {
+		setText(control(w.hwnd, idMainLock), "Unlo&ck…")
+	} else {
+		setText(control(w.hwnd, idMainLock), "&Lock")
+	}
+	enable(idMainLock, va.Lock || va.Unlock)
+	w.setButtonIcon(idMainLock, lockGlyph(a), va.Lock || va.Unlock)
+	onVault(idMainLock, w.state.isVault() && !needsVault)
+	enable(idVaultOpenFolder, va.OpenFolder)
+	enable(idVaultCopyPath, va.CopyPath)
+	onVault(idVaultOpenFolder, true)
+	onVault(idVaultCopyPath, true)
 	w.layout()
 
-	// A disabled or hidden control cannot keep the focus; hand it to the list.
+	// A disabled or hidden control cannot keep the focus; hand it to the
+	// list, or on the Vault page to its tab.
 	if focus, _, _ := procGetFocus.Call(); focus != 0 {
 		on, _, _ := procIsWindowEnabled.Call(focus)
 		if id, _, _ := procGetDlgCtrlID.Call(focus); on == 0 || w.hidden[uint16(id)] {
-			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, idMainList), 1)
+			to := idMainList
+			if w.page == pageVault {
+				to = idMainTabVault
+			}
+			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, to), 1)
 		}
 	}
+}
+
+// selectPage shows page, and on the Vault page looks at the agent again, so
+// what it says about the vault file is current.
+func (w *mainWindow) selectPage(page int) {
+	if page == w.page {
+		return
+	}
+	w.page = page
+	w.checkTab()
+	w.updateButtons()
+	if page == pageVault && !w.busy {
+		w.run("", nil)
+	}
+}
+
+// checkTab checks the page tab for the page shown.
+func (w *mainWindow) checkTab() {
+	procSendMessageW.Call(control(w.hwnd, idMainTabKeys), bmSetCheck, boolArg(w.page == pageKeys), 0)
+	procSendMessageW.Call(control(w.hwnd, idMainTabVault), bmSetCheck, boolArg(w.page == pageVault), 0)
+}
+
+// isVaultRowLabel reports whether id labels one of the Vault page's facts.
+func isVaultRowLabel(id uint16) bool {
+	return id >= idVaultRows && id < idVaultRows+2*vaultRowCount && (id-idVaultRows)%2 == 0
 }
 
 // layout places every control for the window's current size.
@@ -804,7 +901,8 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
 	out := map[uint16]int{}
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
-		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest} {
+		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
+		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
 		if hasGlyph(id) {
 			content += iconW
@@ -1179,6 +1277,48 @@ func (w *mainWindow) copied(text, what string) {
 		return
 	}
 	w.setStatus("Copied the "+what+" of "+w.detail.Title+".", false)
+}
+
+// showVaultInExplorer opens the vault's folder with the file selected, or
+// with no file yet the nearest folder there is.
+func (w *mainWindow) showVaultInExplorer() {
+	path := w.vault.Path
+	if path == "" {
+		return
+	}
+	args := `/select,"` + path + `"`
+	if _, err := os.Stat(path); err != nil {
+		dir := filepath.Dir(path)
+		for {
+			if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				w.setStatus("The vault's folder does not exist yet.", false)
+				return
+			}
+			dir = parent
+		}
+		args = `"` + dir + `"`
+	}
+	verb, _ := windows.UTF16PtrFromString("open")
+	exe, _ := windows.UTF16PtrFromString("explorer.exe")
+	params, _ := windows.UTF16PtrFromString(args)
+	if err := windows.ShellExecute(windows.Handle(w.hwnd), verb, exe, params, nil, windows.SW_SHOWNORMAL); err != nil {
+		w.setStatus("Could not open Explorer: "+err.Error(), true)
+	}
+}
+
+func (w *mainWindow) copyVaultPath() {
+	if w.vault.Path == "" {
+		return
+	}
+	if err := clipboard.Copy(w.vault.Path); err != nil {
+		w.setStatus("Could not copy the vault's path: "+err.Error(), true)
+		return
+	}
+	w.setStatus("Copied the vault's path.", false)
 }
 
 // selftest runs the same checks as 'sshush selftest' and shows the report.

@@ -1,5 +1,7 @@
 package vaultops
 
+import "time"
+
 // LoadState reports whether an identity is loaded in the running agent.
 // LoadUnknown means no agent answered, so the question has no answer.
 type LoadState int
@@ -47,7 +49,23 @@ type ListResult struct {
 	Initialized    bool
 	AgentReachable bool
 	Identities     []IdentityView
+
+	// Created is when the vault was created; zero when unknown.
+	Created time.Time
+	// Recovery says whether a recovery phrase can unlock the vault.
+	Recovery RecoveryState
 }
+
+// RecoveryState reports whether a vault can be unlocked with a recovery
+// phrase. RecoveryUnknown means the agent asked is too old to say.
+type RecoveryState int
+
+// The three answers to "can a recovery phrase unlock this vault?".
+const (
+	RecoveryUnknown RecoveryState = iota
+	RecoveryOff
+	RecoveryOn
+)
 
 // List returns every identity in the vault, marking which are loaded in the
 // running agent. The running vault agent is asked what its vault holds; the
@@ -70,6 +88,15 @@ func List(env Env) (ListResult, error) {
 		return ListResult{}, err
 	}
 	res := ListResult{VaultPath: r.vaultPath, Initialized: r.initialized}
+	if r.initialized && r.hasInfo {
+		res.Recovery = RecoveryOff
+		if r.info.Recovery {
+			res.Recovery = RecoveryOn
+		}
+		if t, err := time.Parse(time.RFC3339, r.info.CreatedAt); err == nil {
+			res.Created = t
+		}
+	}
 	if len(r.identities) == 0 {
 		return res, nil
 	}

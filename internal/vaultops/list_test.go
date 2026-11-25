@@ -295,3 +295,68 @@ func TestList_doesNotPromptWhenAskPassphraseIsNil(t *testing.T) {
 		t.Fatalf("passphrase prompts: want 0, got %d", f.ask.calls)
 	}
 }
+
+// TestList_reportsWhatTheVaultSaysAboutItself covers both places the answer
+// comes from: the agent serving the vault, and the file when no agent answers.
+func TestList_reportsWhatTheVaultSaysAboutItself(t *testing.T) {
+	for _, withRecovery := range []bool{false, true} {
+		f := startVaultAgent(t, withRecovery)
+		want := RecoveryOff
+		if withRecovery {
+			want = RecoveryOn
+		}
+		fromFile := f.env()
+		fromFile.SocketPath = filepath.Join(f.dir, "nothing-here.sock")
+		for name, env := range map[string]Env{"agent": f.env(), "file": fromFile} {
+			res, err := List(env)
+			if err != nil {
+				t.Fatalf("%s, recovery %v: list: %v", name, withRecovery, err)
+			}
+			if res.Recovery != want {
+				t.Errorf("%s, recovery %v: want %v, got %v", name, withRecovery, want, res.Recovery)
+			}
+			if res.Created.IsZero() {
+				t.Errorf("%s, recovery %v: want a creation time", name, withRecovery)
+			}
+		}
+	}
+}
+
+func TestList_uninitializedVaultSaysNothingAboutRecovery(t *testing.T) {
+	dir := unixSocketTempDirVaultOps(t)
+	res, err := List(Env{VaultPath: filepath.Join(dir, "vault.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Recovery != RecoveryUnknown || !res.Created.IsZero() {
+		t.Fatalf("want nothing said about a vault that does not exist, got %+v", res)
+	}
+}
+
+// TestList_olderAgentsVaultIsDescribedFromItsFile: an agent that does not
+// describe its vault still has a file here that can.
+func TestList_olderAgentsVaultIsDescribedFromItsFile(t *testing.T) {
+	f := startQuietVaultAgent(t, true)
+	f.addKey(t, "id_quiet", "quiet-key", true)
+	res, err := List(f.env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.AgentReachable || len(res.Identities) != 1 {
+		t.Fatalf("want the agent's one identity, got %+v", res)
+	}
+	if res.Recovery != RecoveryOn || res.Created.IsZero() {
+		t.Fatalf("want recovery and creation read from the file, got %v, %v", res.Recovery, res.Created)
+	}
+
+	// With no file here, there is nothing to say.
+	env := f.env()
+	env.VaultPath = ""
+	res, err = List(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Recovery != RecoveryUnknown {
+		t.Fatalf("want recovery unknown without a file, got %v", res.Recovery)
+	}
+}
