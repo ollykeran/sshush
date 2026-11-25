@@ -474,6 +474,12 @@ func (w *mainWindow) command(id uint16) bool {
 		w.showVaultInExplorer()
 	case idVaultCopyPath:
 		w.copyVaultPath()
+	case idVaultBackup:
+		w.backupVault()
+	case idVaultImport:
+		w.importVault()
+	case idVaultMode:
+		w.switchMode()
 	default:
 		return false
 	}
@@ -578,14 +584,15 @@ func (w *mainWindow) run(working string, op func() opResult) {
 		w.setStatus(working, false)
 	}
 	w.updateButtons()
-	hwnd, env := w.hwnd, w.t.env
+	hwnd, t := w.hwnd, w.t
 	go func() {
 		res := opResult{background: op == nil && working == ""}
 		if op != nil {
 			res = op()
-			w.t.refresh() // the tray shows the change too
+			t.refresh() // the tray shows the change too
 		}
-		res.state = ProbeMain(env)
+		// Read now, not before op: switching what the agent serves changes it.
+		res.state = ProbeMain(t.environment())
 		w.mu.Lock()
 		w.result = &res
 		w.mu.Unlock()
@@ -784,6 +791,9 @@ func (w *mainWindow) updateButtons() {
 
 	// The Vault page. Create vault and Lock share a place: only one shows.
 	va := vaultActions(w.state)
+	// Whether a button shows goes by what could be done; whether it is
+	// enabled, by what can be done now.
+	shown := va
 	if w.busy {
 		va = VaultActions{CopyPath: va.CopyPath, OpenFolder: va.OpenFolder}
 	}
@@ -815,6 +825,13 @@ func (w *mainWindow) updateButtons() {
 	enable(idVaultCopyPath, va.CopyPath)
 	onVault(idVaultOpenFolder, true)
 	onVault(idVaultCopyPath, true)
+	enable(idVaultBackup, va.Backup)
+	onVault(idVaultBackup, w.state.showsVault())
+	enable(idVaultImport, va.Import)
+	onVault(idVaultImport, shown.Import)
+	setText(control(w.hwnd, idVaultMode), modeLabel(shown.UseKeys))
+	enable(idVaultMode, va.UseVault || va.UseKeys)
+	onVault(idVaultMode, shown.UseVault || shown.UseKeys)
 	w.layout()
 
 	// A disabled or hidden control cannot keep the focus; hand it to the
@@ -902,7 +919,7 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	out := map[uint16]int{}
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
 		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
-		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath} {
+		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport, idVaultMode} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
 		if hasGlyph(id) {
 			content += iconW
@@ -1029,11 +1046,11 @@ func (w *mainWindow) startOrStop() {
 	switch {
 	case a.Start:
 		w.run("Starting the agent…", func() opResult {
-			if err := StartAgent(t.env.SocketPath); err != nil {
+			if err := StartAgent(t.environment().SocketPath); err != nil {
 				return opResult{err: fmt.Errorf("could not start the agent: %w", err)}
 			}
 			// As 'sshush start' does, ask for the passphrase straight away.
-			if s := Probe(t.env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+			if s := Probe(t.environment().SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
 				if err := t.promptUnlock(); err != nil && !errors.Is(err, errCancelled) {
 					return opResult{err: err}
 				}
@@ -1064,7 +1081,7 @@ func (w *mainWindow) lockOrUnlock() {
 		})
 	case a.Lock:
 		w.run("Locking…", func() opResult {
-			return done("Locked the vault. Its keys have left the agent.", vaultops.Lock(t.env))
+			return done("Locked the vault. Its keys have left the agent.", vaultops.Lock(t.environment()))
 		})
 	}
 }
@@ -1086,20 +1103,20 @@ func (w *mainWindow) createVault() {
 			return opResult{err: err}
 		}
 		defer clear(pass)
-		res, err := vaultops.Init(t.env, pass, vaultops.InitOptions{Recovery: true})
+		res, err := vaultops.Init(t.environment(), pass, vaultops.InitOptions{Recovery: true})
 		if err != nil {
 			return opResult{err: err}
 		}
 		showRecoveryPhrase(hwnd, recoveryMessage(res.RecoveryFile), res.Mnemonic)
 		// The agent was waiting for this vault: start it, and unlock the
 		// vault with the passphrase just chosen rather than ask again.
-		if Probe(t.env.SocketPath).Err != nil && !t.env.AgentUnmanaged {
-			if err := StartAgent(t.env.SocketPath); err != nil {
+		if Probe(t.environment().SocketPath).Err != nil && !t.environment().AgentUnmanaged {
+			if err := StartAgent(t.environment().SocketPath); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not start the agent: %w", err)}
 			}
 		}
-		if s := Probe(t.env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
-			if err := vaultops.UnlockPassphrase(t.env, pass); err != nil {
+		if s := Probe(t.environment().SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+			if err := vaultops.UnlockPassphrase(t.environment(), pass); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not unlock it: %w", err)}
 			}
 		}
@@ -1111,7 +1128,7 @@ func (w *mainWindow) add() {
 	if !w.actions().Add {
 		return
 	}
-	socketPath, into := w.t.env.SocketPath, "the agent"
+	socketPath, into := w.t.environment().SocketPath, "the agent"
 	if w.state.isVault() {
 		into = "the vault"
 	}
@@ -1137,7 +1154,7 @@ func (w *mainWindow) createKey() {
 	if w.busy {
 		return
 	}
-	hwnd, socketPath, canAdd := w.hwnd, w.t.env.SocketPath, w.actions().Add
+	hwnd, socketPath, canAdd := w.hwnd, w.t.environment().SocketPath, w.actions().Add
 	addLabel := "&Add it to the agent"
 	if w.state.isVault() {
 		addLabel = "&Add it to the vault"
@@ -1176,7 +1193,7 @@ func (w *mainWindow) remove() {
 	if messageBoxOwned(w.hwnd, text, mbYesNo|mbIconWarning|mbDefButton2) != idYes {
 		return
 	}
-	env := w.t.env
+	env := w.t.environment()
 	w.run("Removing "+identityName(id)+"…", func() opResult {
 		_, err := vaultops.Remove(env, []string{id.Fingerprint})
 		return done("Removed "+identityName(id)+" from the vault.", err)
@@ -1191,7 +1208,7 @@ func (w *mainWindow) toggleLoaded() {
 	if sel == nil || !(a.Load || a.Unload) {
 		return
 	}
-	id, env, inVault := *sel, w.t.env, w.state.isVault()
+	id, env, inVault := *sel, w.t.environment(), w.state.isVault()
 	if a.Load {
 		w.run("Loading "+identityName(id)+"…", func() opResult {
 			_, err := vaultops.SessionLoad(env, []string{id.Fingerprint})
@@ -1214,7 +1231,7 @@ func (w *mainWindow) toggleAutoload() {
 	if sel == nil || !a.Autoload {
 		return
 	}
-	id, env, on := *sel, w.t.env, a.AutoloadOn
+	id, env, on := *sel, w.t.environment(), a.AutoloadOn
 	w.run("Saving…", func() opResult {
 		status := identityName(id) + " will stay unloaded until you load it."
 		if on {
@@ -1231,7 +1248,7 @@ func (w *mainWindow) rename() {
 	if sel == nil || !w.actions().Rename {
 		return
 	}
-	id, env, hwnd, keyPaths := *sel, w.t.env, w.hwnd, w.t.keyPaths
+	id, env, hwnd, keyPaths := *sel, w.t.environment(), w.hwnd, w.t.keyPaths
 	w.run("Renaming…", func() opResult {
 		spec := inputSpec{
 			title:   "Rename key",
@@ -1323,7 +1340,7 @@ func (w *mainWindow) copyVaultPath() {
 
 // selftest runs the same checks as 'sshush selftest' and shows the report.
 func (w *mainWindow) selftest() {
-	socketPath := w.t.env.SocketPath
+	socketPath := w.t.environment().SocketPath
 	w.run("Running the selftest…", func() opResult {
 		// The tray's own SSH_AUTH_SOCK is whatever it inherited; what matters
 		// is the value new terminals, and so ssh, will get.

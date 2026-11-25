@@ -63,6 +63,9 @@ const (
 	idVaultSub
 	idVaultOpenFolder
 	idVaultCopyPath
+	idVaultBackup
+	idVaultImport
+	idVaultMode
 	// The Vault page's facts take two IDs each, from here on; see
 	// vaultRowLabel. Nothing may follow this in the list.
 	idVaultRows
@@ -125,6 +128,9 @@ var buttonGlyphs = map[uint16]rune{
 	idMainRefresh:     0xE72C, // Refresh
 	idVaultOpenFolder: 0xE838, // FolderOpen
 	idVaultCopyPath:   0xE8C8, // Copy
+	idVaultBackup:     0xE74E, // Save
+	idVaultImport:     0xE8B5, // Import
+	idVaultMode:       0xE8AB, // Switch
 }
 
 // hasGlyph reports whether the button id shows an icon.
@@ -219,8 +225,11 @@ func mainTemplate() []uint16 {
 	items = append(items,
 		hiddenBtn(idMainCreateVault, "Create vault…"),
 		hiddenBtn(idMainLock, "&Lock"),
+		hiddenBtn(idVaultBackup, "&Back up…"),
+		hiddenBtn(idVaultImport, "Import…"),
 		hiddenBtn(idVaultOpenFolder, "Show in E&xplorer"),
 		hiddenBtn(idVaultCopyPath, "Copy path"),
+		hiddenBtn(idVaultMode, modeLabel(false)),
 	)
 	items = append(items, []dlgItem{
 		// Status and footer.
@@ -282,6 +291,9 @@ type MainState struct {
 	ListErr error
 	// ConfiguredVault is the vault file config names, resolved; "" for none.
 	ConfiguredVault string
+	// ConfigIsVault reports that config has the agent serve a vault, which
+	// is what it does once restarted, whatever the running one does now.
+	ConfigIsVault bool
 	// FileFound reports that the listed vault's file is on this PC, and
 	// FileSize and FileModTime are what it says about itself.
 	FileFound   bool
@@ -300,6 +312,7 @@ func ProbeMain(env vaultops.Env) MainState {
 	if env.VaultPath != "" {
 		s.ConfiguredVault = vault.ResolveToFile(utils.ExpandHomeDirectory(env.VaultPath))
 	}
+	s.ConfigIsVault = env.AgentVaultPath != ""
 	if s.isVault() || (!s.Reachable && env.VaultPath != "") {
 		s.Listing = true
 		s.Listed, s.ListErr = vaultops.List(env)

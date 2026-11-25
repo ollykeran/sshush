@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/ollykeran/sshush/internal/utils"
@@ -30,6 +31,12 @@ type VaultView struct {
 type VaultActions struct {
 	CreateVault, Lock, Unlock bool
 	OpenFolder, CopyPath      bool
+	// Backup copies the vault file elsewhere; Import brings one in from
+	// elsewhere, in place of the vault there is now, if any.
+	Backup, Import bool
+	// UseVault and UseKeys switch what the agent serves, in config, and
+	// restart it. At most one is set.
+	UseVault, UseKeys bool
 }
 
 // vaultPath is the vault file the window knows of: the one listed, else the
@@ -48,7 +55,7 @@ func vaultOf(s MainState) VaultView {
 	switch {
 	case s.Reachable && !s.isVault():
 		v.Title = "Not using a vault"
-		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC."
+		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC: use one, or import one you have."
 	case s.needsVault():
 		v.Title = "No vault yet"
 		v.Sub = "Create one to keep your keys encrypted in a single file you can take to another PC."
@@ -93,7 +100,21 @@ func vaultActions(s MainState) VaultActions {
 		Unlock:      a.Unlock,
 		OpenFolder:  path,
 		CopyPath:    path,
+		Backup:      s.showsVault() && s.FileFound,
+		// Importing restarts the agent, as switching does, so both need an
+		// agent this sshush runs.
+		Import:   s.Managed,
+		UseVault: s.Managed && !s.ConfigIsVault,
+		UseKeys:  s.Managed && s.ConfigIsVault,
 	}
+}
+
+// modeLabel names the mode button by what pressing it does.
+func modeLabel(useKeys bool) string {
+	if useKeys {
+		return "Use key files instead"
+	}
+	return "Use a vault"
 }
 
 // keysLabel counts a vault's keys and, when the agent says, how many it is
@@ -138,4 +159,40 @@ func byteSize(n int64) string {
 // whenLabel is t in local time, to the minute.
 func whenLabel(t time.Time) string {
 	return t.Local().Format("2 Jan 2006, 15:04")
+}
+
+// backupName is the file name a backup made at t is offered under.
+func backupName(t time.Time) string {
+	return "vault-" + t.Format("20060102") + ".json"
+}
+
+// importQuestion asks whether to import the vault at src, which sum
+// describes, as the vault at dst. replacing says a vault is there already.
+func importQuestion(src string, sum vaultops.FileSummary, dst string, replacing bool) string {
+	text := fmt.Sprintf("Use %s (%s) as your vault?\n\nThe agent restarts with it, unlocked.", utils.DisplayPath(src), sum)
+	if replacing {
+		text += fmt.Sprintf(" The vault you have now is kept beside it, renamed from %s to %s.bak-<date>, and its recovery phrase no longer applies.",
+			filepath.Base(dst), filepath.Base(dst))
+	}
+	return text
+}
+
+// importedStatus is the status line after an import.
+func importedStatus(res vaultops.ImportResult) string {
+	text := fmt.Sprintf("Imported the vault (%s) and unlocked it.", res.FileSummary)
+	if res.Previous != "" {
+		text += " The old one is " + filepath.Base(res.Previous) + "."
+	}
+	return text
+}
+
+// switchQuestion asks whether to switch the agent to a vault, or to key files.
+func switchQuestion(toVault, vaultExists bool) string {
+	if !toVault {
+		return "Serve your key files instead of the vault?\n\nThe agent restarts, and the vault's keys leave memory. The vault itself is kept, and you can switch back."
+	}
+	if !vaultExists {
+		return "Keep your keys in a vault?\n\nThe agent stops serving your key files. Create the vault next, then add your keys to it."
+	}
+	return "Serve keys from your vault instead of key files?\n\nThe agent restarts, and asks for the vault's passphrase."
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,9 @@ func Run(env vaultops.Env, opts Options) {
 }
 
 type tray struct {
+	// env is read through environment: switching the agent between a vault
+	// and key files changes it while other goroutines use it.
+	envMu     sync.RWMutex
 	env       vaultops.Env
 	kick      chan struct{}
 	prompting atomic.Bool
@@ -69,12 +73,32 @@ func (t *tray) ready() {
 		t.openMain()
 	}
 	views := make(chan View)
-	go Poll(context.Background(), t.env.SocketPath, !t.env.AgentUnmanaged, pollInterval, t.kick, views)
+	go Poll(context.Background(), t.environment().SocketPath, !t.environment().AgentUnmanaged, pollInterval, t.kick, views)
 	go func() {
 		for v := range views {
 			t.render(v)
 		}
 	}()
+}
+
+// environment is the Env the tray's operations run in.
+func (t *tray) environment() vaultops.Env {
+	t.envMu.RLock()
+	defer t.envMu.RUnlock()
+	return t.env
+}
+
+// reloadEnv rebuilds the Env from the config file, after a change to it. The
+// agent's pipe stays the one the tray started with: the poller watches it.
+func (t *tray) reloadEnv() error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	t.envMu.Lock()
+	defer t.envMu.Unlock()
+	t.env = vaultops.EnvFromConfig(cfg, t.env.SocketPath)
+	return nil
 }
 
 // refresh asks the poller to probe now rather than at its next tick.
@@ -146,7 +170,7 @@ func (t *tray) promptUnlock() error {
 		case idExtra:
 			return t.promptRecovery()
 		}
-		err = vaultops.UnlockPassphrase(t.env, pass)
+		err = vaultops.UnlockPassphrase(t.environment(), pass)
 		clear(pass)
 		switch vaultops.CodeOf(err) {
 		case vaultops.CodeWrongPassphrase:
@@ -177,7 +201,7 @@ func (t *tray) promptRecovery() error {
 		}
 		phrase := strings.Join(strings.Fields(strings.ToLower(string(b))), " ")
 		clear(b)
-		err = vaultops.UnlockRecovery(t.env, phrase)
+		err = vaultops.UnlockRecovery(t.environment(), phrase)
 		switch {
 		case err == nil, vaultops.CodeOf(err) == vaultops.CodeNotLocked:
 			return nil

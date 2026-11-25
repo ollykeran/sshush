@@ -67,12 +67,16 @@ func TestVaultOf(t *testing.T) {
 func TestVaultOfStates(t *testing.T) {
 	locked := vaultUp()
 	locked.Backend.VaultLocked = true
-	down := MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"}}
+	down := MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"},
+		ConfigIsVault: true}
 	noVault := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault"}, Listing: true,
-		Listed: vaultops.ListResult{VaultPath: "/v/vault.json"}}
+		Listed: vaultops.ListResult{VaultPath: "/v/vault.json"}, ConfigIsVault: true}
 	keys := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}, ConfiguredVault: "/v/vault.json"}
 	broken := MainState{Managed: true, Listing: true, ListErr: &vaultops.OpError{Code: vaultops.CodeVaultUnreadable, Msg: "open vault: bad"},
-		ConfiguredVault: "/v/vault.json"}
+		ConfiguredVault: "/v/vault.json", ConfigIsVault: true}
+	unmanaged := MainState{Reachable: true, Backend: agent.Backend{Mode: "keys"}}
+	onDisk := vaultUp()
+	onDisk.FileFound = true
 
 	tests := []struct {
 		name      string
@@ -85,19 +89,22 @@ func TestVaultOfStates(t *testing.T) {
 		hasLocate bool
 	}{
 		{"unlocked", vaultUp(), "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+		{"unlocked, file on this PC", onDisk, "Vault · unlocked", "available", true, "/v/vault.json",
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, UseKeys: true}, true},
 		{"locked", locked, "Vault · locked", "Unlock", true, "/v/vault.json",
-			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true}, true},
+			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
 		{"agent down", down, "Vault · agent stopped", "Start the agent", true, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
 		{"no vault yet", noVault, "No vault yet", "Create one", false, "/v/vault.json",
-			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true}, true},
+			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
 		{"key files", keys, "Not using a vault", "key files", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseVault: true}, true},
 		{"key files, no vault configured", MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}},
-			"Not using a vault", "key files", false, "", VaultActions{}, false},
+			"Not using a vault", "key files", false, "", VaultActions{Import: true, UseVault: true}, false},
+		{"unmanaged agent", unmanaged, "Not using a vault", "key files", false, "", VaultActions{}, false},
 		{"unreadable", broken, "Vault", "open vault: bad", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
 	}
 	for _, tc := range tests {
 		v := vaultOf(tc.state)
@@ -127,5 +134,38 @@ func TestByteSize(t *testing.T) {
 		if got := byteSize(n); got != want {
 			t.Errorf("byteSize(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestBackupName(t *testing.T) {
+	if got := backupName(time.Date(2026, 11, 5, 23, 0, 0, 0, time.Local)); got != "vault-20261105.json" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestImportQuestion(t *testing.T) {
+	sum := vaultops.FileSummary{Keys: 3, Recovery: true}
+	q := importQuestion("/u/laptop.json", sum, "/v/vault.json", false)
+	if !strings.Contains(q, "laptop.json") || !strings.Contains(q, "3 keys") || strings.Contains(q, "kept") {
+		t.Errorf("fresh: %q", q)
+	}
+	if q := importQuestion("/u/laptop.json", sum, "/v/vault.json", true); !strings.Contains(q, "vault.json.bak-") {
+		t.Errorf("replacing: %q", q)
+	}
+	st := importedStatus(vaultops.ImportResult{FileSummary: sum, Previous: "/v/vault.json.bak-20261125-101500"})
+	if !strings.Contains(st, "vault.json.bak-20261125-101500") {
+		t.Errorf("status %q", st)
+	}
+}
+
+func TestSwitchQuestion(t *testing.T) {
+	if q := switchQuestion(true, false); !strings.Contains(q, "Create the vault") {
+		t.Errorf("to a new vault: %q", q)
+	}
+	if q := switchQuestion(true, true); !strings.Contains(q, "passphrase") {
+		t.Errorf("to a vault: %q", q)
+	}
+	if q := switchQuestion(false, true); !strings.Contains(q, "key files") {
+		t.Errorf("to keys: %q", q)
 	}
 }

@@ -118,6 +118,24 @@ const saveFlags = 0x00080000 | // OFN_EXPLORER
 // owned by owner and starting at suggested, and returns the chosen path. It
 // returns errCancelled when the user closes the dialog.
 func pickSavePath(owner uintptr, suggested string) (string, error) {
+	return pickSaveFile(owner, suggested, "Save the new key as", "All files (*.*)\x00*.*\x00\x00", "")
+}
+
+// vaultFilter is the Open and Save dialogs' filter for vault files.
+const vaultFilter = "sshush vaults (*.json)\x00*.json\x00All files (*.*)\x00*.*\x00\x00"
+
+// pickVaultBackup shows the Save dialog for a copy of the vault, starting at
+// suggested.
+func pickVaultBackup(owner uintptr, suggested string) (string, error) {
+	return pickSaveFile(owner, suggested, "Back up the vault to", vaultFilter, "json")
+}
+
+// pickSaveFile shows Explorer's Save dialog, owned by owner, with title and
+// filter (pairs of NUL-terminated strings, ended by another NUL), starting at
+// suggested, and returns the chosen path. defExt, without its dot, is added to
+// a name typed without one. It returns errCancelled when the user closes the
+// dialog.
+func pickSaveFile(owner uintptr, suggested, title, filter, defExt string) (string, error) {
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
 	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
@@ -125,8 +143,45 @@ func pickSavePath(owner uintptr, suggested string) (string, error) {
 	}
 	buf := make([]uint16, windows.MAX_LONG_PATH)
 	copy(buf, utf16.Encode([]rune(filepath.Base(suggested))))
-	filter := utf16.Encode([]rune("All files (*.*)\x00*.*\x00\x00"))
-	title, _ := windows.UTF16PtrFromString("Save the new key as")
+	filterW := utf16.Encode([]rune(filter))
+	titleW, _ := windows.UTF16PtrFromString(title)
+	ofn := openFileName{
+		owner:       windows.HWND(owner),
+		filter:      &filterW[0],
+		filterIndex: 1,
+		file:        &buf[0],
+		maxFile:     uint32(len(buf)),
+		title:       titleW,
+		flags:       saveFlags,
+	}
+	if defExt != "" {
+		ofn.defExt, _ = windows.UTF16PtrFromString(defExt)
+	}
+	ofn.structSize = uint32(unsafe.Sizeof(ofn))
+	if dir := filepath.Dir(suggested); isDir(dir) {
+		ofn.initialDir, _ = windows.UTF16PtrFromString(dir)
+	}
+	if r, _, _ := procGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn))); r == 0 {
+		if code, _, _ := procCommDlgExtendedError.Call(); code != 0 {
+			return "", fmt.Errorf("tray: file dialog failed (code %#x)", code)
+		}
+		return "", errCancelled
+	}
+	return windows.UTF16ToString(buf), nil
+}
+
+// pickVaultFile shows Explorer's Open dialog for one vault file, owned by
+// owner, and returns its path. It returns errCancelled when the user closes
+// the dialog.
+func pickVaultFile(owner uintptr) (string, error) {
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
+		defer windows.CoUninitialize()
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	filter := utf16.Encode([]rune(vaultFilter))
+	title, _ := windows.UTF16PtrFromString("Import a vault")
 	ofn := openFileName{
 		owner:       windows.HWND(owner),
 		filter:      &filter[0],
@@ -134,13 +189,11 @@ func pickSavePath(owner uintptr, suggested string) (string, error) {
 		file:        &buf[0],
 		maxFile:     uint32(len(buf)),
 		title:       title,
-		flags:       saveFlags,
+		flags:       ofnFlags &^ 0x00000200, // one file: not OFN_ALLOWMULTISELECT
 	}
 	ofn.structSize = uint32(unsafe.Sizeof(ofn))
-	if dir := filepath.Dir(suggested); isDir(dir) {
-		ofn.initialDir, _ = windows.UTF16PtrFromString(dir)
-	}
-	if r, _, _ := procGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn))); r == 0 {
+	r, _, _ := procGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if r == 0 {
 		if code, _, _ := procCommDlgExtendedError.Call(); code != 0 {
 			return "", fmt.Errorf("tray: file dialog failed (code %#x)", code)
 		}

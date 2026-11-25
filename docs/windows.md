@@ -129,7 +129,14 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 
 - see the vault's state, where its file is, its size, when it was created and last changed, how many keys it holds, and whether a recovery phrase can unlock it;
 - create a vault when there is none, and lock or unlock it;
-- show the vault file in Explorer, or copy its path.
+- show the vault file in Explorer, or copy its path;
+- back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
+- import a vault from another PC;
+- switch the agent between serving the vault and serving your key files.
+
+**Moving a vault to another PC.** The vault is one file, and its keys stay encrypted under its passphrase wherever it goes. Back it up on the old PC, then on the new one choose **Import…** on the Vault page and pick the file. The tray checks the passphrase before changing anything. Then it stops the agent and copies the file in. If a vault was already there, it is kept beside it as `vault.json.bak-<time>`, along with its `recovery.txt`. The config is switched to vault mode if needed, and the agent is started and unlocked. The imported vault's recovery phrase is whatever it was on the old PC.
+
+**Switching modes.** **Use a vault** sets `[agent].type = "vault"` in `config.toml`, and sets `[vault].vault_path` to the default path beside it if none is configured. **Use key files instead** sets it back to `"keys"`. Either way the agent restarts. The tray edits only those lines, so the file's comments and other settings stay as they were.
 
 The footer runs `sshush selftest`.
 
