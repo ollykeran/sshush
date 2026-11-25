@@ -145,8 +145,17 @@ func TestVaultLayoutFitsAtEverySize(t *testing.T) {
 			for id := range vaultPage {
 				ids = append(ids, id)
 			}
+			// A drop-down's box is as tall as its open list; closed, it is
+			// one field high.
+			closed := func(id uint16) box {
+				b := boxes[id]
+				if id == idAutoLockIdle {
+					b.h = scale(lyFieldH, dpi)
+				}
+				return b
+			}
 			for i, a := range ids {
-				b := boxes[a]
+				b := closed(a)
 				if b.x < 0 || b.w <= 0 || b.x+b.w > size[0] {
 					t.Errorf("dpi %d, %dx%d: vault control %d at %+v falls outside the window", dpi, size[0], size[1], a, b)
 				}
@@ -154,7 +163,7 @@ func TestVaultLayoutFitsAtEverySize(t *testing.T) {
 					t.Errorf("dpi %d, %dx%d: vault control %d at %+v is not between the tabs and the status line", dpi, size[0], size[1], a, b)
 				}
 				for _, c := range ids[i+1:] {
-					if overlaps(b, boxes[c]) {
+					if overlaps(b, closed(c)) {
 						t.Errorf("dpi %d, %dx%d: vault controls %d and %d overlap", dpi, size[0], size[1], a, c)
 					}
 				}
@@ -185,5 +194,28 @@ func TestVaultLayoutCreateAndLockShareAPlace(t *testing.T) {
 	lock := mainLayout(1000, 700, m)[idMainLock]
 	if create.x != lock.x || create.y != lock.y {
 		t.Errorf("create vault at %+v, lock at %+v: want the same place", create, lock)
+	}
+}
+
+func TestVaultLayoutAutoLockColumn(t *testing.T) {
+	m := layoutMetrics{dpi: 96}
+	shown := mainLayout(1000, 700, m)
+	if shown[idAutoLockTitle].x <= shown[vaultRowValue(0)].x {
+		t.Error("the Auto-lock column is not at the right of the facts")
+	}
+	if v := shown[vaultRowValue(0)]; v.x+v.w > shown[idAutoLockTitle].x {
+		t.Errorf("the facts run into the Auto-lock column: %+v, %+v", v, shown[idAutoLockTitle])
+	}
+	if shown[idMainLock].y < shown[idAutoLockIdle].y+scale(lyFieldH, 96) {
+		t.Error("the buttons are not below the Auto-lock settings")
+	}
+	// Hidden, it gives the facts the whole width.
+	m.hidden = map[uint16]bool{}
+	for _, id := range autoLockControls {
+		m.hidden[id] = true
+	}
+	alone := mainLayout(1000, 700, m)
+	if alone[vaultRowValue(0)].w <= shown[vaultRowValue(0)].w {
+		t.Error("the facts do not widen with Auto-lock hidden")
 	}
 }

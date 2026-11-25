@@ -62,6 +62,9 @@ type tray struct {
 	// openOnReady opens the main window once the icon is up.
 	openOnReady bool
 	keyPaths    []string
+	// policy is when the tray locks the vault by itself; see autolock.go.
+	policyMu sync.Mutex
+	policy   LockPolicy
 }
 
 func (t *tray) ready() {
@@ -69,6 +72,7 @@ func (t *tray) ready() {
 	systray.SetTooltip("sshush")
 	// A click on the icon opens the main window; the menu is on right-click.
 	systray.SetOnTapped(t.openMain)
+	t.watchForLeaving()
 	if t.openOnReady {
 		t.openMain()
 	}

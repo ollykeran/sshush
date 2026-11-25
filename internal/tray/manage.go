@@ -68,6 +68,11 @@ const (
 	idVaultMode
 	idVaultPasswd
 	idVaultRecovery
+	idAutoLockTitle
+	idAutoLockSession
+	idAutoLockSleep
+	idAutoLockIdleLabel
+	idAutoLockIdle
 	// The Vault page's facts take two IDs each, from here on; see
 	// vaultRowLabel. Nothing may follow this in the list.
 	idVaultRows
@@ -236,6 +241,12 @@ func mainTemplate() []uint16 {
 		hiddenBtn(idVaultOpenFolder, "Show in E&xplorer"),
 		hiddenBtn(idVaultCopyPath, "Copy path"),
 		hiddenBtn(idVaultMode, modeLabel(false)),
+		// Auto-lock.
+		hiddenLabel(idAutoLockTitle, ssEndEllipsis),
+		dlgItem{style: wsChild | wsTabStop | bsAutoCheckbox, id: idAutoLockSession, class: classButton, text: "Lock when Windows locks"},
+		dlgItem{style: wsChild | wsTabStop | bsAutoCheckbox, id: idAutoLockSleep, class: classButton, text: "Lock when the PC sleeps"},
+		dlgItem{style: wsChild, id: idAutoLockIdleLabel, class: classStatic, text: "Lock after no input:"},
+		dlgItem{style: wsChild | wsTabStop | wsVScroll | cbsDropDownList, id: idAutoLockIdle, class: classComboBox},
 	)
 	items = append(items, []dlgItem{
 		// Status and footer.

@@ -50,15 +50,22 @@ const (
 	lyBodyMinH   = 340
 	lyRowH       = 24 // one of the Vault page's facts
 	lyRowLabelW  = 120
+	lyAutoLockW  = 260 // the Vault page's Auto-lock column
 )
 
 // vaultButtons are the Vault page's actions, in reading order. Create vault
 // and Lock share a place: a vault that does not exist yet cannot be locked.
 var vaultButtons = []uint16{idMainCreateVault, idMainLock, idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport, idVaultOpenFolder, idVaultCopyPath, idVaultMode}
 
+// autoLockControls are the Vault page's Auto-lock settings.
+var autoLockControls = []uint16{idAutoLockTitle, idAutoLockSession, idAutoLockSleep, idAutoLockIdleLabel, idAutoLockIdle}
+
 // vaultPage holds every control on the Vault page.
 var vaultPage = func() map[uint16]bool {
 	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true}
+	for _, id := range autoLockControls {
+		m[id] = true
+	}
 	for _, id := range vaultButtons {
 		m[id] = true
 	}
@@ -238,15 +245,39 @@ func vaultLayout(out map[uint16]box, body box, m layoutMetrics) {
 	out[idVaultSub] = box{body.x, y, body.w, 2 * s(lyLabelH)} // it may wrap once
 	y += 2*s(lyLabelH) + s(lyMargin)
 
-	lw := min(s(lyRowLabelW), body.w/3)
+	// The Auto-lock settings, when shown, take a column at the right of
+	// the facts, so the page grows no taller for them.
+	factsW, top := body.w, y
+	lockBottom := y
+	if !m.hidden[idAutoLockTitle] {
+		cw := min(s(lyAutoLockW), body.w*2/5)
+		factsW = body.w - cw - s(lyMargin)
+		cx := body.x + body.w - cw
+		ly := top
+		out[idAutoLockTitle] = box{cx, ly, cw, s(lyLabelH)}
+		ly += s(lyRowH)
+		out[idAutoLockSession] = box{cx, ly, cw, s(lyFieldH)}
+		ly += s(lyFieldH)
+		out[idAutoLockSleep] = box{cx, ly, cw, s(lyFieldH)}
+		ly += s(lyFieldH) + s(lyGap)
+		out[idAutoLockIdleLabel] = box{cx, ly, cw, s(lyLabelH)}
+		ly += s(lyLabelH) + s(lyGap)/2
+		// A drop-down's height is its list's when open; the closed box is
+		// as tall as the font makes it.
+		out[idAutoLockIdle] = box{cx, ly, min(s(lyComboW), cw), s(160)}
+		lockBottom = ly + s(lyFieldH) + s(lyMargin)
+	}
+
+	lw := min(s(lyRowLabelW), factsW/3)
 	for i := range vaultRowCount {
 		out[vaultRowLabel(i)] = box{body.x, y, lw, s(lyLabelH)}
-		out[vaultRowValue(i)] = box{body.x + lw + gap, y, max(body.w-lw-gap, 0), s(lyLabelH)}
+		out[vaultRowValue(i)] = box{body.x + lw + gap, y, max(factsW-lw-gap, 0), s(lyLabelH)}
 		if !m.hidden[vaultRowLabel(i)] {
 			y += s(lyRowH)
 		}
 	}
 	y += s(lyMargin) - (s(lyRowH) - s(lyLabelH))
+	y = max(y, lockBottom)
 
 	x := body.x
 	for _, id := range vaultButtons {

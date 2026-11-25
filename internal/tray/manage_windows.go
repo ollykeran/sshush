@@ -349,7 +349,7 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		case control(hwnd, idMainStatus):
 			return themedCtlColor(msg, wParam, w.statusErr)
 		}
-		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) {
+		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) || id == idAutoLockTitle {
 			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		}
 		return themedCtlColor(msg, wParam, false)
@@ -402,6 +402,12 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if id == idMainTheme {
 			if code == cbnSelChange {
 				w.themeSelected()
+			}
+			return 1
+		}
+		if id == idAutoLockIdle {
+			if code == cbnSelChange {
+				w.autoLockChanged()
 			}
 			return 1
 		}
@@ -480,6 +486,8 @@ func (w *mainWindow) command(id uint16) bool {
 		w.importVault()
 	case idVaultMode:
 		w.switchMode()
+	case idAutoLockSession, idAutoLockSleep:
+		w.autoLockChanged()
 	case idVaultPasswd:
 		w.changePassphrase()
 	case idVaultRecovery:
@@ -528,6 +536,7 @@ func (w *mainWindow) init() {
 		}
 	}
 	procSendMessageW.Call(control(w.hwnd, idMainStartup), bmSetCheck, boolArg(startupEnabled()), 0)
+	w.initAutoLock()
 	if b := loadSetting(pageValue); len(b) == 1 && b[0] == pageVault {
 		w.page = pageVault
 	}
@@ -829,6 +838,10 @@ func (w *mainWindow) updateButtons() {
 	enable(idVaultCopyPath, va.CopyPath)
 	onVault(idVaultOpenFolder, true)
 	onVault(idVaultCopyPath, true)
+	// Auto-lock is about a vault, so it shows wherever one is in use.
+	for _, id := range autoLockControls {
+		onVault(id, w.state.ConfigIsVault || w.state.isVault())
+	}
 	enable(idVaultPasswd, va.ChangePassphrase)
 	onVault(idVaultPasswd, shown.ChangePassphrase)
 	enable(idVaultRecovery, va.NewRecovery)
@@ -936,6 +949,9 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	}
 	// A check box's box and the gap after it are about as wide as an icon.
 	out[idMainStartup] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainStartup))) + iconW + scale(8, w.ui.dpi)
+	for _, id := range []uint16{idAutoLockSession, idAutoLockSleep} {
+		out[id] = textWidth(w.hwnd, windowText(control(w.hwnd, int(id)))) + iconW + scale(8, w.ui.dpi)
+	}
 	out[idMainThemeLabel] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainThemeLabel)))
 	out[idMainVersion] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainVersion))) + scale(4, w.ui.dpi)
 	return out

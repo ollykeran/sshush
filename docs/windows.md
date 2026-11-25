@@ -133,7 +133,10 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 - show the vault file in Explorer, or copy its path;
 - back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
 - import a vault from another PC;
-- switch the agent between serving the vault and serving your key files.
+- switch the agent between serving the vault and serving your key files;
+- choose when the tray locks the vault by itself (**Auto-lock**): when Windows locks or you switch user, when the PC goes to sleep, and after 5 minutes to an hour without keyboard or mouse input. The first two are on by default; the idle lock is off. The settings are kept in the registry, under `HKCU\Software\sshush\Tray`.
+
+Auto-lock is the tray's: it locks the vault only while the tray is running, and an agent you run without the tray never locks by itself.
 
 **Moving a vault to another PC.** The vault is one file, and its keys stay encrypted under its passphrase wherever it goes. Back it up on the old PC, then on the new one choose **Import…** on the Vault page and pick the file. The tray checks the passphrase before changing anything. Then it stops the agent and copies the file in. If a vault was already there, it is kept beside it as `vault.json.bak-<time>`, along with its `recovery.txt`. The config is switched to vault mode if needed, and the agent is started and unlocked. The imported vault's recovery phrase is whatever it was on the old PC.
 
