@@ -31,10 +31,15 @@ const (
 
 // drawItem is DRAWITEMSTRUCT.
 type drawItem struct {
-	ctlType, ctlID, itemID, itemAction, itemState uint32
-	hwndItem, hdc                                 uintptr
-	rc                                            [4]int32
-	itemData                                      uintptr
+	_         uint32 // CtlType
+	ctlID     uint32
+	_         uint32 // itemID
+	_         uint32 // itemAction
+	itemState uint32
+	hwndItem  uintptr
+	hdc       uintptr
+	rc        [4]int32
+	_         uintptr // itemData
 }
 
 // tabPage is the page a tab button shows, or -1 when id is not a tab.

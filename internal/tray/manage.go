@@ -136,7 +136,7 @@ var mainColumns = []string{"Name", "Type", "Status"}
 // buttonGlyphs gives each button its icon: a code point in Windows' icon font,
 // Segoe Fluent Icons or, before Windows 11, Segoe MDL2 Assets, which share
 // these. The lock, agent and load buttons change icon with what they do; see
-// lockGlyph, agentGlyph and loadGlyph.
+// HeaderLock.glyph, agentGlyph and loadGlyph.
 var buttonGlyphs = map[uint16]rune{
 	idMainAdd:         0xE710, // Add
 	idMainCreateKey:   0xE8D7, // Permissions: a key
@@ -161,14 +161,6 @@ var buttonGlyphs = map[uint16]rune{
 func hasGlyph(id uint16) bool {
 	_, ok := buttonGlyphs[id]
 	return ok || id == idMainLock || id == idMainAgentToggle || id == idMainLoad
-}
-
-// lockGlyph is the lock button's icon: what pressing it does.
-func lockGlyph(a MainActions) rune {
-	if a.Unlock {
-		return 0xE785 // Unlock
-	}
-	return 0xE72E // Lock
 }
 
 // agentGlyph is the start/stop button's icon.
