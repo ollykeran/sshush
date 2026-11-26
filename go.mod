@@ -13,7 +13,9 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/creack/pty v1.1.24
 	github.com/gliderlabs/ssh v0.3.8
+	github.com/kbolino/pageant v0.0.0-20180919004629-179b60797d9f
 	github.com/lrstanley/bubblezone v1.0.0
+	github.com/ndbeals/winssh-pageant v0.0.0-20230609194536-9f88b630ebec
 	github.com/spf13/cobra v1.10.2
 	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.55.0

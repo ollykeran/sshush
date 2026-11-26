@@ -113,6 +113,9 @@ func writeE2EConfig(t *testing.T, dir, socketPath, vaultPath string, keyPaths []
 		b.WriteString(strings.Join(quoted, ", "))
 		b.WriteString("]\n")
 	}
+	// Test agents leave the Pageant window alone: only one process can have
+	// it, so the test that wants it turns this on (pageant_windows_test.go).
+	b.WriteString("pageant_emulation = false\n")
 	if vaultPath != "" {
 		b.WriteString("\n[vault]\n")
 		b.WriteString(fmt.Sprintf("vault_path = %q\n", vaultPath))

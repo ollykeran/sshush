@@ -24,6 +24,12 @@ shell = {{ printf "%q" .Shell }}
 #              (press f on the Agent tab to search again) and 'sshush find'. ~/.ssh and
 #              the current directory are always searched; missing directories are skipped.
 # search_dirs = ["~/keys"]
+{{- if .WindowsAgentPipe }}
+# pageant_emulation: also answer programs that look for PuTTY's Pageant rather than an
+#                    OpenSSH agent: MobaXterm (Settings > SSH > "Use external Pageant"),
+#                    WinSCP, FileZilla, PuTTY. Left alone if another Pageant is running.
+pageant_emulation = true
+{{- end }}
 
 # [vault]
 # vault_path = "~/.config/sshush/vault.json"

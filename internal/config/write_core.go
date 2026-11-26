@@ -21,6 +21,9 @@ type CoreSettings struct {
 	KeyPaths   []string // [agent].key_paths
 	SearchDirs []string // [agent].search_dirs; empty leaves it out
 	VaultPath  string   // [vault].vault_path; "" leaves it out
+	// PageantEmulation is [agent].pageant_emulation, true when the file leaves
+	// it out.
+	PageantEmulation bool
 }
 
 // ReadCoreSettings reads the CoreSettings in the config file at path, as the
@@ -49,12 +52,15 @@ func coreOf(doc configDocument) CoreSettings {
 		KeyPaths:   doc.Agent.KeyPaths,
 		SearchDirs: doc.Agent.SearchDirs,
 		VaultPath:  doc.Vault.VaultPath,
+
+		PageantEmulation: doc.Agent.pageantEmulation(),
 	}
 }
 
 // Equal reports whether s and o say the same thing.
 func (s CoreSettings) Equal(o CoreSettings) bool {
 	return s.AgentType == o.AgentType && s.SocketPath == o.SocketPath && s.VaultPath == o.VaultPath &&
+		s.PageantEmulation == o.PageantEmulation &&
 		slices.Equal(s.KeyPaths, o.KeyPaths) && slices.Equal(s.SearchDirs, o.SearchDirs)
 }
 
@@ -83,6 +89,9 @@ func WriteCoreSettingsToPath(path string, s CoreSettings) error {
 				line = "search_dirs = " + tomlArray(s.SearchDirs)
 			}
 			text = setKey(text, "agent", "search_dirs", line)
+		}
+		if s.PageantEmulation != old.PageantEmulation {
+			text = setKey(text, "agent", "pageant_emulation", fmt.Sprintf("pageant_emulation = %t", s.PageantEmulation))
 		}
 		if s.VaultPath != old.VaultPath {
 			if old.VaultPath == "" && s.VaultPath != "" && !hasKey(text, "vault", "vault_path") {

@@ -47,7 +47,11 @@ type Config struct {
 	// WindowsSSHush is [agent].windows_sshush: sshush.exe as WSL sees it, for
 	// AgentType "windows". Empty means sshush.exe on PATH.
 	WindowsSSHush string
-	Theme         ThemeSection
+	// PageantEmulation is [agent].pageant_emulation: on Windows the agent also
+	// answers programs that look for PuTTY's Pageant (MobaXterm, WinSCP). True
+	// when the file leaves it out.
+	PageantEmulation bool
+	Theme            ThemeSection
 
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
@@ -92,6 +96,14 @@ type agentSection struct {
 	SearchDirs []string `toml:"search_dirs,omitempty"`
 	// WindowsSSHush is only meaningful for type = "windows".
 	WindowsSSHush string `toml:"windows_sshush,omitempty"`
+	// PageantEmulation is a pointer so a file that leaves it out means true.
+	PageantEmulation *bool `toml:"pageant_emulation,omitempty"`
+}
+
+// pageantEmulation is [agent].pageant_emulation, true when the file leaves it
+// out.
+func (a agentSection) pageantEmulation() bool {
+	return a.PageantEmulation == nil || *a.PageantEmulation
 }
 
 type vaultSection struct {
@@ -127,6 +139,10 @@ func toDocument(cfg Config) configDocument {
 		SearchDirs: cfg.SearchDirs,
 
 		WindowsSSHush: cfg.WindowsSSHush,
+	}
+	if !cfg.PageantEmulation {
+		// Only false is written: left out, it is true.
+		a.PageantEmulation = &cfg.PageantEmulation
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -311,6 +327,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		SearchDirs:           doc.Agent.SearchDirs,
 		VaultPath:            vaultPath,
 		WindowsSSHush:        doc.Agent.WindowsSSHush,
+		PageantEmulation:     doc.Agent.pageantEmulation(),
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,

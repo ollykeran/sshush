@@ -67,6 +67,31 @@ func TestSettingsProblems(t *testing.T) {
 	}
 }
 
+func TestSettingsProblems_pageant(t *testing.T) {
+	held := false
+	was := pageantHeldByOther
+	pageantHeldByOther = func() bool { return held }
+	t.Cleanup(func() { pageantHeldByOther = was })
+
+	s := config.CoreSettings{AgentType: config.AgentTypeKeys, SocketPath: `\\.\pipe\sshush`, KeyPaths: []string{}, PageantEmulation: true}
+	if p := problemFor(settingsProblems(s), idSetPageantCaption); p != nil {
+		t.Fatalf("nothing in the way, yet: %+v", p)
+	}
+	held = true
+	if p := problemFor(settingsProblems(s), idSetPageantCaption); p == nil || p.Blocker {
+		t.Errorf("another Pageant running: want a warning, got %+v", p)
+	}
+	s.PageantEmulation = false
+	if p := problemFor(settingsProblems(s), idSetPageantCaption); p != nil {
+		t.Errorf("turned off, nothing to say, got %+v", p)
+	}
+	held = false
+	s.AgentType, s.PageantEmulation = config.AgentTypeExternal, true
+	if p := problemFor(settingsProblems(s), idSetPageantCaption); p == nil || p.Blocker {
+		t.Errorf("external agent: want a warning, got %+v", p)
+	}
+}
+
 func TestSettingsCaptionDefaults(t *testing.T) {
 	if text, p := settingsCaption(idSetKeysCaption, nil); p != nil || !strings.Contains(text, "key files") {
 		t.Errorf("got %q %v", text, p)
@@ -83,6 +108,11 @@ func TestNeedsRestart(t *testing.T) {
 	b.KeyPaths = []string{"k", "l"}
 	if !needsRestart(a, b) {
 		t.Error("new key files need a restart")
+	}
+	c := a
+	c.PageantEmulation = !a.PageantEmulation
+	if !needsRestart(a, c) {
+		t.Error("turning Pageant on or off needs a restart")
 	}
 }
 

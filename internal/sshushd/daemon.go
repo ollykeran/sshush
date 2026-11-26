@@ -16,6 +16,7 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/bridge"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/pageant"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/server"
@@ -163,6 +164,18 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 			ext = agent.NewKDFLockedKeyring(keyring.(sshagent.ExtendedAgent))
 		}
 		handle = func(conn net.Conn) { _ = sshagent.ServeAgent(ext, conn) }
+		if cfg.PageantEmulation {
+			// Pageant clients get the same keyring, but only once the pipe is
+			// this daemon's: one refused because another agent answers there
+			// must not take the Pageant window either. The window is up before
+			// the daemon says it is ready, so a Pageant client started right
+			// after `sshush start` finds it.
+			onPipe := listening
+			listening = func() {
+				pageant.Serve(ext, os.Stderr)
+				onPipe()
+			}
+		}
 	}
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
 	err = agent.ListenAndHandle(ctx, socketPath, handle, agent.WithReady(listening))

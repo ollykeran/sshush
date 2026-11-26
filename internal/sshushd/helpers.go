@@ -96,3 +96,9 @@ func waitForExit(pid int) bool {
 	}
 	return false
 }
+
+// DaemonPID returns the pid the agent daemon's pidfile names, if there is one.
+func DaemonPID(pidFilePath string) (int, bool) {
+	pid, err := readPidFile(pidFilePath)
+	return pid, err == nil
+}
