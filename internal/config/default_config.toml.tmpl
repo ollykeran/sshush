@@ -29,6 +29,11 @@ shell = {{ printf "%q" .Shell }}
 #                    OpenSSH agent: MobaXterm (Settings > SSH > "Use external Pageant"),
 #                    WinSCP, FileZilla, PuTTY. Left alone if another Pageant is running.
 pageant_emulation = true
+# cygwin_socket: the socket file Git Bash's ssh (and MSYS2 and Cygwin programs) reach the
+#                agent through, as they cannot use the pipe. Left out, it is cygwin-agent.sock
+#                beside this file; in Git Bash, 'sshush start --shell bash' prints the line
+#                that points SSH_AUTH_SOCK at it. Set it to "" to turn it off.
+# cygwin_socket = ""
 {{- end }}
 
 # [vault]

@@ -11,6 +11,7 @@ See also: [Setup](setup.md) | [Config](config.md)
 | Agent (`start`, `stop`, `reload`, `list`, `add`, `remove`) | yes |
 | `ssh.exe`, `ssh-add.exe`, Git over SSH through the agent | yes |
 | Pageant programs: MobaXterm, WinSCP, PuTTY ([below](#pageant-programs-mobaxterm-winscp-putty)) | yes |
+| Git Bash and the `ssh` bundled with Git for Windows, MSYS2, Cygwin ([below](#git-bash-msys2-and-cygwin)) | yes |
 | PowerShell integration (`--shell powershell`) | yes |
 | Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | yes |
 | TUI, key creation and editing, clipboard | yes |
@@ -80,7 +81,9 @@ Host *
     IdentityAgent //./pipe/sshush-agent
 ```
 
-The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the block applies to it as well. Adding `IdentityAgent` takes `ssh` away from whichever agent it used before, so sshush leaves this to you.
+Adding `IdentityAgent` takes `ssh` away from whichever agent it used before, so sshush leaves this to you.
+
+The `ssh` that comes with Git for Windows also reads `~\.ssh\config`, but it cannot connect to a named pipe at all, so don't put this block where it applies to that `ssh`. It reaches sshush another way: see [Git Bash, MSYS2 and Cygwin](#git-bash-msys2-and-cygwin).
 
 A path that is not a pipe name is treated as a Unix socket, which Windows supports but `ssh.exe` does not.
 
@@ -105,6 +108,26 @@ Some limits:
 - **Only you can use it.** Requests from another account are ignored.
 - **Requests and replies are limited to 8 KiB,** the most a PuTTY-family program has room for. That covers dozens of keys; an agent with too many keys to list in that space answers with a failure.
 - **Only the window is served,** not Pageant's newer named pipe. PuTTY 0.75 and later try the pipe first and then use the window.
+
+## Git Bash, MSYS2 and Cygwin
+
+Git for Windows comes with its own `ssh`, built for MSYS2. Git Bash runs it, and so does `git` itself unless told otherwise. That includes `git` run from VS Code, JetBrains IDEs and other tools. Cygwin's and MSYS2's `ssh` work the same way. None of them can use a named pipe or Pageant. They expect `SSH_AUTH_SOCK` to name a Unix socket, which Cygwin imitates with a small file pointing at a local network port.
+
+The agent writes such a file and answers on it, with the same keys. By default it is `cygwin-agent.sock` beside `config.toml` (`~\.config\sshush\cygwin-agent.sock`). `[agent].cygwin_socket` puts it somewhere else, and `cygwin_socket = ""` turns it off. The file only exists while the agent runs.
+
+In Git Bash, `sshush start --shell bash` prints the line that points `SSH_AUTH_SOCK` at that file. `--shell bash` matters when the config says `shell = "powershell"`, as it does if sshush first ran in PowerShell. To set it in every Git Bash window, add this to `~/.bashrc`:
+
+```bash
+eval "$(sshush start --shell bash)"
+```
+
+`ssh`, `ssh-add` and `git` in that shell then use sshush. For `git` started from somewhere other than Git Bash, such as an IDE, either set `SSH_AUTH_SOCK` for your Windows account to the file's path, or have `git` use Windows' OpenSSH, which finds sshush with no setting:
+
+```powershell
+git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe
+```
+
+Only you can use the file. A program has to read the secret in it to get past the first exchange, and the file is readable by you alone.
 
 ## Paths
 
