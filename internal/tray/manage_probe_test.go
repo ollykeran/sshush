@@ -36,17 +36,25 @@ func TestProbeMainKeyringListsItsKeys(t *testing.T) {
 	if err := kr.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "mem"}); err != nil {
 		t.Fatal(err)
 	}
-	s := ProbeMain(vaultops.Env{SocketPath: serveKeyring(t, kr)})
-	if !s.Reachable || s.isVault() || s.Listing {
+	s := ProbeMain(vaultops.Env{SocketPath: serveKeyring(t, kr), VaultPath: filepath.Join(t.TempDir(), "vault.json")})
+	if !s.Reachable || s.isVault() {
 		t.Fatalf("got %+v", s)
 	}
 	if rows := s.Rows(); len(rows) != 1 || rows[0].Comment != "mem" {
 		t.Errorf("rows: got %+v", rows)
 	}
+	// The vault file is read beside the agent, for the Vault page alone.
+	if !s.VaultAside || !s.Listing || s.ListErr != nil || s.showsVault() || s.needsVault() {
+		t.Errorf("vault beside a keyring: got %+v", s)
+	}
+	if va := vaultActions(s); !va.CreateVault || va.Unlock || va.Lock {
+		t.Errorf("vault actions beside a keyring: got %+v", va)
+	}
 }
 
 func TestProbeMainNoAgentReadsTheFile(t *testing.T) {
-	s := ProbeMain(vaultops.Env{SocketPath: filepath.Join(t.TempDir(), "none.sock"), VaultPath: filepath.Join(t.TempDir(), "vault.json")})
+	vaultFile := filepath.Join(t.TempDir(), "vault.json")
+	s := ProbeMain(vaultops.Env{SocketPath: filepath.Join(t.TempDir(), "none.sock"), VaultPath: vaultFile, AgentVaultPath: vaultFile})
 	if s.Reachable || !s.Listing || s.ListErr != nil || s.Listed.Initialized {
 		t.Errorf("got %+v", s)
 	}

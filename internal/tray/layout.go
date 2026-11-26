@@ -6,12 +6,17 @@ package tray
 // plain arithmetic, so it is tested on every OS.
 //
 // Under a header naming the agent, with the button that starts or stops it,
-// a tab strip switches the body between two pages. The Keys page follows the
-// list/details pattern: a command bar for what is not about one key, the keys
-// on the left, and on the right everything about the one selected, with what
-// can be done to it. The Vault page is about the vault itself: its state, a
-// column of facts, and its actions. Below both, a status line and a footer
-// of settings. Both pages are always placed; the window shows one.
+// a tab strip switches the body between three pages. The Keys page follows
+// the list/details pattern: a command bar for what is not about one key, the
+// keys on the left, and on the right everything about the one selected, with
+// what can be done to it. The Vault page is laid out the same way: what the
+// vault is on the left, and on the right what can be done to it, as settings
+// cards in groups, after Windows' own Settings: a title and a line of
+// explanation, and the control at the right, every card's button the same
+// width. The Settings page edits config in cards too. Controls are greyed,
+// not hidden, when they cannot be used, so nothing moves as the state
+// changes. Below every page, a status line and a footer. Every page is always
+// placed; the window shows one.
 
 // box is a control's rectangle in client pixels.
 type box struct{ x, y, w, h int }
@@ -47,26 +52,31 @@ const (
 	lyPubMinLine = 2
 	lyPubMaxLine = 6
 	lyComboW     = 132
-	lyBodyMinH   = 340
+	lyBodyMinH   = 360
 	lyRowH       = 24 // one of the Vault page's facts
 	lyRowLabelW  = 120
-	lyAutoLockW  = 260 // the Vault page's Auto-lock column
+	lyHeaderH    = 20  // a section's header on a card page
+	lyCardH      = 38  // a card: a title over a secondary line
+	lyCardBtnW   = 120 // the narrowest card button, after Fluent's
+	lySectionGap = 12
 )
 
-// vaultButtons are the Vault page's actions, in reading order. Create vault
-// and Lock share a place: a vault that does not exist yet cannot be locked.
-var vaultButtons = []uint16{idMainCreateVault, idMainLock, idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport, idVaultOpenFolder, idVaultCopyPath, idVaultMode}
+// vaultCardButtons are the Vault page's card buttons, which share one width.
+var vaultCardButtons = []uint16{idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport, idVaultMode}
 
 // autoLockControls are the Vault page's Auto-lock settings.
-var autoLockControls = []uint16{idAutoLockTitle, idAutoLockSession, idAutoLockSleep, idAutoLockIdleLabel, idAutoLockIdle}
+var autoLockControls = []uint16{idAutoLockTitle, idAutoLockCaption, idAutoLockSession, idAutoLockSleep, idAutoLockIdleLabel, idAutoLockIdle}
 
 // vaultPage holds every control on the Vault page.
 var vaultPage = func() map[uint16]bool {
-	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true}
+	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true, idMainLock: true, idVaultOpenFolder: true, idVaultCopyPath: true}
 	for _, id := range autoLockControls {
 		m[id] = true
 	}
-	for _, id := range vaultButtons {
+	for _, id := range vaultCardButtons {
+		m[id] = true
+	}
+	for id := uint16(idVaultSecHeader); id <= idVaultModeCaption; id++ {
 		m[id] = true
 	}
 	for i := range vaultRowCount {
@@ -74,6 +84,28 @@ var vaultPage = func() map[uint16]bool {
 	}
 	return m
 }()
+
+// settingsPage holds every control on the Settings page: its own, and the
+// tray's theme and start-up settings.
+var settingsPage = func() map[uint16]bool {
+	m := map[uint16]bool{idMainThemeLabel: true, idMainTheme: true, idMainStartup: true}
+	for id := uint16(idSetAgentHeader); id <= idSetDiscard; id++ {
+		m[id] = true
+	}
+	return m
+}()
+
+// sectionHeaders head the groups of cards, in the section font.
+var sectionHeaders = []uint16{idVaultSecHeader, idAutoLockTitle, idVaultFileHeader, idVaultModeHeader,
+	idSetAgentHeader, idSetVaultHeader, idSetTrayHeader, idSetKeysHeader, idSetDirsHeader}
+
+// secondaryLabels are drawn in the secondary text colour: the cards'
+// explanations.
+var secondaryLabels = map[uint16]bool{
+	idVaultPasswdCaption: true, idVaultRecoveryCaption: true, idVaultFileCaption: true, idVaultModeCaption: true,
+	idAutoLockCaption: true, idSetTypeCaption: true, idSetSocketCaption: true, idSetVaultCaption: true,
+	idSetKeysCaption: true, idSetDirsCaption: true,
+}
 
 // detailButtons are the selected key's actions, in reading order. Remove is
 // apart from the rest, at the far end, so it is not pressed for its neighbour.
@@ -120,9 +152,10 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 
 	// The page tabs, side by side, the same width.
 	tabY := margin + s(lyTitleH+lyLabelH) + gap
-	tw := max(nat(idMainTabKeys, 90), nat(idMainTabVault, 90))
+	tw := max(nat(idMainTabKeys, 90), nat(idMainTabVault, 90), nat(idMainTabSettings, 90))
 	out[idMainTabKeys] = box{margin, tabY, tw, btnH}
 	out[idMainTabVault] = box{margin + tw, tabY, tw, btnH}
+	out[idMainTabSettings] = box{margin + 2*tw, tabY, tw, btnH}
 
 	// Command bar: what is not about one key.
 	barY := tabY + btnH + gap
@@ -141,20 +174,10 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	// Footer and the status line above it.
 	footY := ch - margin - btnH
 	statusY := footY - gap - s(lyLabelH)
-	x = margin
-	out[idMainSelftest] = box{x, footY, nat(idMainSelftest, 110), btnH}
-	x += out[idMainSelftest].w + s(lyMargin)
-	lw := nat(idMainThemeLabel, 44)
-	out[idMainThemeLabel] = box{x, footY + (btnH-s(lyLabelH))/2, lw, s(lyLabelH)}
-	x += lw + gap
-	// A drop-down list's height includes its open list.
-	out[idMainTheme] = box{x, footY + (btnH-s(lyFieldH))/2, s(lyComboW), s(160)}
-	x += s(lyComboW) + s(lyMargin)
-	out[idMainStartup] = box{x, footY + (btnH-s(lyFieldH))/2, nat(idMainStartup, 140), s(lyFieldH)}
-	// The version is the least of the footer: it shortens, then goes, to
-	// make room for the settings.
-	afterStartup := out[idMainStartup].x + out[idMainStartup].w + s(lyMargin)
-	vw := max(min(nat(idMainVersion, 80), right-afterStartup), 0)
+	out[idMainSelftest] = box{margin, footY, nat(idMainSelftest, 110), btnH}
+	// The version is the least of the footer: it shortens, then goes.
+	afterSelftest := margin + out[idMainSelftest].w + s(lyMargin)
+	vw := max(min(nat(idMainVersion, 80), right-afterSelftest), 0)
 	out[idMainVersion] = box{right - vw, footY + (btnH-s(lyLabelH))/2, vw, s(lyLabelH)}
 	out[idMainStatus] = box{margin, statusY, right - margin, s(lyLabelH)}
 
@@ -162,10 +185,7 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	bodyY := barY + btnH + gap
 	bodyH := max(statusY-gap-bodyY, 0)
 	inner := right - margin
-	listW := min(max((inner-s(lyMargin))*5/12, s(lyListMinW)), s(lyListMaxW))
-	if inner-listW-s(lyMargin) < s(lyDetailMinW) {
-		listW = max(inner-s(lyMargin)-s(lyDetailMinW), s(lyListMinW))
-	}
+	listW := splitWidth(inner, m.dpi)
 	out[idMainList] = box{margin, bodyY, listW, bodyH}
 
 	dx := margin + listW + s(lyMargin)
@@ -224,73 +244,200 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	}
 	out[idMainRemove] = box{dx + dw - rw, y, rw, btnH}
 
-	vaultLayout(out, box{margin, barY, inner, max(statusY-gap-barY, 0)}, m)
+	page := box{margin, barY, inner, max(statusY-gap-barY, 0)}
+	vaultLayout(out, page, m)
+	settingsLayout(out, page, m)
 	return out
 }
 
-// vaultLayout places the Vault page in body: its title and what it means,
-// the facts as label and value, and the actions in a row that wraps.
+// splitWidth is the width of the left pane of a body inner wide: five
+// twelfths, within limits, leaving the right pane its narrowest.
+func splitWidth(inner, dpi int) int {
+	s := func(v int) int { return scale(v, dpi) }
+	w := min(max((inner-s(lyMargin))*5/12, s(lyListMinW)), s(lyListMaxW))
+	if inner-w-s(lyMargin) < s(lyDetailMinW) {
+		w = max(inner-s(lyMargin)-s(lyDetailMinW), s(lyListMinW))
+	}
+	return w
+}
+
+// cardKit places a card page's parts, down a pane from y.
+type cardKit struct {
+	out     map[uint16]box
+	m       layoutMetrics
+	x, w, y int
+}
+
+func (k *cardKit) s(v int) int { return scale(v, k.m.dpi) }
+
+func (k *cardKit) nat(id uint16, fallback int) int {
+	if w, ok := k.m.natural[id]; ok {
+		return w
+	}
+	return k.s(fallback)
+}
+
+// header places a section's header, after a gap unless it is the first.
+func (k *cardKit) header(id uint16, first bool) {
+	if !first {
+		k.y += k.s(lySectionGap)
+	}
+	k.out[id] = box{k.x, k.y, k.w, k.s(lyLabelH)}
+	k.y += k.s(lyHeaderH)
+}
+
+// line places a label a line high across the pane.
+func (k *cardKit) line(id uint16) {
+	k.out[id] = box{k.x, k.y, k.w, k.s(lyLabelH)}
+	k.y += k.s(lyLabelH)
+}
+
+// card places a title over a caption at the left and controls, each ctrlW
+// wide, at the right, centred on the card.
+func (k *cardKit) card(title, caption uint16, ctrlW int, controls ...uint16) {
+	gap, h := k.s(lyGap), k.s(lyCardH)
+	cx := k.x + k.w
+	for i := len(controls) - 1; i >= 0; i-- {
+		cx -= ctrlW
+		k.out[controls[i]] = box{cx, k.y + (h-k.s(lyButtonH))/2, ctrlW, k.s(lyButtonH)}
+		cx -= gap
+	}
+	tw := max(cx-k.x, 0)
+	k.out[title] = box{k.x, k.y + (h-2*k.s(lyLabelH))/2, tw, k.s(lyLabelH)}
+	k.out[caption] = box{k.x, k.y + h/2, tw, k.s(lyLabelH)}
+	k.y += h
+}
+
+// field places a title over an edit box, with a button at its right, and a
+// caption below, which says what is wrong with it when something is.
+func (k *cardKit) field(title, edit, button, caption uint16, btnW int) {
+	gap, btnH, fieldH := k.s(lyGap), k.s(lyButtonH), k.s(lyFieldH)
+	k.line(title)
+	k.y += k.s(4)
+	k.out[button] = box{k.x + k.w - btnW, k.y, btnW, btnH}
+	k.out[edit] = box{k.x, k.y + (btnH-fieldH)/2, max(k.w-btnW-gap, 0), fieldH}
+	k.y += btnH + k.s(2)
+	k.line(caption)
+}
+
+// widest is the widest of ids' natural widths, and at least a card button's.
+func (k *cardKit) widest(ids ...uint16) int {
+	w := k.s(lyCardBtnW)
+	for _, id := range ids {
+		w = max(w, k.nat(id, lyCardBtnW))
+	}
+	return w
+}
+
+// vaultLayout places the Vault page in body: on the left its state, with
+// the primary button, and its facts; on the right its cards.
 func vaultLayout(out map[uint16]box, body box, m layoutMetrics) {
 	s := func(v int) int { return scale(v, m.dpi) }
-	nat := func(id uint16, fallback int) int {
-		if w, ok := m.natural[id]; ok {
-			return w
-		}
-		return s(fallback)
-	}
 	gap, btnH := s(lyGap), s(lyButtonH)
-	y := body.y
-	out[idVaultTitle] = box{body.x, y, body.w, s(lyDetailH)}
-	y += s(lyDetailH)
-	out[idVaultSub] = box{body.x, y, body.w, 2 * s(lyLabelH)} // it may wrap once
-	y += 2*s(lyLabelH) + s(lyMargin)
+	lw := splitWidth(body.w, m.dpi)
+	left := &cardKit{out: out, m: m, x: body.x, w: lw, y: body.y}
 
-	// The Auto-lock settings, when shown, take a column at the right of
-	// the facts, so the page grows no taller for them.
-	factsW, top := body.w, y
-	lockBottom := y
-	if !m.hidden[idAutoLockTitle] {
-		cw := min(s(lyAutoLockW), body.w*2/5)
-		factsW = body.w - cw - s(lyMargin)
-		cx := body.x + body.w - cw
-		ly := top
-		out[idAutoLockTitle] = box{cx, ly, cw, s(lyLabelH)}
-		ly += s(lyRowH)
-		out[idAutoLockSession] = box{cx, ly, cw, s(lyFieldH)}
-		ly += s(lyFieldH)
-		out[idAutoLockSleep] = box{cx, ly, cw, s(lyFieldH)}
-		ly += s(lyFieldH) + s(lyGap)
-		out[idAutoLockIdleLabel] = box{cx, ly, cw, s(lyLabelH)}
-		ly += s(lyLabelH) + s(lyGap)/2
-		// A drop-down's height is its list's when open; the closed box is
-		// as tall as the font makes it.
-		out[idAutoLockIdle] = box{cx, ly, min(s(lyComboW), cw), s(160)}
-		lockBottom = ly + s(lyFieldH) + s(lyMargin)
-	}
+	pw := left.widest(idMainLock)
+	out[idMainLock] = box{body.x + lw - pw, body.y, pw, btnH}
+	out[idVaultTitle] = box{body.x, body.y, max(lw-pw-gap, 0), s(lyDetailH)}
+	// The explanation starts below the button, and may wrap twice.
+	out[idVaultSub] = box{body.x, body.y + btnH + s(4), lw, 3 * s(lyLabelH)}
+	y := body.y + btnH + s(4) + 3*s(lyLabelH) + s(lyMargin)
 
-	lw := min(s(lyRowLabelW), factsW/3)
+	labelW := min(s(lyRowLabelW), lw/3)
 	for i := range vaultRowCount {
-		out[vaultRowLabel(i)] = box{body.x, y, lw, s(lyLabelH)}
-		out[vaultRowValue(i)] = box{body.x + lw + gap, y, max(factsW-lw-gap, 0), s(lyLabelH)}
+		out[vaultRowLabel(i)] = box{body.x, y, labelW, s(lyLabelH)}
+		out[vaultRowValue(i)] = box{body.x + labelW + gap, y, max(lw-labelW-gap, 0), s(lyLabelH)}
 		if !m.hidden[vaultRowLabel(i)] {
 			y += s(lyRowH)
 		}
 	}
-	y += s(lyMargin) - (s(lyRowH) - s(lyLabelH))
-	y = max(y, lockBottom)
-
+	y += s(lyGap)
 	x := body.x
-	for _, id := range vaultButtons {
-		if m.hidden[id] {
-			continue
-		}
-		w := nat(id, 100)
-		if x > body.x && x+w > body.x+body.w {
-			x, y = body.x, y+btnH+gap
-		}
+	for _, id := range []uint16{idVaultOpenFolder, idVaultCopyPath} {
+		w := left.nat(id, 110)
 		out[id] = box{x, y, w, btnH}
 		x += w + gap
 	}
+
+	rx := body.x + lw + s(lyMargin)
+	k := &cardKit{out: out, m: m, x: rx, w: max(body.x+body.w-rx, 0), y: body.y}
+	bw := k.widest(vaultCardButtons...)
+	k.header(idVaultSecHeader, true)
+	k.card(idVaultPasswdTitle, idVaultPasswdCaption, bw, idVaultPasswd)
+	k.card(idVaultRecoveryTitle, idVaultRecoveryCaption, bw, idVaultRecovery)
+
+	k.header(idAutoLockTitle, false)
+	k.line(idAutoLockCaption)
+	for _, id := range []uint16{idAutoLockSession, idAutoLockSleep} {
+		out[id] = box{k.x, k.y, k.w, s(24)}
+		k.y += s(24)
+	}
+	// A drop-down's height is its list's when open; the closed box is as
+	// tall as the font makes it, about a field.
+	cw := min(bw, k.w)
+	out[idAutoLockIdle] = box{k.x + k.w - cw, k.y + s(2), cw, s(160)}
+	out[idAutoLockIdleLabel] = box{k.x, k.y + s(2) + (s(lyFieldH)-s(lyLabelH))/2, max(k.w-cw-gap, 0), s(lyLabelH)}
+	k.y += s(lyFieldH) + s(4)
+
+	k.header(idVaultFileHeader, false)
+	k.card(idVaultFileTitle, idVaultFileCaption, bw, idVaultBackup, idVaultImport)
+	k.header(idVaultModeHeader, false)
+	k.card(idVaultModeTitle, idVaultModeCaption, bw, idVaultMode)
+}
+
+// settingsLayout places the Settings page in body: the agent, the vault and
+// the tray's own settings on the left; the lists of key files and search
+// folders on the right, sharing its height, then Save.
+func settingsLayout(out map[uint16]box, body box, m layoutMetrics) {
+	s := func(v int) int { return scale(v, m.dpi) }
+	gap, btnH := s(lyGap), s(lyButtonH)
+	lw := (body.w - s(lyMargin)) / 2
+	k := &cardKit{out: out, m: m, x: body.x, w: lw, y: body.y}
+	bw := k.widest(idSetSocketDefault, idSetVaultBrowse)
+
+	k.header(idSetAgentHeader, true)
+	comboW := min(s(lyComboW+28), k.w)
+	k.card(idSetTypeTitle, idSetTypeCaption, comboW, idSetType)
+	// The drop-down: closed, a field high, centred; open, its list.
+	t := out[idSetType]
+	out[idSetType] = box{t.x, t.y + (t.h-s(lyFieldH))/2, t.w, s(160)}
+	k.y += s(6)
+	k.field(idSetSocketTitle, idSetSocket, idSetSocketDefault, idSetSocketCaption, bw)
+
+	k.header(idSetVaultHeader, false)
+	k.field(idSetVaultTitle, idSetVaultPath, idSetVaultBrowse, idSetVaultCaption, bw)
+
+	k.header(idSetTrayHeader, false)
+	out[idMainTheme] = box{k.x + k.w - comboW, k.y + s(3), comboW, s(160)}
+	out[idMainThemeLabel] = box{k.x, k.y + s(3) + (s(lyFieldH)-s(lyLabelH))/2, max(k.w-comboW-gap, 0), s(lyLabelH)}
+	k.y += btnH
+	out[idMainStartup] = box{k.x, k.y, k.w, s(24)}
+
+	// The right: two lists that share what height there is, and Save last.
+	rx := body.x + lw + s(lyMargin)
+	rw := max(body.x+body.w-rx, 0)
+	bottom := body.y + body.h
+	sw := k.nat(idSetSave, 90)
+	out[idSetSave] = box{rx + rw - sw, bottom - btnH, sw, btnH}
+	dw := k.nat(idSetDiscard, 120)
+	out[idSetDiscard] = box{out[idSetSave].x - gap - dw, bottom - btnH, dw, btnH}
+	each := s(lyHeaderH) + s(lyLabelH) + s(4) + gap + btnH
+	listH := max((bottom-btnH-s(lyMargin)-body.y-s(lySectionGap)-2*each)/2, s(40))
+	r := &cardKit{out: out, m: m, x: rx, w: rw, y: body.y}
+	list := func(header, caption, lst, add, remove uint16, first bool) {
+		r.header(header, first)
+		r.line(caption)
+		r.y += s(4)
+		out[lst] = box{rx, r.y, rw, listH}
+		r.y += listH + gap
+		aw := r.nat(add, 110)
+		out[add] = box{rx, r.y, aw, btnH}
+		out[remove] = box{rx + aw + gap, r.y, r.nat(remove, 90), btnH}
+		r.y += btnH
+	}
+	list(idSetKeysHeader, idSetKeysCaption, idSetKeysList, idSetKeysAdd, idSetKeysRemove, true)
+	list(idSetDirsHeader, idSetDirsCaption, idSetDirsList, idSetDirsAdd, idSetDirsRemove, false)
 }
 
 // detailButtonRows is how many rows the key's actions take in a pane dw wide.

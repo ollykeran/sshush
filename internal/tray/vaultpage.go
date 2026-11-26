@@ -25,6 +25,8 @@ type VaultView struct {
 	// Path is the vault file, or where one would be created; "" when there is
 	// none to point at.
 	Path string
+	// Captions are the secondary lines of the page's cards, by control ID.
+	Captions map[uint16]string
 }
 
 // VaultActions says which of the Vault tab's buttons do anything.
@@ -47,7 +49,10 @@ func (s MainState) vaultPath() string {
 	if s.Listing && s.ListErr == nil && s.Listed.VaultPath != "" {
 		return s.Listed.VaultPath
 	}
-	return s.ConfiguredVault
+	if s.ConfiguredVault != "" {
+		return s.ConfiguredVault
+	}
+	return s.VaultFile
 }
 
 // vaultOf describes the vault for the Vault tab.
@@ -55,14 +60,20 @@ func vaultOf(s MainState) VaultView {
 	v := VaultView{Title: "Vault", Path: s.vaultPath()}
 	locked := s.isVault() && s.Backend.VaultLocked
 	switch {
-	case s.Reachable && !s.isVault():
-		v.Title = "Not using a vault"
-		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC: use one, or import one you have."
-	case s.needsVault():
-		v.Title = "No vault yet"
-		v.Sub = "Create one to keep your keys encrypted in a single file you can take to another PC."
 	case s.ListErr != nil && !(locked && vaultops.CodeOf(s.ListErr) == vaultops.CodeVaultLocked):
 		v.Sub = describeLine(s.ListErr)
+	case s.noVaultYet() && s.VaultAside:
+		v.Title = "No vault yet"
+		v.Sub = "The agent serves key files. Create a vault to keep your keys encrypted in one file you can take to another PC, then switch the agent to it when you are ready."
+	case s.noVaultYet():
+		v.Title = "No vault yet"
+		v.Sub = "Create one to keep your keys encrypted in a single file you can take to another PC."
+	case !s.Listing:
+		v.Title = "Not using a vault"
+		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC: use one, or import one you have."
+	case s.VaultAside:
+		v.Title = "Vault · not in use"
+		v.Sub = "The agent serves key files. You can still back up the vault and change its secrets; switch the agent to it to use its keys."
 	case !s.Reachable:
 		v.Title = "Vault · agent stopped"
 		v.Sub = "Start the agent to unlock the vault and use its keys."
@@ -73,11 +84,12 @@ func vaultOf(s MainState) VaultView {
 		v.Title = "Vault · unlocked"
 		v.Sub = "Its keys are available to ssh. Lock it to take them out of memory."
 	}
+	v.Captions = vaultCaptions(s)
 	if v.Path == "" {
 		return v
 	}
 	v.Rows = append(v.Rows, VaultRow{"Location", utils.DisplayPath(v.Path)})
-	if !s.showsVault() {
+	if !s.hasVault() {
 		return v
 	}
 	if s.FileFound {
@@ -92,21 +104,55 @@ func vaultOf(s MainState) VaultView {
 	return v
 }
 
+// vaultCaptions is the secondary line of each of the Vault page's cards.
+func vaultCaptions(s MainState) map[uint16]string {
+	c := map[uint16]string{
+		idVaultPasswdCaption:   "Change the passphrase that unlocks the vault.",
+		idVaultRecoveryCaption: "Replace the 24 words that unlock the vault if you forget the passphrase.",
+		idVaultFileCaption:     "Save a copy of the vault, or use one from another PC.",
+		idAutoLockCaption:      "When the tray takes the vault's keys out of memory.",
+	}
+	if s.hasVault() {
+		switch s.Listed.Recovery {
+		case vaultops.RecoveryOn:
+			c[idVaultRecoveryCaption] = "Set up. A new phrase replaces the old one."
+		case vaultops.RecoveryOff:
+			c[idVaultRecoveryCaption] = "Not set up: only the passphrase unlocks the vault."
+		}
+	} else {
+		c[idVaultPasswdCaption] = "Create the vault first."
+		c[idVaultRecoveryCaption] = "Create the vault first."
+	}
+	if !s.ConfigIsVault && !s.isVault() {
+		c[idAutoLockCaption] = "Applies once the agent serves the vault."
+	}
+	switch {
+	case !s.Managed:
+		c[idVaultModeCaption] = "The agent is not one sshush runs."
+	case s.ConfigIsVault:
+		c[idVaultModeCaption] = "The agent serves the vault's keys."
+	default:
+		c[idVaultModeCaption] = "The agent serves key files."
+	}
+	return c
+}
+
 // vaultActions works out VaultActions for s.
 func vaultActions(s MainState) VaultActions {
 	a := mainActions(s, nil)
 	path := s.vaultPath() != ""
 	return VaultActions{
-		CreateVault: a.CreateVault,
+		// A vault can be created whether or not the agent serves it yet.
+		CreateVault: s.noVaultYet(),
 		Lock:        a.Lock,
 		Unlock:      a.Unlock,
 		OpenFolder:  path,
 		CopyPath:    path,
-		Backup:      s.showsVault() && s.FileFound,
+		Backup:      s.hasVault() && s.FileFound,
 		// Either goes through the agent serving the vault, or with none,
 		// to its file.
-		ChangePassphrase: s.showsVault(),
-		NewRecovery:      s.showsVault(),
+		ChangePassphrase: s.hasVault(),
+		NewRecovery:      s.hasVault(),
 		// Importing restarts the agent, as switching does, so both need an
 		// agent this sshush runs.
 		Import:   s.Managed,
@@ -115,12 +161,64 @@ func vaultActions(s MainState) VaultActions {
 	}
 }
 
+// PrimaryKind is what the Vault page's primary button does.
+type PrimaryKind int
+
+// The primary button's actions.
+const (
+	PrimaryCreate PrimaryKind = iota
+	PrimaryUnlock
+	PrimaryLock
+)
+
+// VaultPrimary is the Vault page's one primary button: always in the same
+// place, named for what it does now, and greyed when it cannot.
+type VaultPrimary struct {
+	Kind    PrimaryKind
+	Enabled bool
+}
+
+// vaultPrimary works out the primary button for a's state.
+func vaultPrimary(a VaultActions) VaultPrimary {
+	switch {
+	case a.CreateVault:
+		return VaultPrimary{PrimaryCreate, true}
+	case a.Lock:
+		return VaultPrimary{PrimaryLock, true}
+	}
+	// Unlocking needs the agent to serve the vault; until it does, the
+	// button says what it would do, greyed.
+	return VaultPrimary{PrimaryUnlock, a.Unlock}
+}
+
+// label names the primary button.
+func (p VaultPrimary) label() string {
+	switch p.Kind {
+	case PrimaryCreate:
+		return "&Create vault…"
+	case PrimaryLock:
+		return "&Lock"
+	}
+	return "Unlo&ck…"
+}
+
+// glyph is the primary button's icon.
+func (p VaultPrimary) glyph() rune {
+	switch p.Kind {
+	case PrimaryCreate:
+		return 0xE8F4 // NewFolder
+	case PrimaryLock:
+		return 0xE72E // Lock
+	}
+	return 0xE785 // Unlock
+}
+
 // modeLabel names the mode button by what pressing it does.
 func modeLabel(useKeys bool) string {
 	if useKeys {
-		return "Use key files instead"
+		return "Use key files"
 	}
-	return "Use a vault"
+	return "Use the vault"
 }
 
 // keysLabel counts a vault's keys and, when the agent says, how many it is

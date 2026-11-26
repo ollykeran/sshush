@@ -178,3 +178,80 @@ func TestSwitchQuestion(t *testing.T) {
 		t.Errorf("to keys: %q", q)
 	}
 }
+
+// keysAside is an agent serving key files, with the vault read from its file.
+func keysAside(initialized bool) MainState {
+	return MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys", SpeaksOps: true},
+		Keys: nil, Listing: true, VaultAside: true, VaultFile: "/v/vault.json",
+		Listed: vaultops.ListResult{Initialized: initialized, VaultPath: "/v/vault.json"}}
+}
+
+func TestVaultPageInKeysMode(t *testing.T) {
+	none := keysAside(false)
+	v, va := vaultOf(none), vaultActions(none)
+	if v.Title != "No vault yet" || !strings.Contains(v.Sub, "key files") || v.Path != "/v/vault.json" {
+		t.Errorf("no vault: %q / %q / %q", v.Title, v.Sub, v.Path)
+	}
+	if !va.CreateVault || va.ChangePassphrase || va.Backup || !va.UseVault {
+		t.Errorf("no vault: actions %+v", va)
+	}
+	if p := vaultPrimary(va); p.Kind != PrimaryCreate || !p.Enabled {
+		t.Errorf("no vault: primary %+v", p)
+	}
+
+	have := keysAside(true)
+	have.FileFound = true
+	v, va = vaultOf(have), vaultActions(have)
+	if v.Title != "Vault · not in use" || len(v.Rows) < 2 {
+		t.Errorf("vault aside: %q, rows %+v", v.Title, v.Rows)
+	}
+	if va.CreateVault || !va.ChangePassphrase || !va.NewRecovery || !va.Backup || va.Lock || va.Unlock || !va.UseVault {
+		t.Errorf("vault aside: actions %+v", va)
+	}
+	// Unlocking needs the agent to serve the vault: it shows, greyed.
+	if p := vaultPrimary(va); p.Kind != PrimaryUnlock || p.Enabled {
+		t.Errorf("vault aside: primary %+v", p)
+	}
+	if c := v.Captions[idVaultModeCaption]; !strings.Contains(c, "key files") {
+		t.Errorf("mode caption %q", c)
+	}
+	if c := v.Captions[idAutoLockCaption]; !strings.Contains(c, "once the agent serves") {
+		t.Errorf("auto-lock caption %q", c)
+	}
+}
+
+func TestKeysPageIgnoresAVaultAside(t *testing.T) {
+	s := keysAside(true)
+	s.Listed.Identities = []vaultops.IdentityView{{Fingerprint: "SHA256:v"}}
+	if s.showsVault() || s.needsVault() || len(s.Rows()) != 0 {
+		t.Errorf("the Keys page shows the vault aside: %+v", s.Rows())
+	}
+	if text, _ := mainStatus(s); !strings.Contains(text, "0 keys in the agent") {
+		t.Errorf("status %q", text)
+	}
+	broken := keysAside(false)
+	broken.ListErr = &vaultops.OpError{Code: vaultops.CodeVaultUnreadable, Msg: "open vault: bad"}
+	if text, isErr := mainStatus(broken); isErr || strings.Contains(text, "bad") {
+		t.Errorf("a broken vault aside shows on the Keys page: %q", text)
+	}
+	if v := vaultOf(broken); !strings.Contains(v.Sub, "bad") || v.Path != "/v/vault.json" {
+		t.Errorf("but not on the Vault page: %+v", v)
+	}
+}
+
+func TestVaultPrimary(t *testing.T) {
+	locked := vaultUp()
+	locked.Backend.VaultLocked = true
+	for name, tc := range map[string]struct {
+		s    MainState
+		want VaultPrimary
+	}{
+		"unlocked": {vaultUp(), VaultPrimary{PrimaryLock, true}},
+		"locked":   {locked, VaultPrimary{PrimaryUnlock, true}},
+		"stopped":  {MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true}, ConfigIsVault: true}, VaultPrimary{PrimaryUnlock, false}},
+	} {
+		if got := vaultPrimary(vaultActions(tc.s)); got != tc.want {
+			t.Errorf("%s: got %+v, want %+v", name, got, tc.want)
+		}
+	}
+}

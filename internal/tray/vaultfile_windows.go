@@ -171,43 +171,71 @@ func (w *mainWindow) switchMode() {
 	if messageBoxOwned(w.hwnd, switchQuestion(toVault, exists), mbYesNo|windows.MB_ICONQUESTION) != idYes {
 		return
 	}
-	working, kind := "Switching to key files…", config.AgentTypeKeys
+	working := "Switching to key files…"
 	if toVault {
-		working, kind = "Switching to a vault…", config.AgentTypeVault
+		working = "Switching to a vault…"
 	}
 	w.run(working, func() opResult {
-		write := ""
-		if toVault && env.VaultPath == "" {
-			write = vaultFile
-		}
-		running := Probe(env.SocketPath).Err == nil
-		if running {
-			if err := StopAgent(); err != nil {
-				return opResult{err: fmt.Errorf("could not stop the agent: %w", err)}
-			}
-		}
-		if err := config.WriteAgentTypeToPath(runtime.ConfigPathDefault(), kind, write); err != nil {
-			if running {
-				_ = StartAgent(env.SocketPath)
-			}
-			return opResult{err: fmt.Errorf("could not change the config: %w", err)}
-		}
-		if err := t.reloadEnv(); err != nil {
-			return opResult{err: fmt.Errorf("changed the config, but could not read it back: %w", err)}
-		}
-		if toVault && !exists {
-			// A vault agent needs its vault: it starts once one is created.
-			return opResult{status: "The agent now uses a vault. Create it to add your keys."}
-		}
-		if err := StartAgent(env.SocketPath); err != nil {
-			return opResult{err: fmt.Errorf("changed the config, but could not start the agent: %w", err)}
-		}
-		if !toVault {
-			return opResult{status: "The agent now serves your key files."}
-		}
-		if err := t.promptUnlock(); err != nil && !errors.Is(err, errCancelled) {
-			return opResult{err: err}
-		}
-		return opResult{status: "The agent now serves your vault."}
+		status, err := switchAgentStatus(t, toVault, nil)
+		return done(status, err)
 	})
+}
+
+// switchAgent switches the agent between serving a vault and serving key
+// files, in config, and restarts it. A vault agent is unlocked with pass, or
+// with none asks for the passphrase.
+func switchAgent(t *tray, toVault bool, pass []byte) error {
+	_, err := switchAgentStatus(t, toVault, pass)
+	return err
+}
+
+// switchAgentStatus is switchAgent, with what it did for the status line.
+func switchAgentStatus(t *tray, toVault bool, pass []byte) (string, error) {
+	env := t.environment()
+	kind := config.AgentTypeKeys
+	if toVault {
+		kind = config.AgentTypeVault
+	}
+	vaultFile := vault.ResolveToFile(utils.ExpandHomeDirectory(vaultEnv(env).VaultPath))
+	_, statErr := os.Stat(vaultFile)
+	exists := statErr == nil
+	write := ""
+	if toVault && env.VaultPath == "" {
+		write = vaultFile
+	}
+	running := Probe(env.SocketPath).Err == nil
+	if running {
+		if err := StopAgent(); err != nil {
+			return "", fmt.Errorf("could not stop the agent: %w", err)
+		}
+	}
+	if err := config.WriteAgentTypeToPath(runtime.ConfigPathDefault(), kind, write); err != nil {
+		if running {
+			_ = StartAgent(env.SocketPath)
+		}
+		return "", fmt.Errorf("could not change the config: %w", err)
+	}
+	if err := t.reloadEnv(); err != nil {
+		return "", fmt.Errorf("changed the config, but could not read it back: %w", err)
+	}
+	if toVault && !exists {
+		// A vault agent needs its vault: it starts once one is created.
+		return "The agent now uses a vault. Create it to add your keys.", nil
+	}
+	if err := StartAgent(env.SocketPath); err != nil {
+		return "", fmt.Errorf("changed the config, but could not start the agent: %w", err)
+	}
+	if !toVault {
+		return "The agent now serves your key files.", nil
+	}
+	if pass != nil {
+		if err := vaultops.UnlockPassphrase(t.environment(), pass); err != nil {
+			return "", err
+		}
+		return "The agent now serves your vault.", nil
+	}
+	if err := t.promptUnlock(); err != nil && !errors.Is(err, errCancelled) {
+		return "", err
+	}
+	return "The agent now serves your vault.", nil
 }

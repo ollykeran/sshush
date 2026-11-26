@@ -128,12 +128,13 @@ type glyphKey struct {
 // uiCache holds one window's drawing resources. It belongs to the window's
 // thread.
 type uiCache struct {
-	dpi    int
-	glyphs map[glyphKey]uintptr
-	states map[Icon]uintptr
-	header uintptr
-	title  uintptr
-	mono   uintptr
+	dpi     int
+	glyphs  map[glyphKey]uintptr
+	states  map[Icon]uintptr
+	header  uintptr
+	title   uintptr
+	section uintptr
+	mono    uintptr
 }
 
 func newUICache(hwnd uintptr) *uiCache {
@@ -200,6 +201,14 @@ func (u *uiCache) headerFont() uintptr {
 }
 
 // titleFont is the details pane's semibold heading font.
+// sectionFont heads a group of cards: the body size, semibold.
+func (u *uiCache) sectionFont() uintptr {
+	if u.section == 0 {
+		u.section = createFont("Segoe UI", -scale(12, u.dpi), fwSemibold, cleartypeQuality)
+	}
+	return u.section
+}
+
 func (u *uiCache) titleFont() uintptr {
 	if u.title == 0 {
 		u.title = createFont("Segoe UI", -scale(titlePoints*96/72, u.dpi), fwSemibold, cleartypeQuality)
@@ -246,7 +255,7 @@ func (u *uiCache) release() {
 	destroyImageLists(u.takeGlyphs())
 	destroyIcons(u.states)
 	clear(u.states)
-	for _, f := range []*uintptr{&u.header, &u.title, &u.mono} {
+	for _, f := range []*uintptr{&u.header, &u.title, &u.section, &u.mono} {
 		if *f != 0 {
 			procDeleteObject.Call(*f)
 			*f = 0

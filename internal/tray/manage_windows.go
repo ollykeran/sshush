@@ -12,7 +12,9 @@ import (
 	"unsafe"
 
 	"github.com/ollykeran/sshush/internal/clipboard"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vaultops"
@@ -220,9 +222,10 @@ type mainWindow struct {
 	frame [2]int32
 	// hidden holds the controls show has hidden.
 	hidden map[uint16]bool
-	// page is the page shown: pageKeys or pageVault.
-	page  int
-	vault VaultView
+	// page is the page shown: pageKeys, pageVault or pageSettings.
+	page     int
+	vault    VaultView
+	settings settingsForm
 
 	mu     sync.Mutex
 	result *opResult
@@ -245,6 +248,7 @@ type opResult struct {
 const (
 	pageKeys = iota
 	pageVault
+	pageSettings
 )
 
 // pageValue is the registry value that remembers the page last shown.
@@ -349,7 +353,13 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		case control(hwnd, idMainStatus):
 			return themedCtlColor(msg, wParam, w.statusErr)
 		}
-		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) || id == idAutoLockTitle {
+		if p := w.settingsProblemAt(lParam); p != nil {
+			if p.Blocker {
+				return themedCtlColor(msg, wParam, true)
+			}
+			return ctlColorText(msg, wParam, pick(warnText, darkNow()))
+		}
+		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) || secondaryLabels[uint16(id)] {
 			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		}
 		return themedCtlColor(msg, wParam, false)
@@ -411,6 +421,9 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			}
 			return 1
 		}
+		if w.settingsCommand(uint16(id), uint16(code)) {
+			return 1
+		}
 		if code != bnClicked {
 			return 0
 		}
@@ -443,13 +456,17 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 func (w *mainWindow) command(id uint16) bool {
 	switch id {
 	case idCancel: // also Esc and the close button
-		procEndDialog.Call(w.hwnd, idCancel)
+		if w.leaveSettings() {
+			procEndDialog.Call(w.hwnd, idCancel)
+		}
 	case idMainAgentToggle:
 		w.startOrStop()
 	case idMainLock:
-		w.lockOrUnlock()
-	case idMainCreateVault:
-		w.createVault()
+		if vaultPrimary(w.vaultActionsNow()).Kind == PrimaryCreate {
+			w.createVault()
+		} else {
+			w.lockOrUnlock()
+		}
 	case idMainAdd:
 		w.add()
 	case idMainCreateKey:
@@ -476,6 +493,8 @@ func (w *mainWindow) command(id uint16) bool {
 		w.selectPage(pageKeys)
 	case idMainTabVault:
 		w.selectPage(pageVault)
+	case idMainTabSettings:
+		w.selectPage(pageSettings)
 	case idVaultOpenFolder:
 		w.showVaultInExplorer()
 	case idVaultCopyPath:
@@ -505,6 +524,9 @@ func (w *mainWindow) init() {
 	procSendMessageW.Call(control(w.hwnd, idMainAgent), wmSetFont, w.ui.headerFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainDetailTitle), wmSetFont, w.ui.titleFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idVaultTitle), wmSetFont, w.ui.titleFont(), 0)
+	for _, id := range sectionHeaders {
+		procSendMessageW.Call(control(w.hwnd, int(id)), wmSetFont, w.ui.sectionFont(), 0)
+	}
 	procSendMessageW.Call(control(w.hwnd, idMainFp), wmSetFont, w.ui.monoFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainPub), wmSetFont, w.ui.monoFont(), 0)
 
@@ -537,9 +559,10 @@ func (w *mainWindow) init() {
 	}
 	procSendMessageW.Call(control(w.hwnd, idMainStartup), bmSetCheck, boolArg(startupEnabled()), 0)
 	w.initAutoLock()
-	if b := loadSetting(pageValue); len(b) == 1 && b[0] == pageVault {
-		w.page = pageVault
+	if b := loadSetting(pageValue); len(b) == 1 && b[0] <= pageSettings {
+		w.page = int(b[0])
 	}
+	w.loadSettings()
 	w.checkTab()
 	setText(control(w.hwnd, idMainVersion), "sshush "+version.Version)
 
@@ -770,11 +793,6 @@ func (w *mainWindow) updateButtons() {
 	}
 	enable(idMainLoad, a.Load || a.Unload)
 	w.setButtonIcon(idMainLoad, loadGlyph(a), a.Load || a.Unload)
-	if a.Unlock {
-		setText(control(w.hwnd, idMainLock), "Unlo&ck…")
-	} else {
-		setText(control(w.hwnd, idMainLock), "&Lock")
-	}
 	if a.Start || a.Stop {
 		setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(a))
 	}
@@ -802,19 +820,18 @@ func (w *mainWindow) updateButtons() {
 		onKeys(idMainRemove, w.state.showsVault())
 	}
 
-	// The Vault page. Create vault and Lock share a place: only one shows.
+	// The Vault page. Every control is always there; what cannot be done
+	// now is greyed, so nothing moves as the state changes.
 	va := vaultActions(w.state)
-	// Whether a button shows goes by what could be done; whether it is
-	// enabled, by what can be done now.
-	shown := va
 	if w.busy {
 		va = VaultActions{CopyPath: va.CopyPath, OpenFolder: va.OpenFolder}
 	}
 	w.vault = vaultOf(w.state)
 	setText(control(w.hwnd, idVaultTitle), w.vault.Title)
 	setText(control(w.hwnd, idVaultSub), w.vault.Sub)
-	onVault(idVaultTitle, true)
-	onVault(idVaultSub, true)
+	for id := range vaultPage {
+		onVault(id, true)
+	}
 	for i := range vaultRowCount {
 		shown := i < len(w.vault.Rows)
 		if shown {
@@ -824,35 +841,37 @@ func (w *mainWindow) updateButtons() {
 		onVault(vaultRowLabel(i), shown)
 		onVault(vaultRowValue(i), shown)
 	}
-	enable(idMainCreateVault, va.CreateVault)
-	onVault(idMainCreateVault, needsVault)
-	if va.Unlock {
-		setText(control(w.hwnd, idMainLock), "Unlo&ck…")
-	} else {
-		setText(control(w.hwnd, idMainLock), "&Lock")
+	for id, text := range w.vault.Captions {
+		setText(control(w.hwnd, int(id)), text)
 	}
-	enable(idMainLock, va.Lock || va.Unlock)
-	w.setButtonIcon(idMainLock, lockGlyph(a), va.Lock || va.Unlock)
-	onVault(idMainLock, w.state.isVault() && !needsVault)
+	primary := vaultPrimary(va)
+	if w.busy {
+		// Keep the label it had, greyed.
+		primary = vaultPrimary(vaultActions(w.state))
+		primary.Enabled = false
+	}
+	setText(control(w.hwnd, idMainLock), primary.label())
+	enable(idMainLock, primary.Enabled)
+	w.setButtonIcon(idMainLock, primary.glyph(), primary.Enabled)
 	enable(idVaultOpenFolder, va.OpenFolder)
 	enable(idVaultCopyPath, va.CopyPath)
-	onVault(idVaultOpenFolder, true)
-	onVault(idVaultCopyPath, true)
-	// Auto-lock is about a vault, so it shows wherever one is in use.
-	for _, id := range autoLockControls {
-		onVault(id, w.state.ConfigIsVault || w.state.isVault())
-	}
 	enable(idVaultPasswd, va.ChangePassphrase)
-	onVault(idVaultPasswd, shown.ChangePassphrase)
 	enable(idVaultRecovery, va.NewRecovery)
-	onVault(idVaultRecovery, shown.NewRecovery)
 	enable(idVaultBackup, va.Backup)
-	onVault(idVaultBackup, w.state.showsVault())
 	enable(idVaultImport, va.Import)
-	onVault(idVaultImport, shown.Import)
-	setText(control(w.hwnd, idVaultMode), modeLabel(shown.UseKeys))
+	setText(control(w.hwnd, idVaultMode), modeLabel(w.state.ConfigIsVault))
 	enable(idVaultMode, va.UseVault || va.UseKeys)
-	onVault(idVaultMode, shown.UseVault || shown.UseKeys)
+	w.setButtonIcon(idVaultMode, buttonGlyphs[idVaultMode], va.UseVault || va.UseKeys)
+	// Auto-lock is a setting the tray keeps, whatever the agent serves now.
+	for _, id := range autoLockControls {
+		procEnableWindow.Call(control(w.hwnd, int(id)), boolArg(!w.busy))
+	}
+
+	// The Settings page.
+	for id := range settingsPage {
+		w.show(id, w.page == pageSettings)
+	}
+	w.updateSettings()
 	w.layout()
 
 	// A disabled or hidden control cannot keep the focus; hand it to the
@@ -861,8 +880,11 @@ func (w *mainWindow) updateButtons() {
 		on, _, _ := procIsWindowEnabled.Call(focus)
 		if id, _, _ := procGetDlgCtrlID.Call(focus); on == 0 || w.hidden[uint16(id)] {
 			to := idMainList
-			if w.page == pageVault {
+			switch w.page {
+			case pageVault:
 				to = idMainTabVault
+			case pageSettings:
+				to = idMainTabSettings
 			}
 			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, to), 1)
 		}
@@ -875,10 +897,17 @@ func (w *mainWindow) selectPage(page int) {
 	if page == w.page {
 		return
 	}
+	if w.page == pageSettings && !w.leaveSettings() {
+		w.checkTab() // the tab the click checked goes back
+		return
+	}
 	w.page = page
 	w.checkTab()
 	w.updateButtons()
-	if page == pageVault && !w.busy {
+	switch {
+	case page == pageSettings:
+		w.loadSettings() // the file may have changed since
+	case page == pageVault && !w.busy:
 		w.run("", nil)
 	}
 }
@@ -887,6 +916,7 @@ func (w *mainWindow) selectPage(page int) {
 func (w *mainWindow) checkTab() {
 	procSendMessageW.Call(control(w.hwnd, idMainTabKeys), bmSetCheck, boolArg(w.page == pageKeys), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainTabVault), bmSetCheck, boolArg(w.page == pageVault), 0)
+	procSendMessageW.Call(control(w.hwnd, idMainTabSettings), bmSetCheck, boolArg(w.page == pageSettings), 0)
 }
 
 // isVaultRowLabel reports whether id labels one of the Vault page's facts.
@@ -938,10 +968,18 @@ func (w *mainWindow) layout() {
 func (w *mainWindow) naturalWidths() map[uint16]int {
 	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
 	out := map[uint16]int{}
-	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
+	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateKey, idMainRefresh,
 		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
-		idMainTabKeys, idMainTabVault, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport, idVaultMode, idVaultPasswd, idVaultRecovery} {
+		idMainTabKeys, idMainTabVault, idMainTabSettings, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport,
+		idVaultMode, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
+		idSetDirsAdd, idSetDirsRemove, idSetSave, idSetDiscard} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
+		if id == idMainLock {
+			// The primary button's label changes; it is as wide as its longest.
+			for _, k := range []PrimaryKind{PrimaryCreate, PrimaryUnlock, PrimaryLock} {
+				content = max(content, textWidth(w.hwnd, strings.ReplaceAll(VaultPrimary{Kind: k}.label(), "&", "")))
+			}
+		}
 		if hasGlyph(id) {
 			content += iconW
 		}
@@ -1111,13 +1149,15 @@ func (w *mainWindow) lockOrUnlock() {
 }
 
 // createVault asks for a passphrase, twice, creates the vault with a
-// recovery phrase, shows the phrase once, and starts the agent on the new
-// vault, unlocked.
+// recovery phrase and shows the phrase once. When the agent is to serve the
+// vault it starts on it, unlocked; when it serves key files, config is made
+// to name the new vault, and the user is asked whether to switch to it now.
 func (w *mainWindow) createVault() {
-	if !w.actions().CreateVault {
+	if !w.vaultActionsNow().CreateVault {
 		return
 	}
 	hwnd, t := w.hwnd, w.t
+	aside := w.state.VaultAside
 	w.run("Creating the vault…", func() opResult {
 		pass, err := askNewPassphrase(hwnd)
 		if errors.Is(err, errCancelled) {
@@ -1127,25 +1167,58 @@ func (w *mainWindow) createVault() {
 			return opResult{err: err}
 		}
 		defer clear(pass)
-		res, err := vaultops.Init(t.environment(), pass, vaultops.InitOptions{Recovery: true})
+		env := vaultEnv(t.environment())
+		res, err := vaultops.Init(env, pass, vaultops.InitOptions{Recovery: true})
 		if err != nil {
 			return opResult{err: err}
 		}
 		showRecoveryPhrase(hwnd, recoveryMessage(res.RecoveryFile), res.Mnemonic)
+		if aside {
+			return w.afterCreateAside(env, res.VaultPath, pass)
+		}
 		// The agent was waiting for this vault: start it, and unlock the
 		// vault with the passphrase just chosen rather than ask again.
-		if Probe(t.environment().SocketPath).Err != nil && !t.environment().AgentUnmanaged {
-			if err := StartAgent(t.environment().SocketPath); err != nil {
+		if Probe(env.SocketPath).Err != nil && !env.AgentUnmanaged {
+			if err := StartAgent(env.SocketPath); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not start the agent: %w", err)}
 			}
 		}
-		if s := Probe(t.environment().SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+		if s := Probe(env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
 			if err := vaultops.UnlockPassphrase(t.environment(), pass); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not unlock it: %w", err)}
 			}
 		}
 		return opResult{status: "Created and unlocked the vault. Add keys to it to use them."}
 	})
+}
+
+// afterCreateAside follows creating a vault the agent does not serve: config
+// is made to name it, so the CLI finds it too, and the user may switch the
+// agent to it at once, unlocked with pass.
+func (w *mainWindow) afterCreateAside(env vaultops.Env, vaultFile string, pass []byte) opResult {
+	t := w.t
+	cfgPath := runtime.ConfigPathDefault()
+	if env.VaultPath != t.environment().VaultPath { // config named none
+		s, err := config.ReadCoreSettings(cfgPath)
+		if err == nil {
+			s.VaultPath = homePath(vaultFile)
+			err = config.WriteCoreSettingsToPath(cfgPath, s)
+		}
+		if err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not name it in config: %w", err)}
+		}
+		if err := t.reloadEnv(); err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not read the config back: %w", err)}
+		}
+	}
+	if !t.environment().AgentUnmanaged &&
+		messageBoxOwned(w.hwnd, switchQuestion(true, true)+"\n\nSwitch now? You can do it later from the Vault tab.", mbYesNo|windows.MB_ICONQUESTION) == idYes {
+		if err := switchAgent(t, true, pass); err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not switch to it: %w", err)}
+		}
+		return opResult{status: "Created the vault, and the agent now serves it. Add keys to it to use them."}
+	}
+	return opResult{status: "Created the vault. The agent still serves key files; switch on the Vault tab when you are ready."}
 }
 
 func (w *mainWindow) add() {

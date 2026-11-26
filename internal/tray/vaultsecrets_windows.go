@@ -98,7 +98,7 @@ func (w *mainWindow) changePassphrase() {
 				newPass = p
 			}
 			var err error
-			res, err = vaultops.ChangePassphrase(t.environment(), cred, newPass, true)
+			res, err = vaultops.ChangePassphrase(vaultEnv(t.environment()), cred, newPass, true)
 			return err
 		})
 		if errors.Is(err, errCancelled) {
@@ -123,7 +123,7 @@ func (w *mainWindow) newRecoveryPhrase() {
 		var res vaultops.SecretResult
 		err := withCredential(hwnd, "New recovery phrase", func(cred vault.Credential) error {
 			var err error
-			res, err = vaultops.RegenerateRecovery(t.environment(), cred)
+			res, err = vaultops.RegenerateRecovery(vaultEnv(t.environment()), cred)
 			return err
 		})
 		if errors.Is(err, errCancelled) {
