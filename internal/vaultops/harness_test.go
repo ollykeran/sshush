@@ -263,3 +263,48 @@ func (c *countingAsk) fn(prompt string) ([]byte, error) {
 	copy(out, c.pass)
 	return out, nil
 }
+
+// quietVault is a vault agent from before the listing described the vault
+// itself: it lists its identities and stops there.
+type quietVault struct{ *vault.VaultAgent }
+
+func (q quietVault) Extension(extensionType string, contents []byte) ([]byte, error) {
+	resp, err := q.VaultAgent.Extension(extensionType, contents)
+	if err != nil || extensionType != agent.ExtensionOp {
+		return resp, err
+	}
+	if op, _, derr := agent.DecodeOpRequest(contents); derr != nil || op != agent.OpListIdentities {
+		return resp, err
+	}
+	data, derr := agent.DecodeOpResponse(resp)
+	if derr != nil {
+		return resp, err
+	}
+	var head struct {
+		VaultPath string
+		Count     uint32
+		Rest      []byte `ssh:"rest"`
+	}
+	if ssh.Unmarshal(data, &head) != nil {
+		return resp, err
+	}
+	rest := head.Rest
+	for range head.Count {
+		var rec struct {
+			Record []byte
+			Rest   []byte `ssh:"rest"`
+		}
+		if ssh.Unmarshal(rest, &rec) != nil {
+			return resp, err
+		}
+		rest = rec.Rest
+	}
+	return agent.EncodeOpResponse(agent.StatusOK, data[:len(data)-len(rest)]), nil
+}
+
+// startQuietVaultAgent is startVaultAgent for an sshushd that lists its
+// vault but says nothing about the vault itself.
+func startQuietVaultAgent(t *testing.T, withRecovery bool) *fixture {
+	t.Helper()
+	return startVaultAgentAs(t, withRecovery, func(va *vault.VaultAgent) sshagent.ExtendedAgent { return quietVault{va} })
+}

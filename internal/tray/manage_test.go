@@ -83,7 +83,7 @@ func alternates(a, b string) bool {
 
 func vaultUp() MainState {
 	return MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault", SpeaksOps: true},
-		Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"}}
+		Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"}, ConfigIsVault: true}
 }
 
 func TestMainActions(t *testing.T) {

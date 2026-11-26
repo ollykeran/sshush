@@ -50,6 +50,33 @@ type Listing struct {
 	// Windows — cannot open it, so it is for display only.
 	VaultPath  string
 	Identities []IdentityInfo
+	// Info describes the vault itself. HasInfo is false when the daemon is
+	// older than this field and said nothing about it.
+	Info    Info
+	HasInfo bool
+}
+
+// Info is what a vault says about itself, apart from what it holds. It needs
+// no passphrase: none of it is secret.
+type Info struct {
+	// CreatedAt is when the vault was created, as RFC 3339, or "" when the
+	// vault predates the field.
+	CreatedAt string
+	// Recovery reports that a recovery phrase can unlock the vault.
+	Recovery bool
+	// FormatVersion is the version of the vault file's format.
+	FormatVersion int
+}
+
+// Describe returns what store says about itself. An uninitialized store has
+// nothing to say but its format version.
+func Describe(store *VaultStore) Info {
+	info := Info{FormatVersion: VaultFileVersion}
+	if meta := store.GetMetadata(); meta != nil {
+		info.CreatedAt = meta.CreatedAt
+		info.Recovery = len(meta.RecoverySalt) > 0 && len(meta.WrappedMasterKey) > 0
+	}
+	return info
 }
 
 // The listing travels as SSH wire data. Each identity is its own length-prefixed
@@ -67,6 +94,19 @@ type wireRecord struct {
 	Record []byte
 	Rest   []byte `ssh:"rest"`
 }
+
+// wireInfo follows the identity records. It names itself, so a client can
+// tell it from anything else a daemon might append, and skip what it does not
+// recognise.
+type wireInfo struct {
+	Kind          string
+	CreatedAt     string
+	Recovery      bool
+	FormatVersion uint32
+	Rest          []byte `ssh:"rest"`
+}
+
+const wireInfoKind = "vault-info"
 
 type wireIdentity struct {
 	Fingerprint string
@@ -90,7 +130,12 @@ func encodeListing(l Listing) []byte {
 		})
 		out = append(out, ssh.Marshal(wireRecord{Record: record})...)
 	}
-	return out
+	return append(out, ssh.Marshal(wireInfo{
+		Kind:          wireInfoKind,
+		CreatedAt:     l.Info.CreatedAt,
+		Recovery:      l.Info.Recovery,
+		FormatVersion: uint32(l.Info.FormatVersion),
+	})...)
 }
 
 // decodeListing parses the list-identities response data.
@@ -119,6 +164,13 @@ func decodeListing(data []byte) (Listing, error) {
 			Filepath:    id.Filepath,
 			PublicKey:   id.PublicKey,
 		})
+	}
+	// What follows the records is optional: an older daemon sends nothing,
+	// and a newer one may send something this version does not know.
+	var info wireInfo
+	if len(rest) > 0 && ssh.Unmarshal(rest, &info) == nil && info.Kind == wireInfoKind {
+		l.Info = Info{CreatedAt: info.CreatedAt, Recovery: info.Recovery, FormatVersion: int(info.FormatVersion)}
+		l.HasInfo = true
 	}
 	return l, nil
 }

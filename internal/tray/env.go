@@ -2,6 +2,7 @@ package tray
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
@@ -19,4 +20,10 @@ func LoadConfig() (*config.Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// defaultVaultPath is where a vault goes when config names none: beside the
+// config file.
+func defaultVaultPath() string {
+	return filepath.Join(filepath.Dir(runtime.ConfigPathDefault()), "vault.json")
 }

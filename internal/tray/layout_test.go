@@ -40,10 +40,14 @@ func TestMainLayoutFitsAtEverySize(t *testing.T) {
 			for id := range buttonGlyphs {
 				buttons = append(buttons, id)
 			}
-			buttons = append(buttons, idMainLock, idMainAgentToggle, idMainLoad)
+			buttons = append(buttons, idMainLock, idMainAgentToggle, idMainLoad, idMainTabKeys, idMainTabVault)
 			for i, a := range buttons {
 				for _, b := range buttons[i+1:] {
-					if overlaps(boxes[a], boxes[b]) && !(a == idMainAdd && b == idMainCreateVault) && !(b == idMainAdd && a == idMainCreateVault) {
+					// The two pages share the body; only one is shown.
+					if vaultPage[a] != vaultPage[b] {
+						continue
+					}
+					if overlaps(boxes[a], boxes[b]) {
 						t.Errorf("dpi %d, %dx%d: buttons %d and %d overlap", dpi, size[0], size[1], a, b)
 					}
 				}
@@ -127,5 +131,91 @@ func TestFooterControlsDoNotOverlap(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestVaultLayoutFitsAtEverySize(t *testing.T) {
+	for _, dpi := range []int{96, 144, 192} {
+		m := layoutMetrics{dpi: dpi}
+		mw, mh := mainMinSize(m)
+		for _, size := range [][2]int{{mw, mh}, {mw + 300, mh + 200}} {
+			boxes := mainLayout(size[0], size[1], m)
+			status, tabs := boxes[idMainStatus], boxes[idMainTabVault]
+			var ids []uint16
+			for id := range vaultPage {
+				ids = append(ids, id)
+			}
+			// A drop-down's box is as tall as its open list; closed, it is
+			// one field high.
+			closed := func(id uint16) box {
+				b := boxes[id]
+				if id == idAutoLockIdle {
+					b.h = scale(lyFieldH, dpi)
+				}
+				return b
+			}
+			for i, a := range ids {
+				b := closed(a)
+				if b.x < 0 || b.w <= 0 || b.x+b.w > size[0] {
+					t.Errorf("dpi %d, %dx%d: vault control %d at %+v falls outside the window", dpi, size[0], size[1], a, b)
+				}
+				if b.y < tabs.y+tabs.h || b.y+b.h > status.y {
+					t.Errorf("dpi %d, %dx%d: vault control %d at %+v is not between the tabs and the status line", dpi, size[0], size[1], a, b)
+				}
+				for _, c := range ids[i+1:] {
+					if overlaps(b, closed(c)) {
+						t.Errorf("dpi %d, %dx%d: vault controls %d and %d overlap", dpi, size[0], size[1], a, c)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestVaultLayoutClosesUpHiddenRows(t *testing.T) {
+	all := mainLayout(1000, 700, layoutMetrics{dpi: 96})
+	hidden := map[uint16]bool{}
+	for i := 3; i < vaultRowCount; i++ {
+		hidden[vaultRowLabel(i)], hidden[vaultRowValue(i)] = true, true
+	}
+	few := mainLayout(1000, 700, layoutMetrics{dpi: 96, hidden: hidden})
+	if few[idMainLock].y >= all[idMainLock].y {
+		t.Errorf("hiding rows does not move the buttons up: %d, then %d", all[idMainLock].y, few[idMainLock].y)
+	}
+	if few[idMainLock].y <= few[vaultRowValue(2)].y {
+		t.Error("the buttons are not below the last row shown")
+	}
+}
+
+func TestVaultLayoutCreateAndLockShareAPlace(t *testing.T) {
+	m := layoutMetrics{dpi: 96, hidden: map[uint16]bool{idMainLock: true}}
+	create := mainLayout(1000, 700, m)[idMainCreateVault]
+	m.hidden = map[uint16]bool{idMainCreateVault: true}
+	lock := mainLayout(1000, 700, m)[idMainLock]
+	if create.x != lock.x || create.y != lock.y {
+		t.Errorf("create vault at %+v, lock at %+v: want the same place", create, lock)
+	}
+}
+
+func TestVaultLayoutAutoLockColumn(t *testing.T) {
+	m := layoutMetrics{dpi: 96}
+	shown := mainLayout(1000, 700, m)
+	if shown[idAutoLockTitle].x <= shown[vaultRowValue(0)].x {
+		t.Error("the Auto-lock column is not at the right of the facts")
+	}
+	if v := shown[vaultRowValue(0)]; v.x+v.w > shown[idAutoLockTitle].x {
+		t.Errorf("the facts run into the Auto-lock column: %+v, %+v", v, shown[idAutoLockTitle])
+	}
+	if shown[idMainLock].y < shown[idAutoLockIdle].y+scale(lyFieldH, 96) {
+		t.Error("the buttons are not below the Auto-lock settings")
+	}
+	// Hidden, it gives the facts the whole width.
+	m.hidden = map[uint16]bool{}
+	for _, id := range autoLockControls {
+		m.hidden[id] = true
+	}
+	alone := mainLayout(1000, 700, m)
+	if alone[vaultRowValue(0)].w <= shown[vaultRowValue(0)].w {
+		t.Error("the facts do not widen with Auto-lock hidden")
 	}
 }

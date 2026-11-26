@@ -49,6 +49,13 @@ const (
 	// CodeAgentTooOld means the vault agent predates an operation the verb
 	// needs, and there is no vault file here to make up for it.
 	CodeAgentTooOld
+	// CodeVaultInUse means a running vault agent holds the vault in memory,
+	// so its file cannot be replaced from under it.
+	CodeVaultInUse
+	// CodeNotAVault means a file was offered as a vault and is not one.
+	CodeNotAVault
+	// CodeWeakPassphrase means a new passphrase does not meet the policy.
+	CodeWeakPassphrase
 )
 
 // OpError is a vault operation failure phrased once, for both front ends. Msg

@@ -117,13 +117,32 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 
 ## The tray
 
-`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do:
+`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do. Its header starts and stops the agent, and two pages sit below it.
 
-- start and stop the agent, and lock or unlock a vault;
+**Keys**
+
 - list the agent's keys, or the vault's, with the selected key's details beside them;
-- add a key file, create a new key, or set up a vault when there is none;
-- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key;
-- run `sshush selftest`.
+- add a key file or create a new key;
+- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key.
+
+**Vault**
+
+- see the vault's state, where its file is, its size, when it was created and last changed, how many keys it holds, and whether a recovery phrase can unlock it;
+- create a vault when there is none, and lock or unlock it;
+- change the vault's passphrase, or give it a new recovery phrase (each asks for the current passphrase or recovery phrase, and shows the new phrase once);
+- show the vault file in Explorer, or copy its path;
+- back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
+- import a vault from another PC;
+- switch the agent between serving the vault and serving your key files;
+- choose when the tray locks the vault by itself (**Auto-lock**): when Windows locks or you switch user, when the PC goes to sleep, and after 5 minutes to an hour without keyboard or mouse input. The first two are on by default; the idle lock is off. The settings are kept in the registry, under `HKCU\Software\sshush\Tray`.
+
+Auto-lock is the tray's: it locks the vault only while the tray is running, and an agent you run without the tray never locks by itself.
+
+**Moving a vault to another PC.** The vault is one file, and its keys stay encrypted under its passphrase wherever it goes. Back it up on the old PC, then on the new one choose **Import…** on the Vault page and pick the file. The tray checks the passphrase before changing anything. Then it stops the agent and copies the file in. If a vault was already there, it is kept beside it as `vault.json.bak-<time>`, along with its `recovery.txt`. The config is switched to vault mode if needed, and the agent is started and unlocked. The imported vault's recovery phrase is whatever it was on the old PC.
+
+**Switching modes.** **Use a vault** sets `[agent].type = "vault"` in `config.toml`, and sets `[vault].vault_path` to the default path beside it if none is configured. **Use key files instead** sets it back to `"keys"`. Either way the agent restarts. The tray edits only those lines, so the file's comments and other settings stay as they were.
+
+The footer runs `sshush selftest`.
 
 The window follows Windows' light or dark mode. "Start at sign-in" starts the tray, without opening the window, when you sign in. Starting the tray again replaces the one already running rather than adding a second icon.
 

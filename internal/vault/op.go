@@ -35,6 +35,8 @@ func statusForError(err error) byte {
 		return agent.StatusWrongPassphrase
 	case errors.Is(err, errAgentNotLocked):
 		return agent.StatusNotLocked
+	case errors.Is(err, ErrWeakPassphrase), errors.Is(err, ErrBadMnemonic):
+		return agent.StatusBadRequest
 	default:
 		return agent.StatusInternal
 	}
@@ -118,6 +120,22 @@ func (a *VaultAgent) handleOp(contents []byte) []byte {
 			return resultFor(lerr)
 		}
 		return agent.EncodeOpResponse(agent.StatusOK, encodeListing(listing))
+
+	case agent.OpChangePassphrase:
+		defer clear(payload)
+		cred, newPass, mnemonic, perr := parseChangePassphrasePayload(payload)
+		if perr != nil {
+			return agent.EncodeOpResponse(agent.StatusBadRequest, nil)
+		}
+		return resultFor(a.changePassphrase(cred, newPass, mnemonic))
+
+	case agent.OpSetRecovery:
+		defer clear(payload)
+		cred, mnemonic, perr := parseSetRecoveryPayload(payload)
+		if perr != nil {
+			return agent.EncodeOpResponse(agent.StatusBadRequest, nil)
+		}
+		return resultFor(a.setRecovery(cred, mnemonic))
 
 	default:
 		return agent.EncodeOpResponse(agent.StatusUnsupportedOp, nil)

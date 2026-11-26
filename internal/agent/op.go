@@ -42,6 +42,12 @@ const (
 	OpSetComment     byte = 8  // persist an identity's comment
 	OpAddKey         byte = 9  // add a private key, with autoload
 	OpListIdentities byte = 10 // list every identity in the vault, loaded or not
+	// OpChangePassphrase re-encrypts the vault under a new passphrase and
+	// issues it a new recovery phrase, given its passphrase or recovery phrase.
+	OpChangePassphrase byte = 11
+	// OpSetRecovery replaces the vault's recovery phrase, given its passphrase
+	// or recovery phrase.
+	OpSetRecovery byte = 12
 )
 
 // Reasons an operation failed. Callers compare with errors.Is rather than
