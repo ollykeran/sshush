@@ -19,48 +19,21 @@ import (
 // so the comments the generated config explains itself with survive. The
 // result must load as a valid config, or the file is left as it was.
 func WriteAgentTypeToPath(path, agentType, vaultPath string) error {
-	path = utils.ExpandHomeDirectory(path)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("config file not found: %s (run the app once to create it)", utils.DisplayPath(path))
+	return editConfigText(path, func(text string, doc configDocument) (string, error) {
+		text, err := setAgentType(text, agentType)
+		if err != nil {
+			return "", err
 		}
-		return fmt.Errorf("read config: %w", err)
-	}
-	text, enc, ok := decodeTextFile(data)
-	if !ok {
-		return fmt.Errorf("config %s is not a text file sshush can edit", utils.DisplayPath(path))
-	}
-	doc, err := decodeConfigDocument([]byte(text))
-	if err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	// Edited with \n line ends and put back as they were.
-	crlf := strings.Contains(text, "\r\n")
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text, err = setAgentType(text, agentType)
-	if err != nil {
-		return err
-	}
-	if vaultPath != "" && doc.Vault.VaultPath == "" {
-		text = setVaultPath(text, vaultPath)
-	}
-	if crlf {
-		text = strings.ReplaceAll(text, "\n", "\r\n")
-	}
-
-	edited, err := decodeConfigDocument([]byte(text))
-	if err != nil {
-		return fmt.Errorf("edit config: the result does not parse: %w", err)
-	}
-	if edited.Agent.Type != agentType {
-		return fmt.Errorf("edit config: could not set [agent].type in %s; set type = %q there by hand", utils.DisplayPath(path), agentType)
-	}
-	if _, err := documentToConfig(&edited); err != nil {
-		return err
-	}
-	return replaceFile(path, encodeFile(text, enc))
+		if vaultPath != "" && doc.Vault.VaultPath == "" {
+			text = setVaultPath(text, vaultPath)
+		}
+		return text, nil
+	}, func(edited configDocument) error {
+		if edited.Agent.Type != agentType {
+			return fmt.Errorf("edit config: could not set [agent].type in %s; set type = %q there by hand", utils.DisplayPath(path), agentType)
+		}
+		return nil
+	})
 }
 
 var (

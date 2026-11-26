@@ -1,6 +1,6 @@
 # Run golangci-lint (auto-installs if missing)
 lint:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
     if ! command -v golangci-lint >/dev/null 2>&1; then
@@ -11,7 +11,7 @@ lint:
 
 # Validate GitHub Actions workflows (installs actionlint if missing)
 lint-yml:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
     if ! command -v actionlint >/dev/null 2>&1; then

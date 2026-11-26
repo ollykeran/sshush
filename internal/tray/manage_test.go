@@ -57,7 +57,7 @@ func TestMainTemplateLayout(t *testing.T) {
 	}
 	// Each keyboard mnemonic reaches one control.
 	keys := map[rune]string{}
-	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), "Unlo&ck…", "&Start agent", "&Unload") {
+	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), HeaderLock{Locked: true}.label(), "&Start agent", "&Unload") {
 		i := strings.IndexRune(text, '&')
 		if i < 0 || i+1 >= len(text) {
 			continue
@@ -319,5 +319,35 @@ func TestHeaderOf(t *testing.T) {
 		if tone, icon := headerOf(tc.state); tone != tc.tone || icon != tc.icon {
 			t.Errorf("%s: got tone %d icon %d, want %d %d", tc.name, tone, icon, tc.tone, tc.icon)
 		}
+	}
+}
+
+func TestRestartReason(t *testing.T) {
+	keys := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}}
+	if r := restartReason(keys, false); r != "" {
+		t.Errorf("nothing changed: %q", r)
+	}
+	if r := restartReason(keys, true); !strings.Contains(r, "Restart") {
+		t.Errorf("settings saved: %q", r)
+	}
+	toVault := keys
+	toVault.ConfigIsVault = true
+	if r := restartReason(toVault, false); !strings.Contains(r, "vault") {
+		t.Errorf("config now serves the vault: %q", r)
+	}
+	toKeys := vaultUp()
+	toKeys.ConfigIsVault = false
+	if r := restartReason(toKeys, false); !strings.Contains(r, "key files") {
+		t.Errorf("config now serves key files: %q", r)
+	}
+	stopped := keys
+	stopped.Reachable = false
+	if r := restartReason(stopped, true); r != "" || canRestart(stopped) {
+		t.Errorf("a stopped agent starts with the settings as they are: %q", r)
+	}
+	unmanaged := keys
+	unmanaged.Managed = false
+	if canRestart(unmanaged) || restartReason(unmanaged, true) != "" {
+		t.Error("an agent sshush does not run is not restarted from here")
 	}
 }

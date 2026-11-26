@@ -1,7 +1,7 @@
 # Record VHS demo GIFs into demos/, using a throwaway HOME/config fixture
 # (see demos/fixture.sh) so real ~/.ssh and ~/.config/sshush are never touched.
 demo tape="all": (build "dev")
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     if ! command -v vhs >/dev/null 2>&1; then
         echo "vhs not found: https://github.com/charmbracelet/vhs#installation" >&2

@@ -89,22 +89,22 @@ func TestVaultOfStates(t *testing.T) {
 		hasLocate bool
 	}{
 		{"unlocked", vaultUp(), "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"unlocked, file on this PC", onDisk, "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"locked", locked, "Vault · locked", "Unlock", true, "/v/vault.json",
-			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"agent down", down, "Vault · agent stopped", "Start the agent", true, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"no vault yet", noVault, "No vault yet", "Create one", false, "/v/vault.json",
-			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true}, true},
 		{"key files", keys, "Not using a vault", "key files", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseVault: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true}, true},
 		{"key files, no vault configured", MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}},
-			"Not using a vault", "key files", false, "", VaultActions{Import: true, UseVault: true}, false},
+			"Not using a vault", "key files", false, "", VaultActions{Import: true}, false},
 		{"unmanaged agent", unmanaged, "Not using a vault", "key files", false, "", VaultActions{}, false},
 		{"unreadable", broken, "Vault", "open vault: bad", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true}, true},
 	}
 	for _, tc := range tests {
 		v := vaultOf(tc.state)
@@ -176,5 +176,82 @@ func TestSwitchQuestion(t *testing.T) {
 	}
 	if q := switchQuestion(false, true); !strings.Contains(q, "key files") {
 		t.Errorf("to keys: %q", q)
+	}
+}
+
+// keysAside is an agent serving key files, with the vault read from its file.
+func keysAside(initialized bool) MainState {
+	return MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys", SpeaksOps: true},
+		Keys: nil, Listing: true, VaultAside: true, VaultFile: "/v/vault.json",
+		Listed: vaultops.ListResult{Initialized: initialized, VaultPath: "/v/vault.json"}}
+}
+
+func TestVaultPageInKeysMode(t *testing.T) {
+	none := keysAside(false)
+	v, va := vaultOf(none), vaultActions(none)
+	if v.Title != "No vault yet" || !strings.Contains(v.Sub, "key files") || v.Path != "/v/vault.json" {
+		t.Errorf("no vault: %q / %q / %q", v.Title, v.Sub, v.Path)
+	}
+	if !va.CreateVault || va.ChangePassphrase || va.Backup {
+		t.Errorf("no vault: actions %+v", va)
+	}
+	if h := headerLock(none); h.Shown {
+		t.Errorf("no vault: the header offers to lock key files: %+v", h)
+	}
+
+	have := keysAside(true)
+	have.FileFound = true
+	v, va = vaultOf(have), vaultActions(have)
+	if v.Title != "Vault · not in use" || len(v.Rows) < 2 {
+		t.Errorf("vault aside: %q, rows %+v", v.Title, v.Rows)
+	}
+	if va.CreateVault || !va.ChangePassphrase || !va.NewRecovery || !va.Backup || va.Lock || va.Unlock {
+		t.Errorf("vault aside: actions %+v", va)
+	}
+	if h := headerLock(have); h.Shown || h.Enabled {
+		t.Errorf("vault aside: header lock %+v", h)
+	}
+	if c := v.Captions[idAutoLockCaption]; !strings.Contains(c, "once the agent serves") {
+		t.Errorf("auto-lock caption %q", c)
+	}
+}
+
+func TestKeysPageIgnoresAVaultAside(t *testing.T) {
+	s := keysAside(true)
+	s.Listed.Identities = []vaultops.IdentityView{{Fingerprint: "SHA256:v"}}
+	if s.showsVault() || s.needsVault() || len(s.Rows()) != 0 {
+		t.Errorf("the Keys page shows the vault aside: %+v", s.Rows())
+	}
+	if text, _ := mainStatus(s); !strings.Contains(text, "0 keys in the agent") {
+		t.Errorf("status %q", text)
+	}
+	broken := keysAside(false)
+	broken.ListErr = &vaultops.OpError{Code: vaultops.CodeVaultUnreadable, Msg: "open vault: bad"}
+	if text, isErr := mainStatus(broken); isErr || strings.Contains(text, "bad") {
+		t.Errorf("a broken vault aside shows on the Keys page: %q", text)
+	}
+	if v := vaultOf(broken); !strings.Contains(v.Sub, "bad") || v.Path != "/v/vault.json" {
+		t.Errorf("but not on the Vault page: %+v", v)
+	}
+}
+
+func TestHeaderLock(t *testing.T) {
+	locked := vaultUp()
+	locked.Backend.VaultLocked = true
+	stopped := MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true}, ConfigIsVault: true}
+	for name, tc := range map[string]struct {
+		s     MainState
+		want  HeaderLock
+		label string
+	}{
+		"unlocked": {vaultUp(), HeaderLock{Shown: true, Enabled: true}, "&Lock vault"},
+		"locked":   {locked, HeaderLock{Shown: true, Enabled: true, Locked: true}, "Unlo&ck vault…"},
+		// It starts locked: the button says so, greyed until it runs.
+		"stopped": {stopped, HeaderLock{Shown: true, Locked: true}, "Unlo&ck vault…"},
+	} {
+		got := headerLock(tc.s)
+		if got != tc.want || got.label() != tc.label {
+			t.Errorf("%s: got %+v %q, want %+v %q", name, got, got.label(), tc.want, tc.label)
+		}
 	}
 }
