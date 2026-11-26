@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
 )
 
 func problemFor(problems []FieldProblem, field uint16) *FieldProblem {
@@ -140,5 +141,31 @@ func TestIsPipeName(t *testing.T) {
 		if isPipeName(p) != want {
 			t.Errorf("isPipeName(%q) = %v", p, !want)
 		}
+	}
+}
+
+func TestSettingsCaption_cygwin(t *testing.T) {
+	s := config.CoreSettings{AgentType: config.AgentTypeKeys, SocketPath: `\.\pipe\sshush`, KeyPaths: []string{}, CygwinSocket: true}
+	text := settingsCaptionFor(idSetCygwinCaption, s, settingsProblems(s))
+	if !strings.HasPrefix(text, "In Git Bash: export SSH_AUTH_SOCK=") || !strings.HasSuffix(text, "/"+platform.CygwinSocketFileName) {
+		t.Errorf("on, default path: %q", text)
+	}
+	s.CygwinSocketPath = "~/my.sock"
+	if text := settingsCaptionFor(idSetCygwinCaption, s, settingsProblems(s)); !strings.HasSuffix(text, "=~/my.sock") {
+		t.Errorf("on, own path: %q", text)
+	}
+	s.CygwinSocket = false
+	if text := settingsCaptionFor(idSetCygwinCaption, s, settingsProblems(s)); text != settingsCaptions[idSetCygwinCaption] {
+		t.Errorf("off: %q", text)
+	}
+	s.CygwinSocket, s.AgentType = true, config.AgentTypeExternal
+	if p := problemFor(settingsProblems(s), idSetCygwinCaption); p == nil || p.Blocker {
+		t.Errorf("external agent: want a warning, got %+v", p)
+	}
+	c := config.CoreSettings{}
+	d := c
+	d.CygwinSocket = true
+	if !needsRestart(c, d) {
+		t.Error("turning the Cygwin socket on or off needs a restart")
 	}
 }

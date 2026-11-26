@@ -301,6 +301,8 @@ func settingsTemplate(btn func(uint16, string) dlgItem, label func(uint16, uint3
 		label(idSetSocketCaption, ssEndEllipsis, ""),
 		{style: wsChild | wsTabStop | bsAutoCheckbox, id: idSetPageant, class: classButton, text: "Also answer as Pageant"},
 		label(idSetPageantCaption, ssEndEllipsis, ""),
+		{style: wsChild | wsTabStop | bsAutoCheckbox, id: idSetCygwin, class: classButton, text: "Also answer Git Bash (Cygwin socket)"},
+		label(idSetCygwinCaption, ssEndEllipsis, ""),
 		label(idSetVaultHeader, ssEndEllipsis, "Vault"),
 		label(idSetVaultTitle, ssEndEllipsis, "Vault file"),
 		edit(idSetVaultPath),

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ollykeran/sshush/internal/platform"
@@ -51,7 +53,12 @@ type Config struct {
 	// answers programs that look for PuTTY's Pageant (MobaXterm, WinSCP). True
 	// when the file leaves it out.
 	PageantEmulation bool
-	Theme            ThemeSection
+	// CygwinSocket is [agent].cygwin_socket: on Windows, the socket file the
+	// agent also serves Cygwin and MSYS2 programs on (Git Bash's ssh), ~
+	// expanded. The platform default when the file leaves it out; "" when the
+	// file sets it to "", which turns it off.
+	CygwinSocket string
+	Theme        ThemeSection
 
 	ServerListenPort     int64  // From [server].listen_port.
 	ServerAuthorizedKeys string // From [server].authorized_keys.
@@ -98,12 +105,29 @@ type agentSection struct {
 	WindowsSSHush string `toml:"windows_sshush,omitempty"`
 	// PageantEmulation is a pointer so a file that leaves it out means true.
 	PageantEmulation *bool `toml:"pageant_emulation,omitempty"`
+	// CygwinSocket is a pointer so that leaving it out (the default path) and
+	// "" (off) differ.
+	CygwinSocket *string `toml:"cygwin_socket,omitempty"`
 }
 
 // pageantEmulation is [agent].pageant_emulation, true when the file leaves it
 // out.
 func (a agentSection) pageantEmulation() bool {
 	return a.PageantEmulation == nil || *a.PageantEmulation
+}
+
+// cygwinSocket is [agent].cygwin_socket as the file says it: the default
+// path when it is left out, and nothing off Windows, where there is no such
+// thing.
+func (a agentSection) cygwinSocket() string {
+	switch {
+	case goruntime.GOOS != "windows":
+		return ""
+	case a.CygwinSocket == nil:
+		return platform.DefaultCygwinSocketPath()
+	default:
+		return strings.TrimSpace(*a.CygwinSocket)
+	}
 }
 
 type vaultSection struct {
@@ -143,6 +167,10 @@ func toDocument(cfg Config) configDocument {
 	if !cfg.PageantEmulation {
 		// Only false is written: left out, it is true.
 		a.PageantEmulation = &cfg.PageantEmulation
+	}
+	if goruntime.GOOS == "windows" && cfg.CygwinSocket != platform.DefaultCygwinSocketPath() {
+		// Only a path other than the default, or "" for off, is written.
+		a.CygwinSocket = &cfg.CygwinSocket
 	}
 	if a.KeyPaths == nil {
 		a.KeyPaths = []string{}
@@ -222,6 +250,14 @@ func LoadConfig(path string) (Config, error) {
 		if !filepath.IsAbs(cfg.SocketPath) {
 			cfg.SocketPath = filepath.Clean(filepath.Join(filepath.Dir(absConfigPath), cfg.SocketPath))
 		}
+	}
+	cfg.CygwinSocket = utils.ExpandHomeDirectory(cfg.CygwinSocket)
+	if cfg.CygwinSocket != "" && !filepath.IsAbs(cfg.CygwinSocket) {
+		absConfigPath, err := filepath.Abs(path)
+		if err != nil {
+			absConfigPath = path
+		}
+		cfg.CygwinSocket = filepath.Clean(filepath.Join(filepath.Dir(absConfigPath), cfg.CygwinSocket))
 	}
 	cfg.VaultPath = utils.ExpandHomeDirectory(cfg.VaultPath)
 	cfg.WindowsSSHush = utils.ExpandHomeDirectory(cfg.WindowsSSHush)
@@ -328,6 +364,7 @@ func documentToConfig(doc *configDocument) (Config, error) {
 		VaultPath:            vaultPath,
 		WindowsSSHush:        doc.Agent.WindowsSSHush,
 		PageantEmulation:     doc.Agent.pageantEmulation(),
+		CygwinSocket:         doc.Agent.cygwinSocket(),
 		Theme:                doc.Theme,
 		ServerListenPort:     doc.Server.ListenPort,
 		ServerAuthorizedKeys: doc.Server.AuthorizedKeys,

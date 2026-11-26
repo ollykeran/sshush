@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vault"
 )
@@ -33,6 +34,8 @@ const (
 	idSetSocketCaption
 	idSetPageant
 	idSetPageantCaption
+	idSetCygwin
+	idSetCygwinCaption
 	idSetVaultHeader
 	idSetVaultTitle
 	idSetVaultPath
@@ -84,6 +87,7 @@ var settingsCaptions = map[uint16]string{
 	idSetSocketCaption:  `The pipe ssh reaches the agent on, such as \\.\pipe\openssh-ssh-agent.`,
 	idSetVaultCaption:   "The vault file. It need not exist yet: create it on the Vault page.",
 	idSetPageantCaption: "Lets MobaXterm (Use external Pageant), WinSCP and PuTTY use these keys.",
+	idSetCygwinCaption:  "Lets Git Bash's ssh, and git with its own ssh, use these keys.",
 	idSetKeysCaption:    "Loaded when the agent serves key files.",
 	idSetDirsCaption:    "Also searched for keys by the TUI and 'sshush find', besides your .ssh folder.",
 }
@@ -146,6 +150,10 @@ func settingsProblems(s config.CoreSettings) []FieldProblem {
 		}
 	}
 
+	if s.CygwinSocket && s.AgentType == config.AgentTypeExternal {
+		warn(idSetCygwinCaption, "Not used: the agent is another program's, so sshush does not run one.")
+	}
+
 	if missing := missingPaths(s.KeyPaths, false); len(missing) > 0 {
 		warn(idSetKeysCaption, notFound(missing, "file"))
 	}
@@ -169,6 +177,27 @@ func settingsCaption(field uint16, problems []FieldProblem) (text string, proble
 		}
 	}
 	return settingsCaptions[field], nil
+}
+
+// settingsCaptionFor is what caption field shows for s: its first problem,
+// or what it says normally. Switched on, the Cygwin socket's caption is the
+// line that points Git Bash at it.
+func settingsCaptionFor(field uint16, s config.CoreSettings, problems []FieldProblem) string {
+	text, problem := settingsCaption(field, problems)
+	if problem == nil && field == idSetCygwinCaption && s.CygwinSocket {
+		return "In Git Bash: export SSH_AUTH_SOCK=" + cygwinSocketShown(s.CygwinSocketPath)
+	}
+	return text
+}
+
+// cygwinSocketShown is the Cygwin socket file's path as Git Bash would take
+// it: ~ for the home folder, forward slashes. path is the file's
+// [agent].cygwin_socket, "" for the default.
+func cygwinSocketShown(path string) string {
+	if path == "" {
+		path = platform.DefaultCygwinSocketPath()
+	}
+	return filepath.ToSlash(utils.DisplayPath(utils.ExpandHomeDirectory(path)))
 }
 
 // needsRestart reports whether going from old to s changes what the running
