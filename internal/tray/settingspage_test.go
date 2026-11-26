@@ -94,8 +94,11 @@ func TestAddPathsSkipsDuplicates(t *testing.T) {
 }
 
 func TestAgentTypeChoices(t *testing.T) {
-	if c := agentTypeChoices(config.AgentTypeKeys); len(c) != 3 {
-		t.Errorf("got %+v", c)
+	if c := agentTypeChoices(config.AgentTypeKeys); len(c) != 2 {
+		t.Errorf("an agent of another program is offered to a file that does not say it: %+v", c)
+	}
+	if c := agentTypeChoices(config.AgentTypeExternal); c[len(c)-1].value != config.AgentTypeExternal {
+		t.Error("a file that says external does not get it offered")
 	}
 	if c := agentTypeChoices(config.AgentTypeWindows); c[len(c)-1].value != config.AgentTypeWindows {
 		t.Error("a file that says windows does not get it offered")

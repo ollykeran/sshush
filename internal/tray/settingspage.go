@@ -56,16 +56,21 @@ type agentTypeChoice struct {
 	value, label string
 }
 
-// agentTypeChoices are what the agent can serve, as the page offers them.
-// "windows" only means something inside WSL, so it is offered only to a
-// file that already says it.
+// agentTypeChoices are what the agent can serve, as the page offers them:
+// key files or the vault. The other types are for config to be edited by
+// hand, so each is offered only to a file that already says it, to keep it:
+// "external", an agent some other program runs (1Password, Windows'
+// OpenSSH), which sshush must then never start or stop; and "windows", which
+// only means something inside WSL.
 func agentTypeChoices(current string) []agentTypeChoice {
 	c := []agentTypeChoice{
 		{config.AgentTypeKeys, "Key files"},
 		{config.AgentTypeVault, "The vault"},
-		{config.AgentTypeExternal, "Another agent"},
 	}
-	if current == config.AgentTypeWindows {
+	switch current {
+	case config.AgentTypeExternal:
+		c = append(c, agentTypeChoice{config.AgentTypeExternal, "Another program's agent"})
+	case config.AgentTypeWindows:
 		c = append(c, agentTypeChoice{config.AgentTypeWindows, "The Windows agent (WSL)"})
 	}
 	return c
