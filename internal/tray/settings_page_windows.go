@@ -153,6 +153,11 @@ func (w *mainWindow) settingsCommand(id, code uint16) bool {
 		if c := agentTypeChoices(f.saved.AgentType); int(int32(r)) >= 0 && int(int32(r)) < len(c) {
 			f.edit.AgentType = c[int32(r)].value
 		}
+		if f.edit.AgentType == config.AgentTypeVault && f.edit.VaultPath == "" {
+			// Where the Vault page creates one, when config names none.
+			f.edit.VaultPath = homePath(defaultVaultPath())
+			w.fillSettings()
+		}
 	case id == idSetSocket && code == enChange:
 		f.edit.SocketPath = windowText(control(w.hwnd, idSetSocket))
 	case id == idSetVaultPath && code == enChange:
@@ -280,17 +285,12 @@ func (w *mainWindow) saveSettings() bool {
 	if !strings.EqualFold(old.SocketPath, f.edit.SocketPath) {
 		note = " Quit sshush from the notification area and start it again to use the new pipe."
 	}
-	if note == "" && needsRestart(old, f.edit) && !t.environment().AgentUnmanaged &&
-		messageBoxOwned(w.hwnd, "Saved. Restart the agent now so it uses the new settings?", mbYesNo|windows.MB_ICONQUESTION) == idYes {
-		w.run("Restarting the agent…", func() opResult {
-			if err := restartAgent(t); err != nil {
-				return opResult{err: err}
-			}
-			return opResult{status: settingsSavedStatus(true)}
-		})
-		return true
+	if note == "" && needsRestart(old, f.edit) && canRestart(w.state) {
+		// The Restart agent button, beside Stop, applies them.
+		w.restartPending = true
+		note = " Restart the agent to apply them."
 	}
-	if needsRestart(old, f.edit) && note == "" {
+	if note == "" && needsRestart(old, f.edit) && !canRestart(w.state) {
 		note = " They apply when the agent next starts."
 	}
 	w.setStatus(settingsSavedStatus(false)+note, false)

@@ -184,9 +184,9 @@ func TestCardPagesFitAtEverySize(t *testing.T) {
 
 func TestVaultCardButtonsLineUp(t *testing.T) {
 	for _, width := range []int{900, 1400} {
-		boxes := mainLayout(width, 700, layoutMetrics{dpi: 96, natural: map[uint16]int{idVaultPasswd: 90, idVaultMode: 150}})
+		boxes := mainLayout(width, 700, layoutMetrics{dpi: 96, natural: map[uint16]int{idVaultPasswd: 90, idVaultImport: 150}})
 		right, w := boxes[idVaultPasswd].x+boxes[idVaultPasswd].w, boxes[idVaultPasswd].w
-		for _, id := range []uint16{idVaultRecovery, idVaultImport, idVaultMode} {
+		for _, id := range []uint16{idVaultRecovery, idVaultImport} {
 			if b := boxes[id]; b.x+b.w != right || b.w != w {
 				t.Errorf("width %d: card button %d at %+v; want %d wide, ending at %d", width, id, b, w, right)
 			}

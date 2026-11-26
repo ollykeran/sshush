@@ -62,7 +62,7 @@ const (
 )
 
 // vaultCardButtons are the Vault page's card buttons, which share one width.
-var vaultCardButtons = []uint16{idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport, idVaultMode}
+var vaultCardButtons = []uint16{idVaultPasswd, idVaultRecovery, idVaultBackup, idVaultImport}
 
 // autoLockControls are the Vault page's Auto-lock settings.
 var autoLockControls = []uint16{idAutoLockTitle, idAutoLockCaption, idAutoLockSession, idAutoLockSleep, idAutoLockIdleLabel, idAutoLockIdle}
@@ -76,7 +76,7 @@ var vaultPage = func() map[uint16]bool {
 	for _, id := range vaultCardButtons {
 		m[id] = true
 	}
-	for id := uint16(idVaultSecHeader); id <= idVaultModeCaption; id++ {
+	for id := uint16(idVaultSecHeader); id <= idVaultFileCaption; id++ {
 		m[id] = true
 	}
 	for i := range vaultRowCount {
@@ -96,13 +96,13 @@ var settingsPage = func() map[uint16]bool {
 }()
 
 // sectionHeaders head the groups of cards, in the section font.
-var sectionHeaders = []uint16{idVaultSecHeader, idAutoLockTitle, idVaultFileHeader, idVaultModeHeader,
+var sectionHeaders = []uint16{idVaultSecHeader, idAutoLockTitle, idVaultFileHeader,
 	idSetAgentHeader, idSetVaultHeader, idSetTrayHeader, idSetKeysHeader, idSetDirsHeader}
 
 // secondaryLabels are drawn in the secondary text colour: the cards'
 // explanations.
 var secondaryLabels = map[uint16]bool{
-	idVaultPasswdCaption: true, idVaultRecoveryCaption: true, idVaultFileCaption: true, idVaultModeCaption: true,
+	idVaultPasswdCaption: true, idVaultRecoveryCaption: true, idVaultFileCaption: true,
 	idAutoLockCaption: true, idSetTypeCaption: true, idSetSocketCaption: true, idSetVaultCaption: true,
 	idSetKeysCaption: true, idSetDirsCaption: true,
 }
@@ -140,10 +140,13 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	// at the right the button that starts or stops it.
 	out[idMainStateIcon] = box{margin, margin + s(2), s(lyStateIcon), s(lyStateIcon)}
 	x := right
-	if !m.hidden[idMainAgentToggle] {
-		w := nat(idMainAgentToggle, 100)
+	for _, id := range []uint16{idMainAgentToggle, idMainRestart} {
+		if m.hidden[id] {
+			continue
+		}
+		w := nat(id, 100)
 		x -= w
-		out[idMainAgentToggle] = box{x, margin + s(4), w, btnH}
+		out[id] = box{x, margin + s(4), w, btnH}
 		x -= gap
 	}
 	textX := margin + s(lyStateIcon) + s(12)
@@ -156,6 +159,7 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	out[idMainTabKeys] = box{margin, tabY, tw, btnH}
 	out[idMainTabVault] = box{margin + tw, tabY, tw, btnH}
 	out[idMainTabSettings] = box{margin + 2*tw, tabY, tw, btnH}
+	out[idMainTabLine] = box{margin, tabY + btnH, right - margin, max(s(1), 1)}
 
 	// Command bar: what is not about one key.
 	barY := tabY + btnH + gap
@@ -382,8 +386,6 @@ func vaultLayout(out map[uint16]box, body box, m layoutMetrics) {
 
 	k.header(idVaultFileHeader, false)
 	k.card(idVaultFileTitle, idVaultFileCaption, bw, idVaultBackup, idVaultImport)
-	k.header(idVaultModeHeader, false)
-	k.card(idVaultModeTitle, idVaultModeCaption, bw, idVaultMode)
 }
 
 // settingsLayout places the Settings page in body: the agent, the vault and

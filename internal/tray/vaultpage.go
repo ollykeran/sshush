@@ -38,9 +38,6 @@ type VaultActions struct {
 	Backup, Import bool
 	// ChangePassphrase and NewRecovery change the vault's secrets.
 	ChangePassphrase, NewRecovery bool
-	// UseVault and UseKeys switch what the agent serves, in config, and
-	// restart it. At most one is set.
-	UseVault, UseKeys bool
 }
 
 // vaultPath is the vault file the window knows of: the one listed, else the
@@ -64,16 +61,16 @@ func vaultOf(s MainState) VaultView {
 		v.Sub = describeLine(s.ListErr)
 	case s.noVaultYet() && s.VaultAside:
 		v.Title = "No vault yet"
-		v.Sub = "The agent serves key files. Create a vault to keep your keys encrypted in one file you can take to another PC, then switch the agent to it when you are ready."
+		v.Sub = "The agent serves key files. Create a vault to keep your keys encrypted in one file you can take to another PC, then have the agent serve it on the Settings tab."
 	case s.noVaultYet():
 		v.Title = "No vault yet"
 		v.Sub = "Create one to keep your keys encrypted in a single file you can take to another PC."
 	case !s.Listing:
 		v.Title = "Not using a vault"
-		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC: use one, or import one you have."
+		v.Sub = "The agent serves key files. A vault keeps your keys encrypted in one file you can take to another PC: create one, or import one you have."
 	case s.VaultAside:
 		v.Title = "Vault · not in use"
-		v.Sub = "The agent serves key files. You can still back up the vault and change its secrets; switch the agent to it to use its keys."
+		v.Sub = "The agent serves key files. You can still back up the vault and change its secrets; have the agent serve it on the Settings tab to use its keys."
 	case !s.Reachable:
 		v.Title = "Vault · agent stopped"
 		v.Sub = "Start the agent to unlock the vault and use its keys."
@@ -126,14 +123,6 @@ func vaultCaptions(s MainState) map[uint16]string {
 	if !s.ConfigIsVault && !s.isVault() {
 		c[idAutoLockCaption] = "Applies once the agent serves the vault."
 	}
-	switch {
-	case !s.Managed:
-		c[idVaultModeCaption] = "The agent is not one sshush runs."
-	case s.ConfigIsVault:
-		c[idVaultModeCaption] = "The agent serves the vault's keys."
-	default:
-		c[idVaultModeCaption] = "The agent serves key files."
-	}
 	return c
 }
 
@@ -155,9 +144,7 @@ func vaultActions(s MainState) VaultActions {
 		NewRecovery:      s.hasVault(),
 		// Importing restarts the agent, as switching does, so both need an
 		// agent this sshush runs.
-		Import:   s.Managed,
-		UseVault: s.Managed && !s.ConfigIsVault,
-		UseKeys:  s.Managed && s.ConfigIsVault,
+		Import: s.Managed,
 	}
 }
 
@@ -211,14 +198,6 @@ func (p VaultPrimary) glyph() rune {
 		return 0xE72E // Lock
 	}
 	return 0xE785 // Unlock
-}
-
-// modeLabel names the mode button by what pressing it does.
-func modeLabel(useKeys bool) string {
-	if useKeys {
-		return "Use key files"
-	}
-	return "Use the vault"
 }
 
 // keysLabel counts a vault's keys and, when the agent says, how many it is

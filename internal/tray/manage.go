@@ -59,15 +59,16 @@ const (
 	idMainTabKeys
 	idMainTabVault
 	idMainTabSettings
+	idMainTabLine
 	idVaultTitle
 	idVaultSub
 	idVaultOpenFolder
 	idVaultCopyPath
 	idVaultBackup
 	idVaultImport
-	idVaultMode
 	idVaultPasswd
 	idVaultRecovery
+	idMainRestart
 	idAutoLockTitle
 	idAutoLockSession
 	idAutoLockSleep
@@ -84,9 +85,6 @@ const (
 	idVaultFileHeader
 	idVaultFileTitle
 	idVaultFileCaption
-	idVaultModeHeader
-	idVaultModeTitle
-	idVaultModeCaption
 	// The Vault page's facts take two IDs each, from here on; see
 	// vaultRowLabel. Nothing may follow this in the list.
 	idVaultRows
@@ -123,8 +121,7 @@ const (
 	bsAutoCheckbox  = 0x0003
 	classListView   = "SysListView32"
 	wsGroup         = 0x00020000
-	bsAutoRadio     = 0x0009
-	bsPushLike      = 0x1000
+	bsOwnerDraw     = 0x000B
 	classComboBox   = 0x85
 	classListBox    = 0x83
 	lbsNotify       = 0x0001
@@ -153,7 +150,7 @@ var buttonGlyphs = map[uint16]rune{
 	idVaultCopyPath:   0xE8C8, // Copy
 	idVaultBackup:     0xE74E, // Save
 	idVaultImport:     0xE8B5, // Import
-	idVaultMode:       0xE8AB, // Switch
+	idMainRestart:     0xE777, // UpdateRestore
 	idVaultPasswd:     0xE8D7, // Permissions: a key
 	idVaultRecovery:   0xE895, // Sync
 }
@@ -209,12 +206,15 @@ func mainTemplate() []uint16 {
 		label(idMainStateIcon, ssIcon|ssCenterImage, ""),
 		label(idMainAgent, ssEndEllipsis, ""),
 		label(idMainSource, ssPathEllipsis, ""),
+		btn(idMainRestart, "Restart agent"),
 		btn(idMainAgentToggle, "S&top agent"),
-		// The page tabs: push-like radio buttons, which take the window's
-		// theme, dark included, as a tab control does not.
-		{style: stop | wsGroup | bsAutoRadio | bsPushLike, id: idMainTabKeys, class: classButton, text: "&Keys"},
-		{style: stop | bsAutoRadio | bsPushLike, id: idMainTabVault, class: classButton, text: "&Vault"},
-		{style: stop | bsAutoRadio | bsPushLike, id: idMainTabSettings, class: classButton, text: "Settin&gs"},
+		// The page tabs: owner-drawn buttons, drawn as Windows 11's top
+		// navigation is, which take the window's theme, dark included, as a
+		// tab control does not. A line runs under them.
+		{style: stop | wsGroup | bsOwnerDraw, id: idMainTabKeys, class: classButton, text: "&Keys"},
+		{style: stop | bsOwnerDraw, id: idMainTabVault, class: classButton, text: "&Vault"},
+		{style: stop | bsOwnerDraw, id: idMainTabSettings, class: classButton, text: "Settin&gs"},
+		label(idMainTabLine, 0, ""),
 		// The Keys page's command bar. Add ends the tabs' group.
 		{style: stop | wsGroup, id: idMainAdd, class: classButton, text: "&Add keys…"},
 		btn(idMainCreateKey, "Create ke&y…"),
@@ -273,10 +273,6 @@ func mainTemplate() []uint16 {
 		hiddenLabel(idVaultFileCaption, ssEndEllipsis, ""),
 		hiddenBtn(idVaultBackup, "&Back up…"),
 		hiddenBtn(idVaultImport, "Import…"),
-		hiddenLabel(idVaultModeHeader, ssEndEllipsis, "Agent"),
-		hiddenLabel(idVaultModeTitle, ssEndEllipsis, "What the agent serves"),
-		hiddenLabel(idVaultModeCaption, ssEndEllipsis, ""),
-		hiddenBtn(idVaultMode, modeLabel(false)),
 	)
 	items = append(items, settingsTemplate(hiddenBtn, hiddenLabel)...)
 	items = append(items, []dlgItem{
@@ -560,6 +556,27 @@ func autoloadLabel(on bool) string {
 	}
 	return "Turn autoload o&ff"
 }
+
+// restartReason says why the agent should restart to do what config says
+// now, or "" when it need not. pending reports that settings were saved
+// since the agent started, which only the window knows; a change of what the
+// agent serves shows in the state itself.
+func restartReason(s MainState, pending bool) string {
+	switch {
+	case !s.Managed || !s.Reachable:
+		return ""
+	case s.ConfigIsVault && !s.isVault():
+		return "The settings now have the agent serve the vault. Restart the agent to switch to it."
+	case !s.ConfigIsVault && s.isVault():
+		return "The settings now have the agent serve key files. Restart the agent to switch to them."
+	case pending:
+		return "The settings changed since the agent started. Restart the agent to apply them."
+	}
+	return ""
+}
+
+// canRestart reports whether the agent can be restarted from here.
+func canRestart(s MainState) bool { return s.Managed && s.Reachable }
 
 // agentToggleLabel names the start/stop button by what pressing it does.
 func agentToggleLabel(a MainActions) string {

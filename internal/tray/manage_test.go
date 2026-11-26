@@ -321,3 +321,33 @@ func TestHeaderOf(t *testing.T) {
 		}
 	}
 }
+
+func TestRestartReason(t *testing.T) {
+	keys := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}}
+	if r := restartReason(keys, false); r != "" {
+		t.Errorf("nothing changed: %q", r)
+	}
+	if r := restartReason(keys, true); !strings.Contains(r, "Restart") {
+		t.Errorf("settings saved: %q", r)
+	}
+	toVault := keys
+	toVault.ConfigIsVault = true
+	if r := restartReason(toVault, false); !strings.Contains(r, "vault") {
+		t.Errorf("config now serves the vault: %q", r)
+	}
+	toKeys := vaultUp()
+	toKeys.ConfigIsVault = false
+	if r := restartReason(toKeys, false); !strings.Contains(r, "key files") {
+		t.Errorf("config now serves key files: %q", r)
+	}
+	stopped := keys
+	stopped.Reachable = false
+	if r := restartReason(stopped, true); r != "" || canRestart(stopped) {
+		t.Errorf("a stopped agent starts with the settings as they are: %q", r)
+	}
+	unmanaged := keys
+	unmanaged.Managed = false
+	if canRestart(unmanaged) || restartReason(unmanaged, true) != "" {
+		t.Error("an agent sshush does not run is not restarted from here")
+	}
+}

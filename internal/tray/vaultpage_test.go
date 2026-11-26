@@ -89,22 +89,22 @@ func TestVaultOfStates(t *testing.T) {
 		hasLocate bool
 	}{
 		{"unlocked", vaultUp(), "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"unlocked, file on this PC", onDisk, "Vault · unlocked", "available", true, "/v/vault.json",
-			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Lock: true, OpenFolder: true, CopyPath: true, Backup: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"locked", locked, "Vault · locked", "Unlock", true, "/v/vault.json",
-			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{Unlock: true, OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"agent down", down, "Vault · agent stopped", "Start the agent", true, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true, ChangePassphrase: true, NewRecovery: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true, ChangePassphrase: true, NewRecovery: true}, true},
 		{"no vault yet", noVault, "No vault yet", "Create one", false, "/v/vault.json",
-			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{CreateVault: true, OpenFolder: true, CopyPath: true, Import: true}, true},
 		{"key files", keys, "Not using a vault", "key files", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseVault: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true}, true},
 		{"key files, no vault configured", MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}},
-			"Not using a vault", "key files", false, "", VaultActions{Import: true, UseVault: true}, false},
+			"Not using a vault", "key files", false, "", VaultActions{Import: true}, false},
 		{"unmanaged agent", unmanaged, "Not using a vault", "key files", false, "", VaultActions{}, false},
 		{"unreadable", broken, "Vault", "open vault: bad", false, "/v/vault.json",
-			VaultActions{OpenFolder: true, CopyPath: true, Import: true, UseKeys: true}, true},
+			VaultActions{OpenFolder: true, CopyPath: true, Import: true}, true},
 	}
 	for _, tc := range tests {
 		v := vaultOf(tc.state)
@@ -192,7 +192,7 @@ func TestVaultPageInKeysMode(t *testing.T) {
 	if v.Title != "No vault yet" || !strings.Contains(v.Sub, "key files") || v.Path != "/v/vault.json" {
 		t.Errorf("no vault: %q / %q / %q", v.Title, v.Sub, v.Path)
 	}
-	if !va.CreateVault || va.ChangePassphrase || va.Backup || !va.UseVault {
+	if !va.CreateVault || va.ChangePassphrase || va.Backup {
 		t.Errorf("no vault: actions %+v", va)
 	}
 	if p := vaultPrimary(va); p.Kind != PrimaryCreate || !p.Enabled {
@@ -205,15 +205,12 @@ func TestVaultPageInKeysMode(t *testing.T) {
 	if v.Title != "Vault · not in use" || len(v.Rows) < 2 {
 		t.Errorf("vault aside: %q, rows %+v", v.Title, v.Rows)
 	}
-	if va.CreateVault || !va.ChangePassphrase || !va.NewRecovery || !va.Backup || va.Lock || va.Unlock || !va.UseVault {
+	if va.CreateVault || !va.ChangePassphrase || !va.NewRecovery || !va.Backup || va.Lock || va.Unlock {
 		t.Errorf("vault aside: actions %+v", va)
 	}
 	// Unlocking needs the agent to serve the vault: it shows, greyed.
 	if p := vaultPrimary(va); p.Kind != PrimaryUnlock || p.Enabled {
 		t.Errorf("vault aside: primary %+v", p)
-	}
-	if c := v.Captions[idVaultModeCaption]; !strings.Contains(c, "key files") {
-		t.Errorf("mode caption %q", c)
 	}
 	if c := v.Captions[idAutoLockCaption]; !strings.Contains(c, "once the agent serves") {
 		t.Errorf("auto-lock caption %q", c)

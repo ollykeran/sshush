@@ -215,6 +215,9 @@ type mainWindow struct {
 	busy      bool
 	statusErr bool
 	tone      Tone // the header's colour
+	// restartPending is set when settings the agent reads at start were
+	// saved while it ran, until it next starts.
+	restartPending bool
 	// lastAgentGlyph keeps the start/stop button's icon while it is disabled.
 	lastAgentGlyph rune
 	ui             *uiCache
@@ -338,8 +341,16 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 
+	case wmDrawItem:
+		if w.ui != nil && w.drawTab(lParam) {
+			return 1
+		}
+		return 0
+
 	case wmCtlColorStatic:
 		switch lParam {
+		case control(hwnd, idMainTabLine):
+			return tabDividerBrush()
 		case control(hwnd, idMainAgent):
 			if c, ok := toneColor(w.tone, darkNow()); ok {
 				return ctlColorText(msg, wParam, c)
@@ -503,8 +514,8 @@ func (w *mainWindow) command(id uint16) bool {
 		w.backupVault()
 	case idVaultImport:
 		w.importVault()
-	case idVaultMode:
-		w.switchMode()
+	case idMainRestart:
+		w.restart()
 	case idAutoLockSession, idAutoLockSleep:
 		w.autoLockChanged()
 	case idVaultPasswd:
@@ -667,7 +678,13 @@ func (w *mainWindow) finish() {
 	setText(control(w.hwnd, idMainAgent), agentLine(w.state.Reachable, w.state.Managed, w.state.Backend))
 	setText(control(w.hwnd, idMainSource), sourceLine(w.state))
 
+	if !w.state.Reachable {
+		w.restartPending = false // it starts with the settings as they are
+	}
 	text, isErr := mainStatus(w.state)
+	if reason := restartReason(w.state, w.restartPending); reason != "" && !isErr {
+		text = reason
+	}
 	switch {
 	case res.background && !isErr && !w.statusErr && before == agentLine(w.state.Reachable, w.state.Managed, w.state.Backend):
 		text = windowText(control(w.hwnd, idMainStatus))
@@ -802,6 +819,10 @@ func (w *mainWindow) updateButtons() {
 	}
 	w.setButtonIcon(idMainAgentToggle, w.lastAgentGlyph, a.Start || a.Stop)
 	w.show(idMainAgentToggle, w.state.Managed)
+	// Restarting is how saved settings reach the agent: always there for an
+	// agent sshush runs, enabled while it runs.
+	w.show(idMainRestart, w.state.Managed)
+	enable(idMainRestart, canRestart(w.state) && !w.busy)
 	enable(idMainSelftest, !w.busy)
 	enable(idMainRefresh, !w.busy)
 
@@ -859,9 +880,6 @@ func (w *mainWindow) updateButtons() {
 	enable(idVaultRecovery, va.NewRecovery)
 	enable(idVaultBackup, va.Backup)
 	enable(idVaultImport, va.Import)
-	setText(control(w.hwnd, idVaultMode), modeLabel(w.state.ConfigIsVault))
-	enable(idVaultMode, va.UseVault || va.UseKeys)
-	w.setButtonIcon(idVaultMode, buttonGlyphs[idVaultMode], va.UseVault || va.UseKeys)
 	// Auto-lock is a setting the tray keeps, whatever the agent serves now.
 	for _, id := range autoLockControls {
 		procEnableWindow.Call(control(w.hwnd, int(id)), boolArg(!w.busy))
@@ -912,11 +930,11 @@ func (w *mainWindow) selectPage(page int) {
 	}
 }
 
-// checkTab checks the page tab for the page shown.
+// checkTab draws the page tabs again, the one for the page shown selected.
 func (w *mainWindow) checkTab() {
-	procSendMessageW.Call(control(w.hwnd, idMainTabKeys), bmSetCheck, boolArg(w.page == pageKeys), 0)
-	procSendMessageW.Call(control(w.hwnd, idMainTabVault), bmSetCheck, boolArg(w.page == pageVault), 0)
-	procSendMessageW.Call(control(w.hwnd, idMainTabSettings), bmSetCheck, boolArg(w.page == pageSettings), 0)
+	for _, id := range []int{idMainTabKeys, idMainTabVault, idMainTabSettings} {
+		procRedrawWindow.Call(control(w.hwnd, id), 0, 0, rdwInvalidate|rdwErase)
+	}
 }
 
 // isVaultRowLabel reports whether id labels one of the Vault page's facts.
@@ -971,7 +989,7 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateKey, idMainRefresh,
 		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
 		idMainTabKeys, idMainTabVault, idMainTabSettings, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport,
-		idVaultMode, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
+		idMainRestart, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
 		idSetDirsAdd, idSetDirsRemove, idSetSave, idSetDiscard} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
 		if id == idMainLock {
@@ -1192,6 +1210,22 @@ func (w *mainWindow) createVault() {
 	})
 }
 
+// restart stops the agent and starts it again with the settings as config
+// has them now.
+func (w *mainWindow) restart() {
+	if !canRestart(w.state) || w.busy {
+		return
+	}
+	t := w.t
+	w.run("Restarting the agent…", func() opResult {
+		if err := restartAgent(t); err != nil {
+			return opResult{err: err}
+		}
+		return opResult{status: "Restarted the agent with the current settings."}
+	})
+	w.restartPending = false
+}
+
 // afterCreateAside follows creating a vault the agent does not serve: config
 // is made to name it, so the CLI finds it too, and the user may switch the
 // agent to it at once, unlocked with pass.
@@ -1212,7 +1246,7 @@ func (w *mainWindow) afterCreateAside(env vaultops.Env, vaultFile string, pass [
 		}
 	}
 	if !t.environment().AgentUnmanaged &&
-		messageBoxOwned(w.hwnd, switchQuestion(true, true)+"\n\nSwitch now? You can do it later from the Vault tab.", mbYesNo|windows.MB_ICONQUESTION) == idYes {
+		messageBoxOwned(w.hwnd, switchQuestion(true, true)+"\n\nSwitch now? You can do it later on the Settings tab.", mbYesNo|windows.MB_ICONQUESTION) == idYes {
 		if err := switchAgent(t, true, pass); err != nil {
 			return opResult{err: fmt.Errorf("created the vault, but could not switch to it: %w", err)}
 		}

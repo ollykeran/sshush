@@ -151,36 +151,6 @@ func askVaultFilePassphrase(owner uintptr, path string) ([]byte, vaultops.FileSu
 	}
 }
 
-// switchMode switches the agent between serving a vault and serving key
-// files, in config, and restarts it.
-func (w *mainWindow) switchMode() {
-	va := w.vaultActionsNow()
-	if !va.UseVault && !va.UseKeys {
-		return
-	}
-	toVault := va.UseVault
-	t := w.t
-	env := t.environment()
-	vaultPath := env.VaultPath
-	if vaultPath == "" {
-		vaultPath = defaultVaultPath()
-	}
-	vaultFile := vault.ResolveToFile(utils.ExpandHomeDirectory(vaultPath))
-	_, statErr := os.Stat(vaultFile)
-	exists := statErr == nil
-	if messageBoxOwned(w.hwnd, switchQuestion(toVault, exists), mbYesNo|windows.MB_ICONQUESTION) != idYes {
-		return
-	}
-	working := "Switching to key files…"
-	if toVault {
-		working = "Switching to a vault…"
-	}
-	w.run(working, func() opResult {
-		status, err := switchAgentStatus(t, toVault, nil)
-		return done(status, err)
-	})
-}
-
 // switchAgent switches the agent between serving a vault and serving key
 // files, in config, and restarts it. A vault agent is unlocked with pass, or
 // with none asks for the passphrase.
