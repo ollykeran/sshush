@@ -34,7 +34,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 
 - **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
 - **Keys**: create, edit comment, find, export public key, validate. Editing a key's comment (`sshush edit`, or the TUI's `e` key on a loaded agent key) also updates its `.pub` companion file when one exists alongside the private key, so the two stay in sync.
-- **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
+- **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing. `sshush selftest --extended` (`-x`) also logs in over SSH to a temporary sshush server on 127.0.0.1, proving the agent can complete a real login.
 - **TUI**: `sshush tui` for interactive key management. The Agent tab offers keys found in `~/.ssh`, the current directory and any `[agent].search_dirs`; press `f` to search again.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
@@ -53,7 +53,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 | `sshush tui` | interactive UI |
 | `sshush create` / `edit` / `export` / `find` | key file operations |
 | `sshush validate` | validate and inspect a key file (private or public) |
-| `sshush selftest` | test agent connectivity (env, socket, list, sign) |
+| `sshush selftest [-x]` | test agent connectivity (env, socket, list, sign); `-x` also logs in over SSH to a temporary local server |
 | `sshush vault …` / `lock` / `unlock` | optional encrypted vault (see [docs/vault.md](docs/vault.md)) |
 | `sshush server` / `server status` / `server logs` | optional TCP SSH server, off until enabled in config, and its log |
 | `sshush theme` / `completion` / `version` | theming, shell completion, build info |

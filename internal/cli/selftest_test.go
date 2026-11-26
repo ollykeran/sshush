@@ -149,3 +149,32 @@ func TestRunSelftest_sshAuthSockUnset(t *testing.T) {
 		t.Fatalf("runSelftest with unset SSH_AUTH_SOCK: %v", err)
 	}
 }
+
+func TestRunSelftest_extended(t *testing.T) {
+	t.Parallel()
+	socketPath, agentClient := startTestAgent(t)
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := runCreate("ed25519", 0, "extended", keyPath, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.AddKeyFromPath(agentClient, keyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newConfiguredCommand(&config.Config{SocketPath: socketPath})
+	cmd.Flags().BoolP("extended", "x", false, "")
+	if err := cmd.Flags().Set("extended", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSelftest(cmd, nil); err != nil {
+		t.Fatalf("runSelftest --extended: %v", err)
+	}
+}
+
+func TestSelftestCommand_extendedFlag(t *testing.T) {
+	t.Parallel()
+	f := newSelftestCommand().Flags().Lookup("extended")
+	if f == nil || f.Shorthand != "x" {
+		t.Fatalf("selftest should have --extended/-x, got %+v", f)
+	}
+}
