@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/utils"
 	ssh "golang.org/x/crypto/ssh"
 )
 
@@ -179,7 +180,7 @@ func TestIdentities_listsWhatListDoesNot(t *testing.T) {
 	}
 	id := got.Identities[0]
 	if id.Fingerprint != stored.Fingerprint || id.Comment != "stored-not-loaded" || id.KeyType != "ssh-ed25519" ||
-		!id.Autoload || id.Filepath != keyPath || !bytes.Equal(id.PublicKey, stored.PublicKey) {
+		!id.Autoload || id.Filepath != utils.SourcePath(keyPath) || !bytes.Equal(id.PublicKey, stored.PublicKey) {
 		t.Fatalf("identity: want what the store holds, got %+v", id)
 	}
 }

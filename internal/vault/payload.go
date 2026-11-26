@@ -4,6 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 // BuildSetAutoloadPayload builds the extension payload for vault-set-autoload.
@@ -42,7 +45,19 @@ func BuildAddKeyOptsPayload(path string, autoload bool) ([]byte, error) {
 		return nil, fmt.Errorf("vault: read key file %s: %w", path, err)
 	}
 	defer clear(pemData)
-	return buildAddKeyOptsPayloadPEM(pemData, path, autoload), nil
+	return buildAddKeyOptsPayloadPEM(pemData, recordedPath(path), autoload), nil
+}
+
+// recordedPath is path as recorded in the vault: absolute, and in the form
+// that says which environment it is in (see [utils.SourcePath]).
+func recordedPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return utils.SourcePath(path)
 }
 
 // buildAddKeyOptsPayloadPEM is BuildAddKeyOptsPayload for a key already in

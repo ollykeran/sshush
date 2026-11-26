@@ -65,6 +65,7 @@ const (
 	wmApp               = 0x8000
 	wmMainDone          = wmApp + 1 // an operation finished; take mainWindow.result
 	wmMainRefresh       = wmApp + 2 // the tray saw the agent change
+	wmMainProbed        = wmApp + 4 // distroProbe found where a key came from
 	bnClicked           = 0
 	bmGetCheck          = 0x00F0
 	bmSetCheck          = 0x00F1
@@ -227,6 +228,8 @@ type mainWindow struct {
 	page     int
 	vault    VaultView
 	settings settingsForm
+	// probe finds the WSL distro of keys recorded without one.
+	probe distroProbe
 
 	mu     sync.Mutex
 	result *opResult
@@ -456,6 +459,10 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			w.run("", nil)
 		}
 		return 1
+
+	case wmMainProbed:
+		w.updateButtons()
+		return 1
 	}
 	return 0
 }
@@ -504,6 +511,8 @@ func (w *mainWindow) command(id uint16) bool {
 		w.selectPage(pageSettings)
 	case idVaultOpenFolder:
 		w.showVaultInExplorer()
+	case idMainOpenFrom:
+		w.showKeyFileInExplorer()
 	case idVaultCopyPath:
 		w.copyVaultPath()
 	case idVaultBackup:
@@ -766,7 +775,7 @@ func (w *mainWindow) actions() MainActions {
 
 // detailControls are hidden while no key is selected.
 var detailControls = []uint16{idMainFpLabel, idMainFp, idMainCopyFp, idMainPubLabel, idMainPub, idMainCopyPub,
-	idMainFromLabel, idMainFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove}
+	idMainFromLabel, idMainFrom, idMainOpenFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove}
 
 // updateButtons enables what the state and selection allow, fills the
 // details pane for the selected key, and lays the window out again for
@@ -829,6 +838,14 @@ func (w *mainWindow) updateButtons() {
 	enable(idMainRefresh, !w.busy)
 
 	w.detail = detailOf(w.state, w.selected())
+	if w.detail.FromLinux != "" {
+		hwnd := w.hwnd
+		done := func() { procPostMessageW.Call(hwnd, wmMainProbed, 0, 0) }
+		if distro, ok := w.probe.lookup(w.detail.FromLinux, done); ok && distro != "" {
+			w.detail = w.detail.withDistro(distro)
+		}
+	}
+	enable(idMainOpenFrom, w.detail.FromReveal != "")
 	setText(control(w.hwnd, idMainDetailTitle), w.detail.Title)
 	setText(control(w.hwnd, idMainDetailSub), w.detail.Sub)
 	setText(control(w.hwnd, idMainFp), w.detail.Fingerprint)
@@ -983,7 +1000,7 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
 	out := map[uint16]int{}
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateKey, idMainRefresh,
-		idMainCreateVault, idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
+		idMainCreateVault, idMainCopyFp, idMainCopyPub, idMainOpenFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
 		idMainTabKeys, idMainTabVault, idMainTabSettings, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport,
 		idMainRestart, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
 		idSetDirsAdd, idSetDirsRemove, idSetSave, idSetDiscard} {
@@ -1428,7 +1445,21 @@ func (w *mainWindow) copied(text, what string) {
 // showVaultInExplorer opens the vault's folder with the file selected, or
 // with no file yet the nearest folder there is.
 func (w *mainWindow) showVaultInExplorer() {
-	path := w.vault.Path
+	w.revealInExplorer(w.vault.Path, "", "The vault's folder does not exist yet.")
+}
+
+// showKeyFileInExplorer opens the folder the selected key was added from,
+// with its file selected.
+func (w *mainWindow) showKeyFileInExplorer() {
+	w.revealInExplorer(w.detail.FromReveal,
+		"The key file is no longer there; opened the nearest folder that is.",
+		"The folder the key was added from is no longer there.")
+}
+
+// revealInExplorer opens Explorer with path selected or, when path is gone,
+// at the nearest folder above it that exists, saying moved. With no folder
+// left at all it says gone.
+func (w *mainWindow) revealInExplorer(path, moved, gone string) {
 	if path == "" {
 		return
 	}
@@ -1441,12 +1472,15 @@ func (w *mainWindow) showVaultInExplorer() {
 			}
 			parent := filepath.Dir(dir)
 			if parent == dir {
-				w.setStatus("The vault's folder does not exist yet.", false)
+				w.setStatus(gone, false)
 				return
 			}
 			dir = parent
 		}
 		args = `"` + dir + `"`
+		if moved != "" {
+			w.setStatus(moved, false)
+		}
 	}
 	verb, _ := windows.UTF16PtrFromString("open")
 	exe, _ := windows.UTF16PtrFromString("explorer.exe")

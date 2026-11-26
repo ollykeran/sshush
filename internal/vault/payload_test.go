@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ollykeran/sshush/internal/utils"
 )
 
 func TestBuildAddKeyOptsPayload_autoloadByte(t *testing.T) {
@@ -94,7 +96,7 @@ func TestBuildAddKeyOptsPayload_filepathRoundTrip(t *testing.T) {
 	fpOffset := 5 + pemLen + 1
 	fpLen := int(binary.BigEndian.Uint32(payload[fpOffset : fpOffset+4]))
 	filepath := string(payload[fpOffset+4 : fpOffset+4+fpLen])
-	if filepath != p {
-		t.Fatalf("filepath in payload: got %q, want %q", filepath, p)
+	if want := utils.SourcePath(p); filepath != want {
+		t.Fatalf("filepath in payload: got %q, want %q", filepath, want)
 	}
 }
