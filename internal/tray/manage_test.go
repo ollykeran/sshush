@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -247,6 +248,31 @@ func TestDetailOf(t *testing.T) {
 	}
 	if !strings.HasSuffix(d.From, "id_work") {
 		t.Errorf("from: got %q", d.From)
+	}
+
+	wsl := id
+	wsl.Filepath = `\\wsl.localhost\Debian\home\olly\.ssh\id_rsa`
+	if d := detailOf(v, &wsl); d.From != "WSL (Debian) · ~/.ssh/id_rsa" || d.FromReveal != wsl.Filepath {
+		t.Errorf("key from WSL: got %q, reveal %q", d.From, d.FromReveal)
+	}
+	win := id
+	win.Filepath = `D:\keys\id_rsa`
+	if d := detailOf(v, &win); d.From != `Windows · D:\keys\id_rsa` || d.FromReveal != win.Filepath {
+		t.Errorf("key from Windows: got %q, reveal %q", d.From, d.FromReveal)
+	}
+	legacy := id
+	legacy.Filepath = "/home/olly/.ssh/id_rsa"
+	if d := detailOf(v, &legacy); runtime.GOOS == "windows" {
+		if d.From != "WSL · ~/.ssh/id_rsa" || d.FromReveal != "" || d.FromLinux != legacy.Filepath {
+			t.Errorf("key from WSL, distro not recorded: got %+v", d)
+		}
+		d = d.withDistro("Ubuntu")
+		if d.From != "WSL (Ubuntu) · ~/.ssh/id_rsa" || d.FromReveal != `\\wsl.localhost\Ubuntu\home\olly\.ssh\id_rsa` || d.FromLinux != "" {
+			t.Errorf("after finding the distro: got %+v", d)
+		}
+	}
+	if d := detailOf(v, &vaultops.IdentityView{Fingerprint: "SHA256:y", PublicKey: k.Blob}); d.FromReveal != "" {
+		t.Errorf("no recorded path should have nothing to show: got %+v", d)
 	}
 
 	if d := detailOf(v, nil); !d.Empty || d.Sub == "" {

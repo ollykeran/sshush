@@ -159,6 +159,77 @@ func TestWSLPath(t *testing.T) {
 	}
 }
 
+func TestSourcePathInWSL(t *testing.T) {
+	if filepath.Separator != '/' {
+		if got := SourcePath(`C:\k`); got != `C:\k` {
+			t.Errorf("Windows path changed: %q", got)
+		}
+		return
+	}
+	t.Setenv("WSL_DISTRO_NAME", "Debian")
+	tests := []struct{ in, want string }{
+		{"/home/olly/.ssh/id_rsa", `\\wsl.localhost\Debian\home\olly\.ssh\id_rsa`},
+		{"/mnt/c/Users/olly/.ssh/id", `C:\Users\olly\.ssh\id`},
+		{"/mnt/d", `D:\`},
+		{"/mnt/data/k", `\\wsl.localhost\Debian\mnt\data\k`},
+	}
+	for _, tc := range tests {
+		if got := SourcePath(tc.in); got != tc.want {
+			t.Errorf("SourcePath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	for _, tc := range tests {
+		if got := LocalPath(tc.want); got != tc.in {
+			t.Errorf("LocalPath(%q) = %q, want %q", tc.want, got, tc.in)
+		}
+	}
+	if got := LocalPath(`\\wsl.localhost\Ubuntu\k`); got != `\\wsl.localhost\Ubuntu\k` {
+		t.Errorf("another distro's path: got %q", got)
+	}
+	t.Setenv("WSL_DISTRO_NAME", "")
+	if got := SourcePath("/home/olly/k"); got != "/home/olly/k" {
+		t.Errorf("outside WSL: got %q", got)
+	}
+}
+
+func TestKeySource(t *testing.T) {
+	got := KeySource(`\\wsl.localhost\Debian\home\olly\.ssh\id_rsa`)
+	want := Source{Env: "WSL (Debian)", Display: "~/.ssh/id_rsa", Reveal: `\\wsl.localhost\Debian\home\olly\.ssh\id_rsa`}
+	if got != want {
+		t.Errorf("WSL: got %+v, want %+v", got, want)
+	}
+	if got := KeySource(`D:\keys\id`); got.Env != "Windows" || got.Display != `D:\keys\id` || got.Reveal != `D:\keys\id` {
+		t.Errorf("Windows: got %+v", got)
+	}
+	if got := KeySource("rel/id"); got.Env != "" || got.Reveal != "" {
+		t.Errorf("relative: got %+v", got)
+	}
+	if filepath.Separator == '\\' {
+		home, _ := os.UserHomeDir()
+		if got := KeySource(home + `\.ssh\id`); got.Display != `~\.ssh\id` {
+			t.Errorf("Windows home: got %+v", got)
+		}
+		got := KeySource("/root/.ssh/id")
+		if got.Env != "WSL" || got.Display != "~/.ssh/id" || got.Reveal != "" || got.Linux != "/root/.ssh/id" {
+			t.Errorf("legacy WSL: got %+v", got)
+		}
+		if got := DisplayPath("/home/olly/k"); got != "/home/olly/k" {
+			t.Errorf("DisplayPath of a Linux path on Windows: got %q", got)
+		}
+	}
+}
+
+func TestContractLinuxHome(t *testing.T) {
+	for in, want := range map[string]string{
+		"/home/olly/.ssh/id": "~/.ssh/id", "/home/olly": "~", "/root": "~",
+		"/root/k": "~/k", "/srv/k": "/srv/k", "/home/": "/home/",
+	} {
+		if got := ContractLinuxHome(in); got != want {
+			t.Errorf("ContractLinuxHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestDisplayPathShowsWSLPathsAsLinux(t *testing.T) {
 	if got := DisplayPath(`\\wsl.localhost\Debian\srv\keys\id_ed25519`); got != "/srv/keys/id_ed25519" {
 		t.Errorf("got %q", got)

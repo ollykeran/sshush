@@ -86,6 +86,7 @@ const (
 	idVaultFileHeader
 	idVaultFileTitle
 	idVaultFileCaption
+	idMainOpenFrom
 	// The Vault page's facts take two IDs each, from here on; see
 	// vaultRowLabel. Nothing may follow this in the list.
 	idVaultRows
@@ -148,6 +149,7 @@ var buttonGlyphs = map[uint16]rune{
 	idMainSelftest:    0xE9D9, // Diagnostic
 	idMainRefresh:     0xE72C, // Refresh
 	idVaultOpenFolder: 0xE838, // FolderOpen
+	idMainOpenFrom:    0xE838, // FolderOpen
 	idVaultCopyPath:   0xE8C8, // Copy
 	idVaultBackup:     0xE74E, // Save
 	idVaultImport:     0xE8B5, // Import
@@ -227,6 +229,7 @@ func mainTemplate() []uint16 {
 		btn(idMainCopyPub, "Co&py"),
 		label(idMainFromLabel, 0, "Added from"),
 		label(idMainFrom, ssPathEllipsis, ""),
+		btn(idMainOpenFrom, "Show in E&xplorer"),
 		btn(idMainLoad, "L&oad"),
 		btn(idMainAutoload, autoloadLabel(false)),
 		btn(idMainRename, "Rena&me…"),
@@ -659,9 +662,33 @@ type DetailView struct {
 	// PublicKey is the key as a line of authorized_keys, comment included:
 	// what a server or a forge wants pasted.
 	PublicKey string
-	From      string
+	// From is where the key was added from: its environment, Windows or
+	// which WSL distro, and its path there.
+	From string
+	// FromReveal is a Windows path to that file for Explorer to show, or
+	// empty when there is none.
+	FromReveal string
+	// FromLinux is the Linux path of a key added from WSL by a client too
+	// old to record the distro, which the window looks for in each distro.
+	FromLinux string
 	// Empty reports that nothing is selected, and the fields are hidden.
 	Empty bool
+}
+
+// setSource fills the From fields from src.
+func (d *DetailView) setSource(src utils.Source) {
+	d.From = src.Display
+	if src.Env != "" {
+		d.From = src.Env + " · " + src.Display
+	}
+	d.FromReveal, d.FromLinux = src.Reveal, src.Linux
+}
+
+// withDistro is d for a key FromLinux names, found in WSL distro distro.
+func (d DetailView) withDistro(distro string) DetailView {
+	unc := `\\wsl.localhost\` + distro + strings.ReplaceAll(d.FromLinux, "/", `\`)
+	d.setSource(utils.KeySource(unc))
+	return d
 }
 
 // detailOf describes sel, or with nil the pane's empty state for s.
@@ -692,7 +719,7 @@ func detailOf(s MainState, sel *vaultops.IdentityView) DetailView {
 	d.Sub = strings.Join(parts, " · ")
 	switch {
 	case sel.Filepath != "":
-		d.From = utils.DisplayPath(sel.Filepath)
+		d.setSource(utils.KeySource(sel.Filepath))
 	case inVault:
 		d.From = "Not recorded"
 	default:

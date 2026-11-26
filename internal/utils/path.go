@@ -55,6 +55,10 @@ func DisplayPath(path string) string {
 	if _, linux, ok := WSLPath(path); ok {
 		return ContractHomeDirectory(linux)
 	}
+	if filepath.Separator == '\\' && strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") {
+		// A Linux path recorded by a WSL client: Abs would put a drive on it.
+		return path
+	}
 	p := path
 	if abs, err := filepath.Abs(path); err == nil {
 		p = abs
@@ -83,6 +87,134 @@ func WSLPath(path string) (distro, linux string, ok bool) {
 		return "", "", false
 	}
 	return distro, "/" + linux, true
+}
+
+// SourcePath is how a key file's path is recorded in the vault as where the
+// key came from. abs should be absolute. Inside WSL a Linux path is recorded
+// as the Windows path into the distro (\\wsl.localhost\<distro>\...), and a
+// path under /mnt/<drive> as the Windows path it is, so a Windows vault can
+// tell which environment the key came from and open its folder. Elsewhere abs
+// is returned unchanged.
+func SourcePath(abs string) string {
+	distro := os.Getenv("WSL_DISTRO_NAME")
+	if filepath.Separator != '/' || distro == "" || !strings.HasPrefix(abs, "/") {
+		return abs
+	}
+	if rest, ok := strings.CutPrefix(abs, "/mnt/"); ok && len(rest) >= 1 && isDriveLetter(rest[0]) &&
+		(len(rest) == 1 || rest[1] == '/') {
+		return strings.ToUpper(rest[:1]) + `:\` + strings.ReplaceAll(strings.TrimPrefix(rest[1:], "/"), "/", `\`)
+	}
+	return `\\wsl.localhost\` + distro + strings.ReplaceAll(abs, "/", `\`)
+}
+
+// LocalPath is a recorded source path (see SourcePath) as a path this process
+// can open: inside WSL, a path into this distro or onto a Windows drive is
+// made a Linux path again. Anything else is returned unchanged.
+func LocalPath(recorded string) string {
+	distro := os.Getenv("WSL_DISTRO_NAME")
+	if filepath.Separator != '/' || distro == "" {
+		return recorded
+	}
+	if d, linux, ok := WSLPath(recorded); ok {
+		if strings.EqualFold(d, distro) {
+			return linux
+		}
+		return recorded
+	}
+	if len(recorded) >= 3 && isDriveLetter(recorded[0]) && recorded[1] == ':' && (recorded[2] == '\\' || recorded[2] == '/') {
+		p := "/mnt/" + strings.ToLower(recorded[:1])
+		if rest := strings.Trim(strings.ReplaceAll(recorded[3:], `\`, "/"), "/"); rest != "" {
+			p += "/" + rest
+		}
+		return p
+	}
+	return recorded
+}
+
+func isDriveLetter(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+// Source describes where a key was added from, for display.
+type Source struct {
+	// Env is "Windows", "WSL (<distro>)", or "WSL" when the distro was not
+	// recorded; empty when the path says nothing about where it lives.
+	Env string
+	// Display is the path in its environment's own form, with the home
+	// directory shown as ~.
+	Display string
+	// Reveal is a Windows path to the file that Explorer can open, or empty
+	// when there is none.
+	Reveal string
+	// Linux is the path within WSL when Env is "WSL" with no distro known.
+	Linux string
+}
+
+// KeySource describes a key's recorded source path, as written by SourcePath
+// or by an older client that recorded a bare path.
+func KeySource(path string) Source {
+	if distro, linux, ok := WSLPath(path); ok {
+		return Source{Env: "WSL (" + distro + ")", Display: ContractLinuxHome(linux), Reveal: path}
+	}
+	if isWindowsAbs(path) {
+		return Source{Env: "Windows", Display: contractWindowsHome(path), Reveal: path}
+	}
+	if strings.HasPrefix(path, "/") {
+		if filepath.Separator == '\\' {
+			// Recorded by a WSL client too old to say which distro.
+			return Source{Env: "WSL", Display: ContractLinuxHome(path), Linux: path}
+		}
+		return Source{Display: ContractHomeDirectory(path)}
+	}
+	return Source{Display: path}
+}
+
+// ContractLinuxHome shows a path under /home/<user> or /root as under ~.
+func ContractLinuxHome(linux string) string {
+	if linux == "/root" {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(linux, "/root/"); ok {
+		return "~/" + rest
+	}
+	if rest, ok := strings.CutPrefix(linux, "/home/"); ok {
+		user, tail, more := strings.Cut(rest, "/")
+		if user != "" {
+			if !more {
+				return "~"
+			}
+			return "~/" + tail
+		}
+	}
+	return linux
+}
+
+// isWindowsAbs reports whether path is an absolute Windows path: a drive
+// letter and slash, or a UNC path.
+func isWindowsAbs(path string) bool {
+	if len(path) >= 3 && isDriveLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(path, `\\`)
+}
+
+// contractWindowsHome is ContractHomeDirectory for a Windows path, matching the
+// home directory without regard to case, as Windows does.
+func contractWindowsHome(path string) string {
+	if filepath.Separator != '\\' {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.EqualFold(path, home) {
+		return "~"
+	}
+	if len(path) > len(home) && strings.EqualFold(path[:len(home)], home) && (path[len(home)] == '\\' || path[len(home)] == '/') {
+		return `~\` + path[len(home)+1:]
+	}
+	return path
 }
 
 // KeyPath is a discovered private key file path. If the path is a symlink,

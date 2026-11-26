@@ -37,7 +37,7 @@ func AddPrivateKeyFile(s *agent.Session, path string, autoload bool) error {
 // key already in memory, such as one the caller decrypted; path records where
 // it came from. The caller still owns, and should zero, pemData.
 func AddPrivateKeyPEM(s *agent.Session, pemData []byte, path string, autoload bool) error {
-	payload := buildAddKeyOptsPayloadPEM(pemData, path, autoload)
+	payload := buildAddKeyOptsPayloadPEM(pemData, recordedPath(path), autoload)
 	defer clear(payload)
 	if _, err := s.Op(agent.OpAddKey, payload); err != nil {
 		return fmt.Errorf("vault: add key to vault: %w", err)

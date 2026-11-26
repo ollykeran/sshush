@@ -220,16 +220,21 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	// and as room allows; past that it scrolls.
 	rows := detailButtonRows(dw, gap, nat, m.hidden)
 	fixed := (y - bodyY) + 2*(s(lyLabelH)+s(4)+s(12)) + max(s(lyFieldH), btnH) + s(8) +
-		s(lyLabelH) + s(4) + s(lyLabelH) + s(lyMargin) + rows*btnH + (rows-1)*gap
+		s(lyLabelH) + s(4) + max(s(lyLabelH), btnH) + s(lyMargin) + rows*btnH + (rows-1)*gap
 	room := (bodyH - fixed) / s(lyLineH)
 	lines := max(min(m.pubLines, lyPubMaxLine, room), lyPubMinLine)
 
 	field(idMainFpLabel, idMainFp, idMainCopyFp, s(lyFieldH))
 	field(idMainPubLabel, idMainPub, idMainCopyPub, s(lyLineH)*lines+s(8))
+	// Where the key came from, with a button to show it in Explorer level
+	// with it, at the right as the Copy buttons are.
 	out[idMainFromLabel] = box{dx, y, dw, s(lyLabelH)}
 	y += s(lyLabelH) + s(4)
-	out[idMainFrom] = box{dx, y, dw, s(lyLabelH)}
-	y += s(lyLabelH) + s(lyMargin)
+	ow := nat(idMainOpenFrom, 90)
+	rowH := max(s(lyLabelH), btnH)
+	out[idMainOpenFrom] = box{dx + dw - ow, y, ow, btnH}
+	out[idMainFrom] = box{dx, y + (rowH-s(lyLabelH))/2, max(dw-ow-gap, 0), s(lyLabelH)}
+	y += rowH + s(lyMargin)
 
 	// The key's actions flow along a row, wrapping when the pane is narrow;
 	// Remove ends the last row, at the right.

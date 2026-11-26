@@ -209,7 +209,7 @@ func RenameKey(env vaultops.Env, keyPaths []string, id vaultops.IdentityView, co
 	}
 	inVault := backend.Mode == "vault"
 
-	path := id.Filepath
+	path := utils.LocalPath(id.Filepath)
 	if path == "" && !inVault {
 		path = agent.ResolveFilepath(id.Fingerprint, keyPaths)
 	}

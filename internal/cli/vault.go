@@ -187,7 +187,7 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 		if len(comment) > 20 {
 			comment = comment[:17] + "..."
 		}
-		keyFile := id.Filepath
+		keyFile := utils.DisplayPath(id.Filepath)
 		if keyFile == "" {
 			keyFile = "-"
 		}

@@ -103,7 +103,7 @@ A command that needs a vault and finds `SpeaksOps` false says so, because the us
 
 ### The agent answers for its own vault
 
-What a vault holds is the agent's to say. The `list-identities` op returns every identity in the vault the daemon serves — fingerprint, public key, comment, autoload flag and the path it was added from — including the ones it is not listing to `ssh` this session, and `internal/vaultops` resolves a fingerprint, comment or key file against that. So `sshush vault …` needs no access to the vault file, which is what lets a client in one environment drive a daemon in another: sshush in WSL, a daemon on Windows, a relay between them.
+What a vault holds is the agent's to say. The `list-identities` op returns every identity in the vault the daemon serves — fingerprint, public key, comment, autoload flag and the path it was added from (absolute; a client in WSL records it as the Windows path into its distro, `\\wsl.localhost\<distro>\…`, so the tray can say which environment a key came from and open its folder) — including the ones it is not listing to `ssh` this session, and `internal/vaultops` resolves a fingerprint, comment or key file against that. So `sshush vault …` needs no access to the vault file, which is what lets a client in one environment drive a daemon in another: sshush in WSL, a daemon on Windows, a relay between them.
 
 `vaultops` picks its source in one place (`conn.roster`):
 
