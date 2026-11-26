@@ -104,7 +104,7 @@ var sectionHeaders = []uint16{idVaultSecHeader, idAutoLockTitle, idVaultFileHead
 var secondaryLabels = map[uint16]bool{
 	idVaultPasswdCaption: true, idVaultRecoveryCaption: true, idVaultFileCaption: true,
 	idAutoLockCaption: true, idSetTypeCaption: true, idSetSocketCaption: true, idSetVaultCaption: true,
-	idSetKeysCaption: true, idSetDirsCaption: true,
+	idSetKeysCaption: true, idSetDirsCaption: true, idSetPageantCaption: true,
 }
 
 // detailButtons are the selected key's actions, in reading order. Remove is
@@ -407,6 +407,10 @@ func settingsLayout(out map[uint16]box, body box, m layoutMetrics) {
 	out[idSetType] = box{t.x, t.y + (t.h-s(lyFieldH))/2, t.w, s(160)}
 	k.y += s(6)
 	k.field(idSetSocketTitle, idSetSocket, idSetSocketDefault, idSetSocketCaption, bw)
+	k.y += s(4)
+	out[idSetPageant] = box{k.x, k.y, k.w, s(24)}
+	k.y += s(24)
+	k.line(idSetPageantCaption)
 
 	k.header(idSetVaultHeader, false)
 	k.field(idSetVaultTitle, idSetVaultPath, idSetVaultBrowse, idSetVaultCaption, bw)

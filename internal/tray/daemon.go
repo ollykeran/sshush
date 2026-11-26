@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ollykeran/sshush/internal/pageant"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 )
@@ -39,4 +40,16 @@ func StopAgent() error {
 		return fmt.Errorf("sshushd is not running (no pidfile at %s)", pidFile)
 	}
 	return err
+}
+
+// pageantHeldByOther reports whether some program other than the running
+// agent has the Pageant window, so the agent cannot answer as Pageant. A var
+// so tests can say either.
+var pageantHeldByOther = func() bool {
+	owner, ok := pageant.OwnerPID()
+	if !ok {
+		return false
+	}
+	agent, ok := sshushd.DaemonPID(runtime.PidFilePath())
+	return !ok || uint32(agent) != owner
 }

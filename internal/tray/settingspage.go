@@ -31,6 +31,8 @@ const (
 	idSetSocket
 	idSetSocketDefault
 	idSetSocketCaption
+	idSetPageant
+	idSetPageantCaption
 	idSetVaultHeader
 	idSetVaultTitle
 	idSetVaultPath
@@ -78,11 +80,12 @@ func agentTypeChoices(current string) []agentTypeChoice {
 
 // Captions the Settings page shows while a field has no problem.
 var settingsCaptions = map[uint16]string{
-	idSetTypeCaption:   "Where ssh gets its keys from.",
-	idSetSocketCaption: `The pipe ssh reaches the agent on, such as \\.\pipe\openssh-ssh-agent.`,
-	idSetVaultCaption:  "The vault file. It need not exist yet: create it on the Vault page.",
-	idSetKeysCaption:   "Loaded when the agent serves key files.",
-	idSetDirsCaption:   "Also searched for keys by the TUI and 'sshush find', besides your .ssh folder.",
+	idSetTypeCaption:    "Where ssh gets its keys from.",
+	idSetSocketCaption:  `The pipe ssh reaches the agent on, such as \\.\pipe\openssh-ssh-agent.`,
+	idSetVaultCaption:   "The vault file. It need not exist yet: create it on the Vault page.",
+	idSetPageantCaption: "Lets MobaXterm (Use external Pageant), WinSCP and PuTTY use these keys.",
+	idSetKeysCaption:    "Loaded when the agent serves key files.",
+	idSetDirsCaption:    "Also searched for keys by the TUI and 'sshush find', besides your .ssh folder.",
 }
 
 // FieldProblem is what is wrong with one of the Settings page's fields. A
@@ -131,6 +134,15 @@ func settingsProblems(s config.CoreSettings) []FieldProblem {
 			warn(idSetVaultCaption, "There is no vault there yet: the agent waits until you create it on the Vault page.")
 		} else if err != nil && !isDirPath(filepath.Dir(file)) {
 			warn(idSetVaultCaption, "The folder does not exist yet; it is made when the vault is created.")
+		}
+	}
+
+	if s.PageantEmulation {
+		switch {
+		case s.AgentType == config.AgentTypeExternal:
+			warn(idSetPageantCaption, "Not used: the agent is another program's, so sshush does not run one.")
+		case pageantHeldByOther():
+			warn(idSetPageantCaption, "Another program already answers as Pageant; sshush leaves it be.")
 		}
 	}
 

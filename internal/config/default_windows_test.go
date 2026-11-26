@@ -119,7 +119,7 @@ func TestSetupConfig_leavesSSHConfigAloneForDefaultPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`socket_path = '\\.\pipe\openssh-ssh-agent'`, `# socket_path = '\\.\pipe\sshush-agent'`} {
+	for _, want := range []string{`socket_path = '\\.\pipe\openssh-ssh-agent'`, `# socket_path = '\\.\pipe\sshush-agent'`, "pageant_emulation = true"} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("config lacks %q:\n%s", want, data)
 		}

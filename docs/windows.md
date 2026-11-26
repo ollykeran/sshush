@@ -10,6 +10,7 @@ See also: [Setup](setup.md) | [Config](config.md)
 |---|---|
 | Agent (`start`, `stop`, `reload`, `list`, `add`, `remove`) | yes |
 | `ssh.exe`, `ssh-add.exe`, Git over SSH through the agent | yes |
+| Pageant programs: MobaXterm, WinSCP, PuTTY ([below](#pageant-programs-mobaxterm-winscp-putty)) | yes |
 | PowerShell integration (`--shell powershell`) | yes |
 | Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | yes |
 | TUI, key creation and editing, clipboard | yes |
@@ -83,6 +84,28 @@ The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the
 
 A path that is not a pipe name is treated as a Unix socket, which Windows supports but `ssh.exe` does not.
 
+## Pageant programs (MobaXterm, WinSCP, PuTTY)
+
+Some programs never look at `SSH_AUTH_SOCK` or the OpenSSH pipe. They come from the PuTTY family and only know PuTTY's agent, Pageant. MobaXterm, WinSCP, FileZilla and PuTTY itself are all like this. They find Pageant by a hidden window it keeps and pass their requests to it through shared memory.
+
+The agent also acts as Pageant, using the same keys. This is `[agent].pageant_emulation`. It is on unless the config says `pageant_emulation = false`, and the tray's Settings page has it as **Also answer as Pageant**. Turning it on or off takes effect when the agent restarts.
+
+To use it in MobaXterm:
+1. Open Settings > Configuration > SSH.
+2. Untick "Use internal SSH agent MobAgent".
+3. Tick the PuTTY agent option. Older versions call it "Use external Pageant".
+4. For agent forwarding, also tick "Forward SSH agents".
+
+Newer MobaXterm versions also offer a "Windows SSH agent" option. That one reaches sshush through the OpenSSH pipe and doesn't need Pageant. Either option works.
+
+WinSCP and PuTTY need nothing more: they use Pageant whenever it is there.
+
+Some limits:
+- **Only one program can be Pageant at a time.** If PuTTY's own Pageant, KeeAgent, or gpg-agent with PuTTY support is already running when the agent starts, sshush leaves it alone and says so on the Settings page. Quit the other one and restart the agent to take over.
+- **Only you can use it.** Requests from another account are ignored.
+- **Requests and replies are limited to 8 KiB,** the most a PuTTY-family program has room for. That covers dozens of keys; an agent with too many keys to list in that space answers with a failure.
+- **Only the window is served,** not Pageant's newer named pipe. PuTTY 0.75 and later try the pipe first and then use the window.
+
 ## Paths
 
 | | |
@@ -141,6 +164,8 @@ Auto-lock is the tray's: it locks the vault only while the tray is running, and 
 **Moving a vault to another PC.** The vault is one file, and its keys stay encrypted under its passphrase wherever it goes. Back it up on the old PC, then on the new one choose **Import…** on the Vault page and pick the file. The tray checks the passphrase before changing anything. Then it stops the agent and copies the file in. If a vault was already there, it is kept beside it as `vault.json.bak-<time>`, along with its `recovery.txt`. The config is switched to vault mode if needed, and the agent is started and unlocked. The imported vault's recovery phrase is whatever it was on the old PC.
 
 **Switching modes.** **Use a vault** sets `[agent].type = "vault"` in `config.toml`, and sets `[vault].vault_path` to the default path beside it if none is configured. **Use key files instead** sets it back to `"keys"`. Either way the agent restarts. The tray edits only those lines, so the file's comments and other settings stay as they were.
+
+**Settings** edits what the agent serves and where: the agent type, its pipe, whether it also answers as Pageant, the vault file, the key files and the folders searched for keys. Changes to what the agent does take effect when you press **Restart agent**.
 
 The footer runs `sshush selftest`.
 
