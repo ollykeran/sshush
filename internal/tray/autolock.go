@@ -22,9 +22,9 @@ type LockPolicy struct {
 	IdleMinutes int
 }
 
-// DefaultLockPolicy locks when Windows locks and on sleep, and not on idle:
-// Windows' own lock usually follows idle anyway.
-var DefaultLockPolicy = LockPolicy{OnSessionLock: true, OnSuspend: true}
+// DefaultLockPolicy never locks the vault by itself: it stays unlocked until
+// it is locked by hand, or auto-lock is turned on in the window.
+var DefaultLockPolicy = LockPolicy{}
 
 // idleChoices are the idle times the window offers, in minutes; 0 is never.
 var idleChoices = []int{0, 5, 15, 30, 60}

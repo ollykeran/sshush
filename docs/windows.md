@@ -134,7 +134,7 @@ Copying a public key or a recovery phrase goes to the Windows clipboard directly
 - back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
 - import a vault from another PC;
 - switch the agent between serving the vault and serving your key files;
-- choose when the tray locks the vault by itself (**Auto-lock**): when Windows locks or you switch user, when the PC goes to sleep, and after 5 minutes to an hour without keyboard or mouse input. The first two are on by default; the idle lock is off. The settings are kept in the registry, under `HKCU\Software\sshush\Tray`.
+- choose when the tray locks the vault by itself (**Auto-lock**): when Windows locks or you switch user, when the PC goes to sleep, and after 5 minutes to an hour without keyboard or mouse input. All three are off by default, so the vault stays unlocked until you lock it. The settings are kept in the registry, under `HKCU\Software\sshush\Tray`.
 
 Auto-lock is the tray's: it locks the vault only while the tray is running, and an agent you run without the tray never locks by itself.
 

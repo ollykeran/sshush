@@ -10,13 +10,13 @@ func TestLockPolicyLocksOn(t *testing.T) {
 	if !p.locksOn(EventSessionLock) || p.locksOn(EventSuspend) {
 		t.Errorf("%+v", p)
 	}
-	if !DefaultLockPolicy.locksOn(EventSessionLock) || !DefaultLockPolicy.locksOn(EventSuspend) || DefaultLockPolicy.idleLimit() != 0 {
+	if DefaultLockPolicy.locksOn(EventSessionLock) || DefaultLockPolicy.locksOn(EventSuspend) || DefaultLockPolicy.idleLimit() != 0 {
 		t.Errorf("default %+v", DefaultLockPolicy)
 	}
 }
 
 func TestLockPolicyRoundTrip(t *testing.T) {
-	for _, p := range []LockPolicy{{}, DefaultLockPolicy, {OnSuspend: true, IdleMinutes: 15}, {OnSessionLock: true, IdleMinutes: 60}} {
+	for _, p := range []LockPolicy{{}, {OnSessionLock: true, OnSuspend: true}, {OnSuspend: true, IdleMinutes: 15}, {OnSessionLock: true, IdleMinutes: 60}} {
 		if got := decodeLockPolicy(p.encode()); got != p {
 			t.Errorf("%+v came back %+v", p, got)
 		}
@@ -68,9 +68,9 @@ func TestIdleWatch(t *testing.T) {
 
 func TestAutoLockStatus(t *testing.T) {
 	for p, want := range map[LockPolicy]string{
-		{}:                "The vault now locks only when you lock it.",
-		{OnSuspend: true}: "The vault now locks when the PC sleeps.",
-		DefaultLockPolicy: "The vault now locks when Windows locks and when the PC sleeps.",
+		{}:                                     "The vault now locks only when you lock it.",
+		{OnSuspend: true}:                      "The vault now locks when the PC sleeps.",
+		{OnSessionLock: true, OnSuspend: true}: "The vault now locks when Windows locks and when the PC sleeps.",
 		{OnSessionLock: true, OnSuspend: true, IdleMinutes: 15}: "The vault now locks when Windows locks, when the PC sleeps and after 15 minutes without input.",
 		{IdleMinutes: 60}: "The vault now locks after 1 hour without input.",
 	} {
