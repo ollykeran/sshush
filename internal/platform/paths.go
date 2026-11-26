@@ -63,6 +63,16 @@ func RuntimeDataDir() string {
 	return ConfigDir()
 }
 
+// CygwinSocketFileName is the default name of the socket file sshushd
+// writes on Windows for Cygwin and MSYS2 programs (Git Bash's ssh).
+const CygwinSocketFileName = "cygwin-agent.sock"
+
+// DefaultCygwinSocketPath is where sshushd writes that file unless
+// [agent].cygwin_socket says otherwise.
+func DefaultCygwinSocketPath() string {
+	return filepath.Join(RuntimeDataDir(), CygwinSocketFileName)
+}
+
 // DefaultSocketPath returns the default absolute path to the agent socket, or
 // on Windows the agent's named pipe.
 func DefaultSocketPath() string {

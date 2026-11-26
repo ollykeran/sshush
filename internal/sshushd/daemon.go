@@ -16,6 +16,7 @@ import (
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/bridge"
 	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/cygsock"
 	"github.com/ollykeran/sshush/internal/pageant"
 	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
@@ -132,6 +133,7 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 	}
 
 	var handle func(net.Conn)
+	var cygwinDone <-chan struct{} // closed once the Cygwin socket has stopped, if it was started
 	if cfg.RelaysToWindows() {
 		// No keyring here at all: every connection goes to the agent on Windows.
 		windows, err := bridge.Find(cfg.WindowsSSHush)
@@ -176,9 +178,23 @@ func RunDaemonOnly(cfg config.Config, pidFilePath string, ready *readypipe.Child
 				onPipe()
 			}
 		}
+		if cfg.CygwinSocket != "" {
+			// Cygwin and MSYS2 programs (Git Bash's ssh) the same way: once the
+			// pipe is this daemon's, with the file in place before it says it
+			// is ready.
+			onPipe := listening
+			listening = func() {
+				cygwinDone = serveCygwinSocket(ctx, cfg.CygwinSocket, ext)
+				onPipe()
+			}
+		}
 	}
 	os.Setenv("SSH_AUTH_SOCK", socketPath)
 	err = agent.ListenAndHandle(ctx, socketPath, handle, agent.WithReady(listening))
+	stop()
+	if cygwinDone != nil {
+		<-cygwinDone // its socket file is removed before the daemon exits
+	}
 	if pidFileErr != nil {
 		return pidFileErr
 	}
@@ -391,4 +407,28 @@ func WaitForSocket(socketPath string, maxAttempts int, interval time.Duration) b
 // CheckAlreadyRunning returns true if something is already listening on the socket.
 func CheckAlreadyRunning(socketPath string) bool {
 	return checkAlreadyRunning(socketPath)
+}
+
+// serveCygwinSocket serves ext on a Cygwin socket file at path until ctx is
+// done, and returns once the file is in place, or once it has failed. A
+// failure is said on stderr and leaves the rest of the agent serving. The
+// channel returned is closed when it has stopped and removed its file.
+func serveCygwinSocket(ctx context.Context, path string, ext sshagent.ExtendedAgent) <-chan struct{} {
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := cygsock.Serve(ctx, path, func(conn net.Conn) {
+			_ = sshagent.ServeAgent(ext, conn)
+			conn.Close()
+		}, func() { close(ready) })
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sshushd: Cygwin socket %s: %v; Git Bash's ssh will not find the agent\n", utils.DisplayPath(path), err)
+		}
+	}()
+	select {
+	case <-ready:
+	case <-done:
+	}
+	return done
 }

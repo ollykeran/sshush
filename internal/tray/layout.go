@@ -59,6 +59,7 @@ const (
 	lyCardH      = 38  // a card: a title over a secondary line
 	lyCardBtnW   = 120 // the narrowest card button, after Fluent's
 	lySectionGap = 12
+	lyCheckH     = 20 // a check box with a caption line under it, on the Settings page
 )
 
 // vaultCardButtons are the Vault page's card buttons, which share one width.
@@ -105,6 +106,7 @@ var secondaryLabels = map[uint16]bool{
 	idVaultPasswdCaption: true, idVaultRecoveryCaption: true, idVaultFileCaption: true,
 	idAutoLockCaption: true, idSetTypeCaption: true, idSetSocketCaption: true, idSetVaultCaption: true,
 	idSetKeysCaption: true, idSetDirsCaption: true, idSetPageantCaption: true,
+	idSetCygwinCaption: true,
 }
 
 // detailButtons are the selected key's actions, in reading order. Remove is
@@ -407,10 +409,12 @@ func settingsLayout(out map[uint16]box, body box, m layoutMetrics) {
 	out[idSetType] = box{t.x, t.y + (t.h-s(lyFieldH))/2, t.w, s(160)}
 	k.y += s(6)
 	k.field(idSetSocketTitle, idSetSocket, idSetSocketDefault, idSetSocketCaption, bw)
-	k.y += s(4)
-	out[idSetPageant] = box{k.x, k.y, k.w, s(24)}
-	k.y += s(24)
+	out[idSetPageant] = box{k.x, k.y, k.w, s(lyCheckH)}
+	k.y += s(lyCheckH)
 	k.line(idSetPageantCaption)
+	out[idSetCygwin] = box{k.x, k.y, k.w, s(lyCheckH)}
+	k.y += s(lyCheckH)
+	k.line(idSetCygwinCaption)
 
 	k.header(idSetVaultHeader, false)
 	k.field(idSetVaultTitle, idSetVaultPath, idSetVaultBrowse, idSetVaultCaption, bw)
