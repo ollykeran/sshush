@@ -1,6 +1,6 @@
 # Upgrade Go to the latest stable release and update project references
 go-upgrade:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
 
     # --- Fetch latest stable version from go.dev API ---

@@ -3,7 +3,7 @@
 # `just e2e-wsl` inside a WSL distro. ./... already takes in test/e2e.
 # Output is formatted as readable sentences by gotestdox (pinned as a go.mod tool).
 test *args:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     args=({{ args }})
     pkg="./..."
@@ -34,7 +34,7 @@ test *args:
 # can find out about the Windows build before windows-tests.yml does.
 # Build, vet, lint and link every test binary for Windows, without running any of them
 check-windows:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
     if ! command -v golangci-lint >/dev/null 2>&1; then
@@ -68,7 +68,7 @@ check-windows:
 
 # Run tests with coverage report (saved to benchmarks/), output formatted by gotestdox
 test-cover:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     mkdir -p benchmarks
     just _dox ./... -race -coverprofile=benchmarks/coverage.out -covermode=atomic
@@ -83,7 +83,7 @@ cover-report profile="benchmarks/coverage.out":
 
 # Run e2e tests (builds for current platform automatically), output formatted by gotestdox
 e2e:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     case "$(uname -s)" in
       Darwin)
@@ -106,7 +106,7 @@ e2e:
 # (/mnt/c/...): Windows runs the sshush.exe built there.
 # Run the WSL interop e2e tests against a real sshush.exe (inside a WSL distro only)
 e2e-wsl:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     if ! ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; then
       echo "just e2e-wsl runs inside a WSL distro, with Windows interop on" >&2
@@ -135,7 +135,7 @@ bench-report count="1":
 # surfacing build errors that gotestdox would otherwise swallow silently.
 [private]
 _dox *args:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -uo pipefail
     json=$(mktemp)
     trap 'rm -f "$json"' EXIT

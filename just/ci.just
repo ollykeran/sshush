@@ -4,7 +4,7 @@ release ver branch:
 
 # Run workflows locally via act: `just act ci`, `just act pr`, `just act all`, `just act release v0.0.9 master`
 act cmd ver="" branch="":
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
     # Pull the runner image once and run act with --pull=false: act otherwise re-pulls it for
@@ -92,7 +92,7 @@ act cmd ver="" branch="":
 # Run the given event against a fresh checkout of HEAD (no untracked/gitignored local files),
 # closest to a GitHub runner. e.g. `just act-clean push`, `just act-clean pull_request`
 act-clean event="push":
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="/opt/homebrew/bin:$PATH"
     # Pull the runner image once and run act with --pull=false: act otherwise re-pulls it for
