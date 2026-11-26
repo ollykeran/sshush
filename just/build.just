@@ -263,10 +263,13 @@ checksums:
         done
         # The packages attached to the release, so `sha256sum -c --ignore-missing
         # checksums.txt` checks whichever were downloaded.
-        cd "$dir"
-        for f in sshush-*.tar.gz sshush-*.zip sshush-*.deb sshush-*.rpm sshush-*.pkg.tar.zst; do
-            sha256sum "$f"
-        done
+        # In a subshell: a cd here would also move the mv below into $dir.
+        (
+            cd "$dir"
+            for f in sshush-*.tar.gz sshush-*.zip sshush-*.deb sshush-*.rpm sshush-*.pkg.tar.zst; do
+                sha256sum "$f"
+            done
+        )
     } > "$out.tmp"
     mv "$out.tmp" "$out"
     echo "Wrote $(wc -l < "$out") checksums to $out"
