@@ -1215,10 +1215,11 @@ func (w *mainWindow) restart() {
 	}
 	t := w.t
 	w.run("Restarting the agent…", func() opResult {
-		if err := restartAgent(t); err != nil {
+		aligned, err := restartAgent(t)
+		if err != nil {
 			return opResult{err: err}
 		}
-		return opResult{status: "Restarted the agent with the current settings."}
+		return opResult{status: "Restarted the agent with the current settings." + alignedNote(aligned)}
 	})
 	w.restartPending = false
 }

@@ -283,7 +283,17 @@ func (w *mainWindow) saveSettings() bool {
 	}
 	note := ""
 	if !strings.EqualFold(old.SocketPath, f.edit.SocketPath) {
-		note = " Quit sshush from the notification area and start it again to use the new pipe."
+		if canRestart(w.state) {
+			// The agent serves the old pipe until Restart agent moves it.
+			w.restartPending = true
+			note = " Restart the agent to move it to the new pipe."
+		} else if aligned, err := t.adoptConfigSocket(); err != nil {
+			w.setStatus("Saved, but "+oneLine(err.Error()), true)
+			w.run("", nil)
+			return true
+		} else {
+			note = " The agent will use the new pipe when it starts." + alignedNote(aligned)
+		}
 	}
 	if note == "" && needsRestart(old, f.edit) && canRestart(w.state) {
 		// The Restart agent button, beside Stop, applies them.
@@ -316,27 +326,31 @@ func (w *mainWindow) leaveSettings() bool {
 }
 
 // restartAgent stops the agent if it runs and starts it again from config,
-// unlocking a vault it serves. A vault agent whose vault does not exist yet
-// is left stopped: it starts once the vault is created.
-func restartAgent(t *tray) error {
-	env := t.environment()
-	if Probe(env.SocketPath).Err == nil {
+// on the pipe config names now, unlocking a vault it serves. A vault agent
+// whose vault does not exist yet is left stopped: it starts once the vault is
+// created. aligned is what adoptConfigSocket changed to follow a new pipe.
+func restartAgent(t *tray) (aligned []string, err error) {
+	if Probe(t.environment().SocketPath).Err == nil {
 		if err := StopAgent(); err != nil {
-			return fmt.Errorf("could not stop the agent: %w", err)
+			return nil, fmt.Errorf("could not stop the agent: %w", err)
 		}
 	}
+	if aligned, err = t.adoptConfigSocket(); err != nil {
+		return aligned, err
+	}
+	env := t.environment()
 	if env.AgentVaultPath != "" {
 		if _, err := os.Stat(vault.ResolveToFile(utils.ExpandHomeDirectory(env.AgentVaultPath))); err != nil {
-			return nil
+			return aligned, nil
 		}
 	}
 	if err := StartAgent(env.SocketPath); err != nil {
-		return fmt.Errorf("could not start the agent: %w", err)
+		return aligned, fmt.Errorf("could not start the agent: %w", err)
 	}
 	if env.AgentVaultPath != "" {
 		if err := t.promptUnlock(); err != nil && !errors.Is(err, errCancelled) {
-			return err
+			return aligned, err
 		}
 	}
-	return nil
+	return aligned, nil
 }

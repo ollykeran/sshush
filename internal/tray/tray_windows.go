@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/vaultops"
 	"golang.org/x/sys/windows"
@@ -77,7 +80,12 @@ func (t *tray) ready() {
 		t.openMain()
 	}
 	views := make(chan View)
-	go Poll(context.Background(), t.environment().SocketPath, !t.environment().AgentUnmanaged, pollInterval, t.kick, views)
+	if !t.environment().AgentUnmanaged {
+		// A pipe changed before this version, or by hand, may have left
+		// SSH_AUTH_SOCK or IdentityAgent naming sshush's other pipe.
+		go config.AlignAgentPipe(t.environment().SocketPath, platform.SSHushPipeName)
+	}
+	go Poll(context.Background(), func() string { return t.environment().SocketPath }, !t.environment().AgentUnmanaged, pollInterval, t.kick, views)
 	go func() {
 		for v := range views {
 			t.render(v)
@@ -93,7 +101,7 @@ func (t *tray) environment() vaultops.Env {
 }
 
 // reloadEnv rebuilds the Env from the config file, after a change to it. The
-// agent's pipe stays the one the tray started with: the poller watches it.
+// agent's pipe stays the one it serves now: see adoptConfigSocket.
 func (t *tray) reloadEnv() error {
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -103,6 +111,44 @@ func (t *tray) reloadEnv() error {
 	defer t.envMu.Unlock()
 	t.env = vaultops.EnvFromConfig(cfg, t.env.SocketPath)
 	return nil
+}
+
+// adoptConfigSocket rebuilds the Env from the config file with the pipe it
+// names, which the tray then probes and starts the agent on. Call it only when
+// no agent serves the old pipe. For an agent sshush runs, SSH_AUTH_SOCK and
+// IdentityAgent that named the old pipe are pointed at the new one; aligned
+// says which were, for the status line.
+func (t *tray) adoptConfigSocket() (aligned []string, err error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	socketPath, err := runtime.SocketPathForSSHushGUI(cfg)
+	if err != nil {
+		return nil, err
+	}
+	t.envMu.Lock()
+	old := t.env.SocketPath
+	t.env = vaultops.EnvFromConfig(cfg, socketPath)
+	unmanaged := t.env.AgentUnmanaged
+	t.envMu.Unlock()
+	t.refresh()
+	if unmanaged {
+		return nil, nil
+	}
+	aligned, err = config.AlignAgentPipe(socketPath, old, platform.SSHushPipeName)
+	if err != nil {
+		return aligned, fmt.Errorf("could not point ssh at the new pipe: %w", err)
+	}
+	return aligned, nil
+}
+
+// alignedNote is the status line's mention of what adoptConfigSocket changed.
+func alignedNote(aligned []string) string {
+	if len(aligned) == 0 {
+		return ""
+	}
+	return " Updated " + strings.Join(aligned, " and ") + " to match; terminals already open keep the old pipe."
 }
 
 // refresh asks the poller to probe now rather than at its next tick.
