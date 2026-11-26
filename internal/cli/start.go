@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/bridge"
@@ -47,6 +49,21 @@ func printAuthSockLine(authSockLine string) {
 	}
 }
 
+// authSockFor is what SSH_AUTH_SOCK should name for shell. On Windows a
+// shell other than PowerShell is Git Bash, MSYS2 or Cygwin, whose ssh cannot
+// use the agent's pipe, so it is pointed at the Cygwin socket file instead,
+// when there is one.
+func authSockFor(shell, socket, cygwinSocket string) string {
+	if cygwinSocket == "" || goruntime.GOOS != "windows" {
+		return socket
+	}
+	switch strings.ToLower(strings.TrimSpace(shell)) {
+	case platform.ShellPowerShell, "pwsh":
+		return socket
+	}
+	return filepath.ToSlash(cygwinSocket)
+}
+
 func runStart(cmd *cobra.Command, _ []string) error {
 	return runStartDaemon(cmd)
 }
@@ -73,12 +90,17 @@ func runStartDaemon(cmd *cobra.Command) error {
 		shell = f.Value.String()
 	}
 	absSocket, _ := transport.Abs(cfg.SocketPath)
-	authSockLine, err := platform.AuthSockLine(shell, absSocket)
+	authSockLine, err := platform.AuthSockLine(shell, authSockFor(shell, absSocket, cygwinSocketOf(cfg)))
 	if err != nil {
 		return style.NewOutput().Error("--shell: unsupported shell \"" + shell + "\" (use " + platform.ShellNames + ")").AsError()
 	}
 	if cfg.RelaysToWindows() {
 		return runStartRelay(&cfg, absConfigPath, authSockLine)
+	}
+	if !cfg.IsExternal() {
+		if err := sshushd.WindowsAgentConflict(cfg.SocketPath); err != nil {
+			return style.NewOutput().Error(err.Error()).AsError()
+		}
 	}
 	if sshushd.CheckAlreadyRunning(cfg.SocketPath) {
 		printAuthSockLine(authSockLine)
@@ -322,4 +344,13 @@ func isTTY(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// cygwinSocketOf is the Cygwin socket file the daemon for cfg serves, or ""
+// when it serves none: an agent sshush does not run serves no file of sshush's.
+func cygwinSocketOf(cfg config.Config) string {
+	if !cfg.OwnsAgentKeys() {
+		return ""
+	}
+	return cfg.CygwinSocket
 }

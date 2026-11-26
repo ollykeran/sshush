@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vaultops"
 )
 
@@ -61,7 +62,7 @@ func TestRenameKeyRewritesTheFileAndTheVault(t *testing.T) {
 	if got := vaultComment(t, env, id.Fingerprint); got != "new" {
 		t.Errorf("vault comment: got %q", got)
 	}
-	pub, _ := os.ReadFile(id.Filepath + ".pub")
+	pub, _ := os.ReadFile(utils.LocalPath(id.Filepath) + ".pub")
 	if !strings.HasSuffix(strings.TrimSpace(string(pub)), " new") {
 		t.Errorf(".pub: got %q", pub)
 	}
@@ -74,7 +75,7 @@ func TestRenameKeyLeavesAFileHoldingAnotherKeyAlone(t *testing.T) {
 	env, id := renameTarget(t, "mine")
 	other, _ := writeKey(t, "other", "")
 	data, _ := os.ReadFile(other)
-	if err := os.WriteFile(id.Filepath, data, 0o600); err != nil { // the file was regenerated since
+	if err := os.WriteFile(utils.LocalPath(id.Filepath), data, 0o600); err != nil { // the file was regenerated since
 		t.Fatal(err)
 	}
 	status, err := RenameKey(env, nil, id, "renamed")
@@ -84,7 +85,7 @@ func TestRenameKeyLeavesAFileHoldingAnotherKeyAlone(t *testing.T) {
 	if !strings.Contains(status, "left alone") {
 		t.Errorf("status: got %q", status)
 	}
-	if after, _ := os.ReadFile(id.Filepath); string(after) != string(data) {
+	if after, _ := os.ReadFile(utils.LocalPath(id.Filepath)); string(after) != string(data) {
 		t.Error("the file holding another key was rewritten")
 	}
 	if got := vaultComment(t, env, id.Fingerprint); got != "renamed" {

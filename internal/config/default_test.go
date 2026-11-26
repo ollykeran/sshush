@@ -656,7 +656,7 @@ func TestSetupPowerShellProfile_encodings(t *testing.T) {
 // TestSetupSSHIdentityAgent_otherAgent checks ssh is not taken away from an
 // agent that is already in use: the block is shown, not written.
 func TestSetupSSHIdentityAgent_otherAgent(t *testing.T) {
-	const pipe = platform.WindowsPipeName
+	const pipe = platform.SSHushPipeName
 	const block = "Host *\n    IdentityAgent //./pipe/sshush-agent\n"
 	const own = "Host work\n    User me\n"
 
@@ -776,7 +776,7 @@ func TestSetupSSHIdentityAgent_otherAgent(t *testing.T) {
 }
 
 func TestSetupSSHIdentityAgent(t *testing.T) {
-	const pipe = platform.WindowsPipeName
+	const pipe = platform.SSHushPipeName
 	const block = "Host *\n    IdentityAgent //./pipe/sshush-agent\n"
 
 	t.Run("no .ssh directory: nothing created", func(t *testing.T) {
@@ -853,4 +853,63 @@ func TestSetupSSHIdentityAgent(t *testing.T) {
 			t.Fatalf("expected the block to be added, got:\n%s", data)
 		}
 	})
+}
+
+// With Windows' agent's pipe as socket_path, the config says sshush holds it
+// and offers sshush's own pipe, commented out, and it still loads as written.
+func TestRenderDefaultConfigBytes_windowsAgentPipe(t *testing.T) {
+	data, err := renderDefaultConfigBytes(platform.OpenSSHAgentPipeName, nil, "powershell", theme.DefaultTheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"[agent]\n# socket_path: sshush serves \\\\.\\pipe\\openssh-ssh-agent",
+		"\nsocket_path = '\\\\.\\pipe\\openssh-ssh-agent'\n# socket_path = '\\\\.\\pipe\\sshush-agent'\ntype = ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered config lacks %q:\n%s", want, text)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		return // elsewhere a pipe name is a relative path, made absolute on load
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SocketPath != platform.OpenSSHAgentPipeName {
+		t.Fatalf("SocketPath: got %q", cfg.SocketPath)
+	}
+}
+
+// Other socket paths get no note about Windows' agent.
+func TestRenderDefaultConfigBytes_noWindowsAgentNoteOtherwise(t *testing.T) {
+	data, err := renderDefaultConfigBytes(platform.SSHushPipeName, nil, "powershell", theme.DefaultTheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "openssh-ssh-agent") {
+		t.Fatalf("unexpected note:\n%s", data)
+	}
+}
+
+// ssh.exe already uses Windows' agent's pipe, so no IdentityAgent is written
+// for it; with that agent's service running, the note says how to free it.
+func TestSetupSSHIdentityAgent_windowsAgentPipe(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		sshDir := t.TempDir()
+		var note strings.Builder
+		setupSSHIdentityAgent(sshDir, `//./pipe/openssh-ssh-agent`, otherSSHAgent{ServiceRunning: running}, &note)
+		if _, err := os.Stat(filepath.Join(sshDir, "config")); !os.IsNotExist(err) {
+			t.Fatalf("running=%v: ssh config must not be created, stat err = %v", running, err)
+		}
+		if got := note.String(); running != strings.Contains(got, "Stop-Service ssh-agent") || running != strings.Contains(got, platform.SSHushPipeName) {
+			t.Fatalf("running=%v: unexpected note:\n%s", running, got)
+		}
+	}
 }

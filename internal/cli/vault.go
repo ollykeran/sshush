@@ -25,6 +25,8 @@ func newVaultCommand() *cobra.Command {
 	vaultCmd.AddCommand(newVaultLoadCommand())
 	vaultCmd.AddCommand(newVaultAutoloadCommand())
 	vaultCmd.AddCommand(newUnlockRecoveryCommand())
+	vaultCmd.AddCommand(newVaultPasswdCommand())
+	vaultCmd.AddCommand(newVaultRecoveryCommand())
 	return vaultCmd
 }
 
@@ -106,25 +108,32 @@ func runVaultInit(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Print to terminal with spacers so user doesn't copy the wrong thing
+	printRecoveryPhrase("Vault initialized with recovery phrase. Store these 24 words safely:", res.Mnemonic,
+		"Also written to "+utils.DisplayPath(res.RecoveryFile)+" (readable only by you)")
+	return nil
+}
+
+// printRecoveryPhrase shows a recovery phrase once, boxed so the words are
+// not copied with anything else, under heading, with fileLine (if any) after
+// it, and copies it to the clipboard as a secret.
+func printRecoveryPhrase(heading, mnemonic, fileLine string) {
 	fmt.Fprintln(os.Stderr)
-	out := style.NewOutput().
-		Success("Vault initialized with recovery phrase. Store these 24 words safely:").
-		Spacer()
-	for _, line := range wordWrap(res.Mnemonic, 60) {
+	out := style.NewOutput().Success(heading).Spacer()
+	for _, line := range wordWrap(mnemonic, 60) {
 		out.Info(line)
 	}
 	out.Spacer().
 		Info("Store this phrase offline; it is not saved anywhere else.")
-	out.Success("Also written to " + utils.DisplayPath(res.RecoveryFile) + " (readable only by you)")
+	if fileLine != "" {
+		out.Success(fileLine)
+	}
 	// The secret variant: the phrase is the whole vault, and on Windows an
 	// ordinary copy would sit in clipboard history and sync to other devices.
-	if err := CopySecretToClipboard(res.Mnemonic); err == nil {
+	if err := CopySecretToClipboard(mnemonic); err == nil {
 		out.Success("Copied to clipboard.")
 	}
 	fmt.Fprintln(os.Stderr, style.BoxWithMaxWidth(out.String(), 72))
 	os.Stderr.Sync()
-	return nil
 }
 
 func newVaultListCommand() *cobra.Command {
@@ -178,7 +187,7 @@ func runVaultList(cmd *cobra.Command, _ []string) error {
 		if len(comment) > 20 {
 			comment = comment[:17] + "..."
 		}
-		keyFile := id.Filepath
+		keyFile := utils.DisplayPath(id.Filepath)
 		if keyFile == "" {
 			keyFile = "-"
 		}

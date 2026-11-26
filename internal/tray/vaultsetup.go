@@ -32,6 +32,17 @@ func recoveryMessage(file string) string {
 	return msg
 }
 
+// replacedRecoveryMessage explains a recovery phrase that replaces the
+// vault's old one, after a change of passphrase or on its own.
+func replacedRecoveryMessage(file string) string {
+	msg := "This is the vault's new recovery phrase: the old one no longer unlocks it. " +
+		"Write these 24 words down and keep them somewhere safe, away from this computer."
+	if file != "" {
+		msg += " The copy in " + utils.DisplayPath(file) + " was replaced with it."
+	}
+	return msg
+}
+
 // phraseLines lays out a recovery phrase as numbered words, six to a line,
 // so it is easy to copy out by hand.
 func phraseLines(phrase string) string {

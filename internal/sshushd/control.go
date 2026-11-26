@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ollykeran/sshush/internal/platform"
 	"github.com/ollykeran/sshush/internal/readypipe"
 	"github.com/ollykeran/sshush/internal/runtime"
 )
@@ -21,8 +22,25 @@ import (
 // mechanism — the child signals as soon as it actually knows its state.
 const readyTimeout = 5 * time.Second
 
+// WindowsAgentConflict returns an error saying what to do when socketPath is
+// the pipe Windows' own OpenSSH agent serves and that agent's service is
+// running, and nil otherwise. Something answers on the pipe then, but it is
+// not sshush, so neither "already running" nor starting a daemon is right.
+func WindowsAgentConflict(socketPath string) error {
+	if !platform.WindowsAgentHoldsPipe(socketPath) {
+		return nil
+	}
+	return fmt.Errorf("the Windows \"OpenSSH Authentication Agent\" service holds %s, the pipe sshush is set to use. "+
+		"Stop and disable it from an administrator PowerShell (Stop-Service ssh-agent; Set-Service ssh-agent -StartupType Disabled), "+
+		"or set [agent].socket_path = '%s' in the sshush config to leave it alone",
+		platform.OpenSSHAgentPipeName, platform.SSHushPipeName)
+}
+
 // StartDaemon starts sshushd with SSHUSH_CONFIG and waits for socket readiness.
 func StartDaemon(configPath, socketPath string) error {
+	if err := WindowsAgentConflict(socketPath); err != nil {
+		return err
+	}
 	if CheckAlreadyRunning(socketPath) {
 		return fmt.Errorf("sshushd: daemon already running on %s", socketPath)
 	}

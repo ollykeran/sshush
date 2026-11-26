@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
+	"github.com/ollykeran/sshush/internal/config"
+	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/vaultops"
 	"golang.org/x/sys/windows"
@@ -52,12 +56,18 @@ func Run(env vaultops.Env, opts Options) {
 }
 
 type tray struct {
+	// env is read through environment: switching the agent between a vault
+	// and key files changes it while other goroutines use it.
+	envMu     sync.RWMutex
 	env       vaultops.Env
 	kick      chan struct{}
 	prompting atomic.Bool
 	// openOnReady opens the main window once the icon is up.
 	openOnReady bool
 	keyPaths    []string
+	// policy is when the tray locks the vault by itself; see autolock.go.
+	policyMu sync.Mutex
+	policy   LockPolicy
 }
 
 func (t *tray) ready() {
@@ -65,16 +75,80 @@ func (t *tray) ready() {
 	systray.SetTooltip("sshush")
 	// A click on the icon opens the main window; the menu is on right-click.
 	systray.SetOnTapped(t.openMain)
+	t.watchForLeaving()
 	if t.openOnReady {
 		t.openMain()
 	}
 	views := make(chan View)
-	go Poll(context.Background(), t.env.SocketPath, !t.env.AgentUnmanaged, pollInterval, t.kick, views)
+	if !t.environment().AgentUnmanaged {
+		// A pipe changed before this version, or by hand, may have left
+		// SSH_AUTH_SOCK or IdentityAgent naming sshush's other pipe.
+		go config.AlignAgentPipe(t.environment().SocketPath, platform.SSHushPipeName)
+	}
+	go Poll(context.Background(), func() string { return t.environment().SocketPath }, !t.environment().AgentUnmanaged, pollInterval, t.kick, views)
 	go func() {
 		for v := range views {
 			t.render(v)
 		}
 	}()
+}
+
+// environment is the Env the tray's operations run in.
+func (t *tray) environment() vaultops.Env {
+	t.envMu.RLock()
+	defer t.envMu.RUnlock()
+	return t.env
+}
+
+// reloadEnv rebuilds the Env from the config file, after a change to it. The
+// agent's pipe stays the one it serves now: see adoptConfigSocket.
+func (t *tray) reloadEnv() error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	t.envMu.Lock()
+	defer t.envMu.Unlock()
+	t.env = vaultops.EnvFromConfig(cfg, t.env.SocketPath)
+	return nil
+}
+
+// adoptConfigSocket rebuilds the Env from the config file with the pipe it
+// names, which the tray then probes and starts the agent on. Call it only when
+// no agent serves the old pipe. For an agent sshush runs, SSH_AUTH_SOCK and
+// IdentityAgent that named the old pipe are pointed at the new one; aligned
+// says which were, for the status line.
+func (t *tray) adoptConfigSocket() (aligned []string, err error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	socketPath, err := runtime.SocketPathForSSHushGUI(cfg)
+	if err != nil {
+		return nil, err
+	}
+	t.envMu.Lock()
+	old := t.env.SocketPath
+	t.env = vaultops.EnvFromConfig(cfg, socketPath)
+	unmanaged := t.env.AgentUnmanaged
+	t.envMu.Unlock()
+	t.refresh()
+	if unmanaged {
+		return nil, nil
+	}
+	aligned, err = config.AlignAgentPipe(socketPath, old, platform.SSHushPipeName)
+	if err != nil {
+		return aligned, fmt.Errorf("could not point ssh at the new pipe: %w", err)
+	}
+	return aligned, nil
+}
+
+// alignedNote is the status line's mention of what adoptConfigSocket changed.
+func alignedNote(aligned []string) string {
+	if len(aligned) == 0 {
+		return ""
+	}
+	return " Updated " + strings.Join(aligned, " and ") + " to match; terminals already open keep the old pipe."
 }
 
 // refresh asks the poller to probe now rather than at its next tick.
@@ -146,7 +220,7 @@ func (t *tray) promptUnlock() error {
 		case idExtra:
 			return t.promptRecovery()
 		}
-		err = vaultops.UnlockPassphrase(t.env, pass)
+		err = vaultops.UnlockPassphrase(t.environment(), pass)
 		clear(pass)
 		switch vaultops.CodeOf(err) {
 		case vaultops.CodeWrongPassphrase:
@@ -177,7 +251,7 @@ func (t *tray) promptRecovery() error {
 		}
 		phrase := strings.Join(strings.Fields(strings.ToLower(string(b))), " ")
 		clear(b)
-		err = vaultops.UnlockRecovery(t.env, phrase)
+		err = vaultops.UnlockRecovery(t.environment(), phrase)
 		switch {
 		case err == nil, vaultops.CodeOf(err) == vaultops.CodeNotLocked:
 			return nil
@@ -192,12 +266,14 @@ func (t *tray) promptRecovery() error {
 // askNewPassphrase asks for a new vault passphrase and for it again, until
 // the two match and are long enough, or the user cancels.
 func askNewPassphrase(owner uintptr) ([]byte, error) {
-	first := inputSpec{
-		title:   "Create vault",
-		message: "Choose a passphrase for the vault. You will type it to unlock your keys, so make it one you will remember.",
-		okLabel: "Next",
-		masked:  true,
-	}
+	return askNewPassphraseFor(owner, "Create vault",
+		"Choose a passphrase for the vault. You will type it to unlock your keys, so make it one you will remember.", "Create")
+}
+
+// askNewPassphraseFor is askNewPassphrase with its own title, opening
+// message, and label for the button that confirms.
+func askNewPassphraseFor(owner uintptr, title, message, doneLabel string) ([]byte, error) {
+	first := inputSpec{title: title, message: message, okLabel: "Next", masked: true}
 	for {
 		pass, button, err := promptInput(owner, first)
 		if err != nil {
@@ -212,7 +288,7 @@ func askNewPassphrase(owner uintptr) ([]byte, error) {
 			continue
 		}
 		confirm, button, err := promptInput(owner, inputSpec{
-			title: "Create vault", message: "Type the passphrase again.", okLabel: "Create", masked: true,
+			title: title, message: "Type the passphrase again.", okLabel: doneLabel, masked: true,
 		})
 		if err != nil || button != idOK {
 			clear(pass)

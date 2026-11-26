@@ -234,3 +234,22 @@ func (s *VaultStore) AllIdentities() []Identity {
 	}
 	return out
 }
+
+// replace swaps in meta and, unless ids is nil, ids, and saves. If the save
+// fails the store goes back to what it held, so memory and the file agree.
+func (s *VaultStore) replace(meta *VaultMetadata, ids []Identity) error {
+	s.mu.Lock()
+	oldMeta, oldIDs := s.metadata, s.identities
+	s.metadata = meta
+	if ids != nil {
+		s.identities = ids
+	}
+	s.mu.Unlock()
+	if err := s.Save(); err != nil {
+		s.mu.Lock()
+		s.metadata, s.identities = oldMeta, oldIDs
+		s.mu.Unlock()
+		return err
+	}
+	return nil
+}

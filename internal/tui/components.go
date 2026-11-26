@@ -138,14 +138,27 @@ func (kt KeyTable) AgentViewMarked(zonePrefix string, highlightCursor bool, st S
 }
 
 func (kt KeyTable) agentView(zonePrefix string, highlightCursor bool, st Styles) string {
+	return kt.AgentViewWindow(zonePrefix, highlightCursor, st, 0, len(kt.Table.Rows()))
+}
+
+// AgentViewWindow is like AgentViewMarked but draws only n rows starting at
+// offset, for a table that scrolls. Row zones keep their index in the full
+// table, so a click maps straight to a cursor position.
+func (kt KeyTable) AgentViewWindow(zonePrefix string, highlightCursor bool, st Styles, offset, n int) string {
 	styles := kt.agentTableStyles(highlightCursor, st)
 	cols := kt.Table.Columns()
 	rows := kt.Table.Rows()
 	cursor := kt.Table.Cursor()
 
+	if offset < 0 {
+		offset = 0
+	}
+	end := min(offset+n, len(rows))
+
 	var out []string
 	out = append(out, kt.tableHeaderLines()...)
-	for r, row := range rows {
+	for r := offset; r < end; r++ {
+		row := rows[r]
 		selected := highlightCursor && r == cursor
 		line := kt.renderAgentRow(row, cols, styles, selected)
 		if zonePrefix != "" {

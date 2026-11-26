@@ -27,6 +27,9 @@ var (
 	KeyDaemonLock   = []string{"L"}
 	KeyDaemonUnlock = []string{"u"}
 	KeyAddKey       = []string{"a"}
+	// KeyRescan searches again for keys to list under Found Keys (Agent tab),
+	// as "sshush find" does.
+	KeyRescan = []string{"f"}
 
 	// Aliases used by screens.
 	KeyStart  = KeyDaemonStart

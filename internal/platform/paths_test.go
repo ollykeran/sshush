@@ -83,3 +83,22 @@ func TestServerHostKeyPath_fallsBackToTheConfigDir(t *testing.T) {
 		t.Fatalf("ServerHostKeyPath: got %q, want %q", got, want)
 	}
 }
+
+// Windows' agent's pipe is recognised however it is written.
+func TestIsOpenSSHAgentPipe(t *testing.T) {
+	for _, tt := range []struct {
+		path string
+		want bool
+	}{
+		{`\\.\pipe\openssh-ssh-agent`, true},
+		{`//./pipe/openssh-ssh-agent`, true},
+		{` \\.\PIPE\OpenSSH-SSH-Agent `, true},
+		{`\\.\pipe\sshush-agent`, false},
+		{`/run/user/1000/sshush.sock`, false},
+		{``, false},
+	} {
+		if got := IsOpenSSHAgentPipe(tt.path); got != tt.want {
+			t.Errorf("IsOpenSSHAgentPipe(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}

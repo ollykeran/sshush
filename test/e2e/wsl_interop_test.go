@@ -101,6 +101,7 @@ func newWSLRig(t *testing.T, opts wslRigOptions) *wslRig {
 	var win strings.Builder
 	win.WriteString("[agent]\n")
 	fmt.Fprintf(&win, "socket_path = '\\\\.\\pipe\\sshush-e2e-%s'\n", randomSuffix(t))
+	win.WriteString("pageant_emulation = false\n")
 	if opts.vault {
 		win.WriteString("type = \"vault\"\n")
 	} else {

@@ -35,7 +35,7 @@ Starts the daemon if needed, loads keys from config, sets `SSH_AUTH_SOCK`. For s
 - **Agent**: start/stop, add/remove, list, reload from config, Unix socket (`SSH_AUTH_SOCK`).
 - **Keys**: create, edit comment, find, export public key, validate. Editing a key's comment (`sshush edit`, or the TUI's `e` key on a loaded agent key) also updates its `.pub` companion file when one exists alongside the private key, so the two stay in sync.
 - **Selftest**: `sshush selftest` checks agent connectivity — env, socket, key list, and signing.
-- **TUI**: `sshush tui` for interactive key management.
+- **TUI**: `sshush tui` for interactive key management. The Agent tab offers keys found in `~/.ssh`, the current directory and any `[agent].search_dirs`; press `f` to search again.
 - **Vault**: Encrypted on-disk key store with lock/unlock and recovery. See [docs/vault.md](docs/vault.md).
 - **SSH server**: Optional TCP SSH server (`sshush server`) serving an interactive shell and remote commands to authorized keys, or to your vault passphrase. Off until you set `[server].listen_port`. See [Config Reference](docs/config.md) `[server]` section.
 - **Windows and WSL**: runs natively on Windows for `ssh.exe` and PowerShell, with a tray for the agent and its keys, and a WSL distro can use that same agent, so one vault and one unlock cover both. See [docs/windows.md](docs/windows.md).
@@ -62,6 +62,8 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 
 **Config file:** `$XDG_CONFIG_HOME/sshush/config.toml` or `~/.config/sshush/config.toml`, or override with `-c` / `SSHUSH_CONFIG`. Reference: [Config](docs/config.md).
 
+**Clipboard:** copying uses `wl-copy` (package `wl-clipboard`) under Wayland or `xclip` under X11 on Linux, `pbcopy` on macOS and the clipboard API on Windows. Set `SSHUSH_COPY_CMD` to use another command that reads the text on stdin, such as `xsel --clipboard --input` or `tmux load-buffer -`. See [Setup: Clipboard](docs/setup.md#clipboard).
+
 **Upgrading from older releases:** config layout changed from flat keys to `[agent]` / `[vault]` / `[server]` tables. See [Migration from flat TOML](docs/config.md#migration-from-flat-toml-breaking) before upgrading.
 
 ## Installation
@@ -78,6 +80,8 @@ For every subcommand and flag, `sshush --help` and `sshush <subcommand> --help`.
 | **RHEL/Fedora** | `sudo rpm -i sshush-*-amd64.rpm` |
 | **Arch** | `sudo pacman -U sshush-*-amd64.pkg.tar.zst` |
 | **Windows** | unzip `sshush-*-windows-amd64.zip` into a folder on your `PATH`; see [Windows](docs/windows.md#installing). A Microsoft Store package is coming soon. |
+
+On Linux the packages suggest, but do not install, `wl-clipboard` and `xclip` for copying keys to the clipboard; install the one your session uses, or set `SSHUSH_COPY_CMD` (see [Setup: Clipboard](docs/setup.md#clipboard)).
 
 ### From source
 
@@ -96,7 +100,7 @@ Clone (optional): `git clone https://github.com/ollykeran/sshush.git`
 
 ## Docs
 
-- [Setup](docs/setup.md) – shell, eval, config path
+- [Setup](docs/setup.md) – shell, eval, config path, clipboard
 - [Windows](docs/windows.md) – Store and zip installs, the tray, named pipe, PowerShell, sharing one agent with WSL, what is not supported yet
 - [Config](docs/config.md) – options, reload, flat TOML migration
 - [Vault](docs/vault.md) – optional vault

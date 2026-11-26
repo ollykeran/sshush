@@ -1,6 +1,6 @@
 # Build binaries: `just build linux`, `just build darwin`, `just build windows`, `just build all`
 build arch="": deps
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     build_local() {
       local os="$1" goarch="$2" out_dir="$3"
@@ -74,7 +74,7 @@ build arch="": deps
 # `just pkg msix` needs the Windows SDK, so `all` leaves it out; see packaging/msix/README.md.
 # Package: `just pkg tarball`, `just pkg zip-windows`, `just pkg msix`, `just pkg deb`, `just pkg all`
 pkg target="": (build "linux")
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     make_tarball() {
       local src_dir="$1" suffix="$2"
@@ -178,7 +178,7 @@ pkg target="": (build "linux")
 # Unsigned and unpacked, so it needs Developer Mode but not the Windows SDK.
 # Install the Windows build as an MSIX package for this user, to try the Store package
 msix-dev:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     just build windows
     bash scripts/msix.sh stage "{{ version }}" x64 "{{ build_dir }}/windows-amd64" "{{ build_dir }}/msix-amd64"
@@ -187,7 +187,7 @@ msix-dev:
 # Needs `bash scripts/msix.sh trust` once per machine; see packaging/msix/README.md.
 # Pack, sign with a local test certificate and install the MSIX, as the Store would
 msix-local:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     just build windows
     msix="{{ build_dir }}/sshush-{{ version }}-windows-amd64.msix"
@@ -199,7 +199,7 @@ msix-local:
 
 # Validate build artifacts exist and have correct format
 check-artifacts ver="dev":
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     dir="{{ build_dir }}"
     pass=0; fail=0
@@ -243,7 +243,7 @@ check-artifacts ver="dev":
 
 # Write checksums.txt: the SHA-256 of every built binary and release package
 checksums:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     shopt -s nullglob
     dir="{{ build_dir }}"

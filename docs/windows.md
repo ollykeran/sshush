@@ -10,6 +10,8 @@ See also: [Setup](setup.md) | [Config](config.md)
 |---|---|
 | Agent (`start`, `stop`, `reload`, `list`, `add`, `remove`) | yes |
 | `ssh.exe`, `ssh-add.exe`, Git over SSH through the agent | yes |
+| Pageant programs: MobaXterm, WinSCP, PuTTY ([below](#pageant-programs-mobaxterm-winscp-putty)) | yes |
+| Git Bash and the `ssh` bundled with Git for Windows, MSYS2, Cygwin ([below](#git-bash-msys2-and-cygwin)) | yes |
 | PowerShell integration (`--shell powershell`) | yes |
 | Vault (`[agent].type = "vault"`, `sshush vault …`, `lock` / `unlock`) | yes |
 | TUI, key creation and editing, clipboard | yes |
@@ -44,36 +46,88 @@ On Unix the agent listens on a socket file. Windows OpenSSH talks to its agent o
 
 ```toml
 [agent]
-socket_path = '\\.\pipe\sshush-agent'
+socket_path = '\\.\pipe\openssh-ssh-agent'
 ```
 
-Single quotes make it a TOML literal string, so the backslashes need no escaping. Forward slashes (`"//./pipe/sshush-agent"`) work as well.
+Single quotes make it a TOML literal string, so the backslashes need no escaping. Forward slashes (`"//./pipe/openssh-ssh-agent"`) work as well.
 
 Only you (and the SYSTEM account) can connect to the pipe.
 
-That covers a pipe sshush is serving. The name, though, belongs to whichever account creates it first, and `\\.\pipe\sshush-agent` is one name for the whole machine, not one per user. So before sending anything, sshush also checks who owns the pipe it has connected to, and refuses to talk to one served by another account: your passphrase and keys are not handed to whoever got to the name before your agent did. (A pipe owned by SYSTEM or by the Administrators group is accepted, since that is what a service or a daemon started from an administrator prompt looks like.) On a machine several people use, the first to start sshush holds the default name and everyone else is refused, so give each user a `socket_path` of their own, such as `'\\.\pipe\sshush-agent-alice'`.
+That covers a pipe sshush is serving. The name, though, belongs to whichever account creates it first, and a pipe name is one name for the whole machine, not one per user. So before sending anything, sshush also checks who owns the pipe it has connected to, and refuses to talk to one served by another account: your passphrase and keys are not handed to whoever got to the name before your agent did. (A pipe owned by SYSTEM or by the Administrators group is accepted, since that is what a service or a daemon started from an administrator prompt looks like.) On a machine several people use, the first to start sshush holds the default name and everyone else is refused, so give each user a `socket_path` of their own, such as `'\\.\pipe\sshush-agent-alice'`.
 
-`\\.\pipe\sshush-agent` is the default. Programs find it through `SSH_AUTH_SOCK`, which is why the PowerShell line above matters. Two alternatives:
+### The default: Windows' own agent's pipe
 
-- Name the pipe for one host or all of them in `~\.ssh\config`, which needs no environment variable. Write it with forward slashes there: `ssh` treats a backslash in its config as an escape, so `\\.\pipe\sshush-agent` as written is not found.
+`\\.\pipe\openssh-ssh-agent` is the default. It is the pipe Windows' own OpenSSH agent uses, and the one `ssh.exe` talks to when `SSH_AUTH_SOCK` is unset, so `ssh`, Git and anything else built on Windows OpenSSH find sshush with no `SSH_AUTH_SOCK` and no `IdentityAgent`. The config sshush writes on its first run says so above `socket_path`.
 
-  ```
-  Host *
-      IdentityAgent //./pipe/sshush-agent
-  ```
+Only one agent can hold the name, so the Windows "OpenSSH Authentication Agent" service (`ssh-agent`) has to be stopped. sshush says so on its first run if the service is running, and `sshush start` refuses with the same advice rather than mistaking that agent for its own. To stop it for good, from an administrator PowerShell:
 
-  sshush adds this block for you the first time it runs, if you have a `~\.ssh` folder and its `config` does not set `IdentityAgent` already. It is written once, for the default pipe: if you change `socket_path` later, change it here too.
+```powershell
+Stop-Service ssh-agent; Set-Service ssh-agent -StartupType Disabled
+```
 
-  It does not add it when another agent looks to be in use, since `IdentityAgent` would take `ssh` away from that agent. That means either of:
+### A pipe of its own
 
-  - the Windows "OpenSSH Authentication Agent" service (`ssh-agent`) is running;
-  - `SSH_AUTH_SOCK` is already set to something other than sshush's pipe, in the shell sshush was run from or for new programs (`setx`, System Properties).
+If you would rather keep Windows' agent, or another agent needs that pipe, give sshush its own. The generated config has the line ready, commented out under the default:
 
-  sshush then says which it saw, leaves `~\.ssh\config` alone and prints the block for you to add yourself. The `ssh` that comes with Git for Windows reads the same `~\.ssh\config`, so the block applies to it as well.
+```toml
+socket_path = '\\.\pipe\openssh-ssh-agent'
+# socket_path = '\\.\pipe\sshush-agent'
+```
 
-- Set `socket_path = '\\.\pipe\openssh-ssh-agent'`. That is the pipe `ssh.exe` uses when `SSH_AUTH_SOCK` is unset, so everything finds sshush with no setup at all. It only works while the Windows "OpenSSH Authentication Agent" service is stopped, since the two cannot share the name.
+Swap which one is commented out. Programs then find sshush through `SSH_AUTH_SOCK`, which the PowerShell line above sets, or through `~\.ssh\config`, which needs no environment variable. Write the pipe with forward slashes there: `ssh` treats a backslash in its config as an escape, so `\\.\pipe\sshush-agent` as written is not found.
+
+```
+Host *
+    IdentityAgent //./pipe/sshush-agent
+```
+
+Adding `IdentityAgent` takes `ssh` away from whichever agent it used before, so sshush leaves this to you.
+
+The `ssh` that comes with Git for Windows also reads `~\.ssh\config`, but it cannot connect to a named pipe at all, so don't put this block where it applies to that `ssh`. It reaches sshush another way: see [Git Bash, MSYS2 and Cygwin](#git-bash-msys2-and-cygwin).
 
 A path that is not a pipe name is treated as a Unix socket, which Windows supports but `ssh.exe` does not.
+
+## Pageant programs (MobaXterm, WinSCP, PuTTY)
+
+Some programs never look at `SSH_AUTH_SOCK` or the OpenSSH pipe. They come from the PuTTY family and only know PuTTY's agent, Pageant. MobaXterm, WinSCP, FileZilla and PuTTY itself are all like this. They find Pageant by a hidden window it keeps and pass their requests to it through shared memory.
+
+The agent also acts as Pageant, using the same keys. This is `[agent].pageant_emulation`. It is on unless the config says `pageant_emulation = false`, and the tray's Settings page has it as **Also answer as Pageant**. Turning it on or off takes effect when the agent restarts.
+
+To use it in MobaXterm:
+1. Open Settings > Configuration > SSH.
+2. Untick "Use internal SSH agent MobAgent".
+3. Tick the PuTTY agent option. Older versions call it "Use external Pageant".
+4. For agent forwarding, also tick "Forward SSH agents".
+
+Newer MobaXterm versions also offer a "Windows SSH agent" option. That one reaches sshush through the OpenSSH pipe and doesn't need Pageant. Either option works.
+
+WinSCP and PuTTY need nothing more: they use Pageant whenever it is there.
+
+Some limits:
+- **Only one program can be Pageant at a time.** If PuTTY's own Pageant, KeeAgent, or gpg-agent with PuTTY support is already running when the agent starts, sshush leaves it alone and says so on the Settings page. Quit the other one and restart the agent to take over.
+- **Only you can use it.** Requests from another account are ignored.
+- **Requests and replies are limited to 8 KiB,** the most a PuTTY-family program has room for. That covers dozens of keys; an agent with too many keys to list in that space answers with a failure.
+- **Only the window is served,** not Pageant's newer named pipe. PuTTY 0.75 and later try the pipe first and then use the window.
+
+## Git Bash, MSYS2 and Cygwin
+
+Git for Windows comes with its own `ssh`, built for MSYS2. Git Bash runs it, and so does `git` itself unless told otherwise. That includes `git` run from VS Code, JetBrains IDEs and other tools. Cygwin's and MSYS2's `ssh` work the same way. None of them can use a named pipe or Pageant. They expect `SSH_AUTH_SOCK` to name a Unix socket, which Cygwin imitates with a small file pointing at a local network port.
+
+The agent writes such a file and answers on it, with the same keys. By default it is `cygwin-agent.sock` beside `config.toml` (`~\.config\sshush\cygwin-agent.sock`). `[agent].cygwin_socket` puts it somewhere else, and `cygwin_socket = ""` turns it off. The tray's Settings page has the switch as **Also answer Git Bash (Cygwin socket)**, with the `SSH_AUTH_SOCK` line under it; a path of your own is set in the file. Either takes effect when the agent restarts. The file only exists while the agent runs.
+
+In Git Bash, `sshush start --shell bash` prints the line that points `SSH_AUTH_SOCK` at that file. `--shell bash` matters when the config says `shell = "powershell"`, as it does if sshush first ran in PowerShell. To set it in every Git Bash window, add this to `~/.bashrc`:
+
+```bash
+eval "$(sshush start --shell bash)"
+```
+
+`ssh`, `ssh-add` and `git` in that shell then use sshush. For `git` started from somewhere other than Git Bash, such as an IDE, either set `SSH_AUTH_SOCK` for your Windows account to the file's path, or have `git` use Windows' OpenSSH, which finds sshush with no setting:
+
+```powershell
+git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe
+```
+
+Only you can use the file. A program has to read the secret in it to get past the first exchange, and the file is readable by you alone.
 
 ## Paths
 
@@ -105,15 +159,38 @@ The editor has to stay in the foreground until you close the file. For VS Code t
 
 Copying a public key or a recovery phrase goes to the Windows clipboard directly; nothing extra to install. The recovery phrase that `sshush vault init` copies is marked so that Windows keeps it out of clipboard history (Win+V) and does not sync it to your other devices; a clipboard manager that ignores those marks can still record it.
 
+`SSHUSH_COPY_CMD` replaces the clipboard API with a command of your own that reads the text on stdin, as on Linux and macOS (see [Setup: Clipboard](setup.md#clipboard)). That command gets the recovery phrase too, without the marks: only the default keeps it out of history and cloud sync.
+
 ## The tray
 
-`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do:
+`sshush-tray.exe` puts sshush in the notification area. Its icon shows whether the agent is running and, for a vault, whether it is locked; its menu names the agent and lists its keys. Clicking the icon opens the main window, which does what the TUI's Agent and Vault tabs do. Its header starts and stops the agent, and two pages sit below it.
 
-- start and stop the agent, and lock or unlock a vault;
+**Keys**
+
 - list the agent's keys, or the vault's, with the selected key's details beside them;
-- add a key file, create a new key, or set up a vault when there is none;
-- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key;
-- run `sshush selftest`.
+- add a key file or create a new key;
+- remove, rename, load or unload a key, switch its autoload, and copy its fingerprint or public key.
+
+**Vault**
+
+- see the vault's state, where its file is, its size, when it was created and last changed, how many keys it holds, and whether a recovery phrase can unlock it;
+- create a vault when there is none, and lock or unlock it;
+- change the vault's passphrase, or give it a new recovery phrase (each asks for the current passphrase or recovery phrase, and shows the new phrase once);
+- show the vault file in Explorer, or copy its path;
+- back the vault up to a file of your choosing (`vault-YYYYMMDD.json` in Documents, by default);
+- import a vault from another PC;
+- switch the agent between serving the vault and serving your key files;
+- choose when the tray locks the vault by itself (**Auto-lock**): when Windows locks or you switch user, when the PC goes to sleep, and after 5 minutes to an hour without keyboard or mouse input. All three are off by default, so the vault stays unlocked until you lock it. The settings are kept in the registry, under `HKCU\Software\sshush\Tray`.
+
+Auto-lock is the tray's: it locks the vault only while the tray is running, and an agent you run without the tray never locks by itself.
+
+**Moving a vault to another PC.** The vault is one file, and its keys stay encrypted under its passphrase wherever it goes. Back it up on the old PC, then on the new one choose **Import…** on the Vault page and pick the file. The tray checks the passphrase before changing anything. Then it stops the agent and copies the file in. If a vault was already there, it is kept beside it as `vault.json.bak-<time>`, along with its `recovery.txt`. The config is switched to vault mode if needed, and the agent is started and unlocked. The imported vault's recovery phrase is whatever it was on the old PC.
+
+**Switching modes.** **Use a vault** sets `[agent].type = "vault"` in `config.toml`, and sets `[vault].vault_path` to the default path beside it if none is configured. **Use key files instead** sets it back to `"keys"`. Either way the agent restarts. The tray edits only those lines, so the file's comments and other settings stay as they were.
+
+**Settings** edits what the agent serves and where: the agent type, its pipe, whether it also answers as Pageant and on a Cygwin socket for Git Bash, the vault file, the key files and the folders searched for keys. Changes to what the agent does take effect when you press **Restart agent**.
+
+The footer runs `sshush selftest`.
 
 The window follows Windows' light or dark mode. "Start at sign-in" starts the tray, without opening the window, when you sign in. Starting the tray again replaces the one already running rather than adding a second icon.
 
@@ -186,7 +263,7 @@ export SSH_AUTH_SOCK="$HOME/.ssh/sshush-windows.sock"
 if ! ss -lx 2>/dev/null | grep -q "$SSH_AUTH_SOCK"; then
     rm -f "$SSH_AUTH_SOCK"
     (setsid socat UNIX-LISTEN:"$SSH_AUTH_SOCK",fork \
-        EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork &) >/dev/null 2>&1
+        EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork &) >/dev/null 2>&1
 fi
 ```
 
@@ -196,7 +273,7 @@ The same thing for fish, in `~/.config/fish/config.fish`:
 set -gx SSH_AUTH_SOCK $HOME/.ssh/sshush-windows.sock
 if not ss -lx 2>/dev/null | string match -q "*$SSH_AUTH_SOCK*"
     rm -f $SSH_AUTH_SOCK
-    setsid socat UNIX-LISTEN:$SSH_AUTH_SOCK,fork,mode=600 EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/sshush-agent",nofork >/dev/null 2>&1 &
+    setsid socat UNIX-LISTEN:$SSH_AUTH_SOCK,fork,mode=600 EXEC:"/mnt/c/path/to/npiperelay.exe -ei -s //./pipe/openssh-ssh-agent",nofork >/dev/null 2>&1 &
     disown
 end
 ```

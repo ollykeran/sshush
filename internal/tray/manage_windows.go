@@ -3,6 +3,8 @@ package tray
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -10,7 +12,9 @@ import (
 	"unsafe"
 
 	"github.com/ollykeran/sshush/internal/clipboard"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/platform"
+	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/selftest"
 	"github.com/ollykeran/sshush/internal/utils"
 	"github.com/ollykeran/sshush/internal/vaultops"
@@ -61,6 +65,7 @@ const (
 	wmApp               = 0x8000
 	wmMainDone          = wmApp + 1 // an operation finished; take mainWindow.result
 	wmMainRefresh       = wmApp + 2 // the tray saw the agent change
+	wmMainProbed        = wmApp + 4 // distroProbe found where a key came from
 	bnClicked           = 0
 	bmGetCheck          = 0x00F0
 	bmSetCheck          = 0x00F1
@@ -211,13 +216,20 @@ type mainWindow struct {
 	busy      bool
 	statusErr bool
 	tone      Tone // the header's colour
-	// lastAgentGlyph keeps the start/stop button's icon while it is disabled.
-	lastAgentGlyph rune
+	// restartPending is set when settings the agent reads at start were
+	// saved while it ran, until it next starts.
+	restartPending bool
 	ui             *uiCache
 	// frame is how much bigger the window is than its client area.
 	frame [2]int32
 	// hidden holds the controls show has hidden.
 	hidden map[uint16]bool
+	// page is the page shown: pageKeys, pageVault or pageSettings.
+	page     int
+	vault    VaultView
+	settings settingsForm
+	// probe finds the WSL distro of keys recorded without one.
+	probe distroProbe
 
 	mu     sync.Mutex
 	result *opResult
@@ -235,6 +247,16 @@ type opResult struct {
 	// it leaves the last action's message unless the agent's state moved on.
 	background bool
 }
+
+// The main window's pages.
+const (
+	pageKeys = iota
+	pageVault
+	pageSettings
+)
+
+// pageValue is the registry value that remembers the page last shown.
+const pageValue = "MainPage"
 
 // activeMain is the window the dialog procedure serves; there is only one.
 var activeMain *mainWindow
@@ -320,19 +342,37 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 
+	case wmDrawItem:
+		if w.ui != nil && w.drawTab(lParam) {
+			return 1
+		}
+		return 0
+
 	case wmCtlColorStatic:
 		switch lParam {
+		case control(hwnd, idMainTabLine):
+			return tabDividerBrush()
 		case control(hwnd, idMainAgent):
 			if c, ok := toneColor(w.tone, darkNow()); ok {
 				return ctlColorText(msg, wParam, c)
 			}
 		case control(hwnd, idMainSource), control(hwnd, idMainDetailSub), control(hwnd, idMainFpLabel),
-			control(hwnd, idMainPubLabel), control(hwnd, idMainFromLabel), control(hwnd, idMainVersion):
+			control(hwnd, idMainPubLabel), control(hwnd, idMainFromLabel), control(hwnd, idMainVersion),
+			control(hwnd, idVaultSub):
 			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		case control(hwnd, idMainFp), control(hwnd, idMainPub):
 			return fieldCtlColor(wParam)
 		case control(hwnd, idMainStatus):
 			return themedCtlColor(msg, wParam, w.statusErr)
+		}
+		if p := w.settingsProblemAt(lParam); p != nil {
+			if p.Blocker {
+				return themedCtlColor(msg, wParam, true)
+			}
+			return ctlColorText(msg, wParam, pick(warnText, darkNow()))
+		}
+		if id, _, _ := procGetDlgCtrlID.Call(lParam); isVaultRowLabel(uint16(id)) || secondaryLabels[uint16(id)] {
+			return ctlColorText(msg, wParam, pick(secondaryText, darkNow()))
 		}
 		return themedCtlColor(msg, wParam, false)
 
@@ -349,6 +389,7 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 	case wmDestroy:
 		w.savePlacement()
+		saveSetting(pageValue, []byte{byte(w.page)})
 		unthemeWindow(hwnd)
 		return 0
 
@@ -386,6 +427,15 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			}
 			return 1
 		}
+		if id == idAutoLockIdle {
+			if code == cbnSelChange {
+				w.autoLockChanged()
+			}
+			return 1
+		}
+		if w.settingsCommand(uint16(id), uint16(code)) {
+			return 1
+		}
 		if code != bnClicked {
 			return 0
 		}
@@ -409,6 +459,10 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 			w.run("", nil)
 		}
 		return 1
+
+	case wmMainProbed:
+		w.updateButtons()
+		return 1
 	}
 	return 0
 }
@@ -418,7 +472,9 @@ func mainWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 func (w *mainWindow) command(id uint16) bool {
 	switch id {
 	case idCancel: // also Esc and the close button
-		procEndDialog.Call(w.hwnd, idCancel)
+		if w.leaveSettings() {
+			procEndDialog.Call(w.hwnd, idCancel)
+		}
 	case idMainAgentToggle:
 		w.startOrStop()
 	case idMainLock:
@@ -447,6 +503,30 @@ func (w *mainWindow) command(id uint16) bool {
 		w.run("Asking the agent…", nil)
 	case idMainStartup:
 		w.startupToggled()
+	case idMainTabKeys:
+		w.selectPage(pageKeys)
+	case idMainTabVault:
+		w.selectPage(pageVault)
+	case idMainTabSettings:
+		w.selectPage(pageSettings)
+	case idVaultOpenFolder:
+		w.showVaultInExplorer()
+	case idMainOpenFrom:
+		w.showKeyFileInExplorer()
+	case idVaultCopyPath:
+		w.copyVaultPath()
+	case idVaultBackup:
+		w.backupVault()
+	case idVaultImport:
+		w.importVault()
+	case idMainRestart:
+		w.restart()
+	case idAutoLockSession, idAutoLockSleep:
+		w.autoLockChanged()
+	case idVaultPasswd:
+		w.changePassphrase()
+	case idVaultRecovery:
+		w.newRecoveryPhrase()
 	default:
 		return false
 	}
@@ -459,6 +539,10 @@ func (w *mainWindow) init() {
 	w.ui = newUICache(w.hwnd)
 	procSendMessageW.Call(control(w.hwnd, idMainAgent), wmSetFont, w.ui.headerFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainDetailTitle), wmSetFont, w.ui.titleFont(), 0)
+	procSendMessageW.Call(control(w.hwnd, idVaultTitle), wmSetFont, w.ui.titleFont(), 0)
+	for _, id := range sectionHeaders {
+		procSendMessageW.Call(control(w.hwnd, int(id)), wmSetFont, w.ui.sectionFont(), 0)
+	}
 	procSendMessageW.Call(control(w.hwnd, idMainFp), wmSetFont, w.ui.monoFont(), 0)
 	procSendMessageW.Call(control(w.hwnd, idMainPub), wmSetFont, w.ui.monoFont(), 0)
 
@@ -490,6 +574,12 @@ func (w *mainWindow) init() {
 		}
 	}
 	procSendMessageW.Call(control(w.hwnd, idMainStartup), bmSetCheck, boolArg(startupEnabled()), 0)
+	w.initAutoLock()
+	if b := loadSetting(pageValue); len(b) == 1 && b[0] <= pageSettings {
+		w.page = int(b[0])
+	}
+	w.loadSettings()
+	w.checkTab()
 	setText(control(w.hwnd, idMainVersion), "sshush "+version.Version)
 
 	var wr, cr [4]int32
@@ -546,14 +636,15 @@ func (w *mainWindow) run(working string, op func() opResult) {
 		w.setStatus(working, false)
 	}
 	w.updateButtons()
-	hwnd, env := w.hwnd, w.t.env
+	hwnd, t := w.hwnd, w.t
 	go func() {
 		res := opResult{background: op == nil && working == ""}
 		if op != nil {
 			res = op()
-			w.t.refresh() // the tray shows the change too
+			t.refresh() // the tray shows the change too
 		}
-		res.state = ProbeMain(env)
+		// Read now, not before op: switching what the agent serves changes it.
+		res.state = ProbeMain(t.environment())
 		w.mu.Lock()
 		w.result = &res
 		w.mu.Unlock()
@@ -592,7 +683,13 @@ func (w *mainWindow) finish() {
 	setText(control(w.hwnd, idMainAgent), agentLine(w.state.Reachable, w.state.Managed, w.state.Backend))
 	setText(control(w.hwnd, idMainSource), sourceLine(w.state))
 
+	if !w.state.Reachable {
+		w.restartPending = false // it starts with the settings as they are
+	}
 	text, isErr := mainStatus(w.state)
+	if reason := restartReason(w.state, w.restartPending); reason != "" && !isErr {
+		text = reason
+	}
 	switch {
 	case res.background && !isErr && !w.statusErr && before == agentLine(w.state.Reachable, w.state.Managed, w.state.Backend):
 		text = windowText(control(w.hwnd, idMainStatus))
@@ -678,7 +775,7 @@ func (w *mainWindow) actions() MainActions {
 
 // detailControls are hidden while no key is selected.
 var detailControls = []uint16{idMainFpLabel, idMainFp, idMainCopyFp, idMainPubLabel, idMainPub, idMainCopyPub,
-	idMainFromLabel, idMainFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove}
+	idMainFromLabel, idMainFrom, idMainOpenFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove}
 
 // updateButtons enables what the state and selection allow, fills the
 // details pane for the selected key, and lays the window out again for
@@ -691,14 +788,18 @@ func (w *mainWindow) updateButtons() {
 			w.setButtonIcon(id, g, on)
 		}
 	}
-	// With no vault yet, creating one is the only way forward, so it stands
-	// where Add would.
+	onKeys := func(id uint16, visible bool) { w.show(id, visible && w.page == pageKeys) }
+	onVault := func(id uint16, visible bool) { w.show(id, visible && w.page == pageVault) }
+	for _, id := range []uint16{idMainCreateKey, idMainRefresh, idMainList, idMainDetailTitle, idMainDetailSub} {
+		onKeys(id, true)
+	}
+
+	// With no vault yet there is nothing to add keys to: the Vault page
+	// creates one.
 	needsVault := w.state.needsVault()
 	enable(idMainAdd, a.Add)
-	enable(idMainCreateVault, a.CreateVault)
 	enable(idMainCreateKey, !w.busy)
-	w.show(idMainAdd, !needsVault)
-	w.show(idMainCreateVault, needsVault)
+	onKeys(idMainAdd, !needsVault)
 	enable(idMainRemove, a.Remove)
 	enable(idMainAutoload, a.Autoload)
 	enable(idMainRename, a.Rename)
@@ -714,49 +815,144 @@ func (w *mainWindow) updateButtons() {
 	}
 	enable(idMainLoad, a.Load || a.Unload)
 	w.setButtonIcon(idMainLoad, loadGlyph(a), a.Load || a.Unload)
-	if a.Unlock {
-		setText(control(w.hwnd, idMainLock), "Unlo&ck…")
-	} else {
-		setText(control(w.hwnd, idMainLock), "&Lock")
-	}
-	enable(idMainLock, a.Lock || a.Unlock)
-	w.setButtonIcon(idMainLock, lockGlyph(a), a.Lock || a.Unlock)
-	w.show(idMainLock, w.state.isVault())
-	if a.Start || a.Stop {
-		setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(a))
-	}
+	// Named by the agent's state, not by what is enabled, so a stopped agent
+	// that cannot start yet (a vault agent with no vault) reads Start, greyed.
+	toggle := MainActions{Start: !w.state.Reachable, Stop: w.state.Reachable}
+	setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(toggle))
 	enable(idMainAgentToggle, a.Start || a.Stop)
-	if a.Start || a.Stop {
-		w.lastAgentGlyph = agentGlyph(a)
-	}
-	w.setButtonIcon(idMainAgentToggle, w.lastAgentGlyph, a.Start || a.Stop)
+	w.setButtonIcon(idMainAgentToggle, agentGlyph(toggle), a.Start || a.Stop)
 	w.show(idMainAgentToggle, w.state.Managed)
+	// Locking, in the header with the agent's buttons, since it is about
+	// what the agent holds, whatever page is shown. Its name goes by the
+	// state, not by what is enabled, so it keeps it while the window is busy.
+	lock := headerLock(w.state)
+	setText(control(w.hwnd, idMainLock), lock.label())
+	enable(idMainLock, lock.Enabled && !w.busy)
+	w.setButtonIcon(idMainLock, lock.glyph(), lock.Enabled && !w.busy)
+	w.show(idMainLock, lock.Shown)
+	// Restarting is how saved settings reach the agent: always there for an
+	// agent sshush runs, enabled while it runs.
+	w.show(idMainRestart, w.state.Managed)
+	enable(idMainRestart, canRestart(w.state) && !w.busy)
 	enable(idMainSelftest, !w.busy)
 	enable(idMainRefresh, !w.busy)
 
 	w.detail = detailOf(w.state, w.selected())
+	if w.detail.FromLinux != "" {
+		hwnd := w.hwnd
+		done := func() { procPostMessageW.Call(hwnd, wmMainProbed, 0, 0) }
+		if distro, ok := w.probe.lookup(w.detail.FromLinux, done); ok && distro != "" {
+			w.detail = w.detail.withDistro(distro)
+		}
+	}
+	enable(idMainOpenFrom, w.detail.FromReveal != "")
 	setText(control(w.hwnd, idMainDetailTitle), w.detail.Title)
 	setText(control(w.hwnd, idMainDetailSub), w.detail.Sub)
 	setText(control(w.hwnd, idMainFp), w.detail.Fingerprint)
 	setText(control(w.hwnd, idMainPub), w.detail.PublicKey)
 	setText(control(w.hwnd, idMainFrom), w.detail.From)
 	for _, id := range detailControls {
-		w.show(id, !w.detail.Empty)
+		onKeys(id, !w.detail.Empty)
 	}
 	if !w.detail.Empty {
 		// Autoload and Remove mean nothing to an agent that is not a vault.
-		w.show(idMainAutoload, w.state.showsVault())
-		w.show(idMainRemove, w.state.showsVault())
+		onKeys(idMainAutoload, w.state.showsVault())
+		onKeys(idMainRemove, w.state.showsVault())
 	}
+
+	// The Vault page. Every control is always there; what cannot be done
+	// now is greyed, so nothing moves as the state changes.
+	va := vaultActions(w.state)
+	if w.busy {
+		va = VaultActions{CopyPath: va.CopyPath, OpenFolder: va.OpenFolder}
+	}
+	w.vault = vaultOf(w.state)
+	setText(control(w.hwnd, idVaultTitle), w.vault.Title)
+	setText(control(w.hwnd, idVaultSub), w.vault.Sub)
+	for id := range vaultPage {
+		onVault(id, true)
+	}
+	for i := range vaultRowCount {
+		shown := i < len(w.vault.Rows)
+		if shown {
+			setText(control(w.hwnd, int(vaultRowLabel(i))), w.vault.Rows[i].Label)
+			setText(control(w.hwnd, int(vaultRowValue(i))), w.vault.Rows[i].Value)
+		}
+		onVault(vaultRowLabel(i), shown)
+		onVault(vaultRowValue(i), shown)
+	}
+	for id, text := range w.vault.Captions {
+		setText(control(w.hwnd, int(id)), text)
+	}
+	// Creating the vault is for until there is one; after that it never applies.
+	enable(idMainCreateVault, va.CreateVault)
+	onVault(idMainCreateVault, vaultActions(w.state).CreateVault)
+	enable(idVaultOpenFolder, va.OpenFolder)
+	enable(idVaultCopyPath, va.CopyPath)
+	enable(idVaultPasswd, va.ChangePassphrase)
+	enable(idVaultRecovery, va.NewRecovery)
+	enable(idVaultBackup, va.Backup)
+	enable(idVaultImport, va.Import)
+	// Auto-lock is a setting the tray keeps, whatever the agent serves now.
+	for _, id := range autoLockControls {
+		procEnableWindow.Call(control(w.hwnd, int(id)), boolArg(!w.busy))
+	}
+
+	// The Settings page.
+	for id := range settingsPage {
+		w.show(id, w.page == pageSettings)
+	}
+	w.updateSettings()
 	w.layout()
 
-	// A disabled or hidden control cannot keep the focus; hand it to the list.
+	// A disabled or hidden control cannot keep the focus; hand it to the
+	// list, or on the Vault page to its tab.
 	if focus, _, _ := procGetFocus.Call(); focus != 0 {
 		on, _, _ := procIsWindowEnabled.Call(focus)
 		if id, _, _ := procGetDlgCtrlID.Call(focus); on == 0 || w.hidden[uint16(id)] {
-			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, idMainList), 1)
+			to := idMainList
+			switch w.page {
+			case pageVault:
+				to = idMainTabVault
+			case pageSettings:
+				to = idMainTabSettings
+			}
+			procSendMessageW.Call(w.hwnd, wmNextDlgCtl, control(w.hwnd, to), 1)
 		}
 	}
+}
+
+// selectPage shows page, and on the Vault page looks at the agent again, so
+// what it says about the vault file is current.
+func (w *mainWindow) selectPage(page int) {
+	if page == w.page {
+		return
+	}
+	if w.page == pageSettings && !w.leaveSettings() {
+		w.checkTab() // the tab the click checked goes back
+		return
+	}
+	w.page = page
+	w.checkTab()
+	w.updateButtons()
+	switch {
+	case page == pageSettings:
+		w.loadSettings() // the file may have changed since
+	case page == pageVault && !w.busy:
+		w.run("", nil)
+	}
+}
+
+// checkTab draws the page tabs again, the one for the page shown selected.
+func (w *mainWindow) checkTab() {
+	for _, id := range []int{idMainTabKeys, idMainTabVault, idMainTabSettings} {
+		procRedrawWindow.Call(control(w.hwnd, id), 0, 0, rdwInvalidate|rdwErase)
+	}
+}
+
+// isVaultRowLabel reports whether id labels one of the Vault page's facts.
+func isVaultRowLabel(id uint16) bool {
+	return id >= idVaultRows && id < idVaultRows+2*vaultRowCount && (id-idVaultRows)%2 == 0
 }
 
 // layout places every control for the window's current size.
@@ -803,9 +999,19 @@ func (w *mainWindow) layout() {
 func (w *mainWindow) naturalWidths() map[uint16]int {
 	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
 	out := map[uint16]int{}
-	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateVault, idMainCreateKey, idMainRefresh,
-		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest} {
+	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateKey, idMainRefresh,
+		idMainCreateVault, idMainCopyFp, idMainCopyPub, idMainOpenFrom, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
+		idMainTabKeys, idMainTabVault, idMainTabSettings, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport,
+		idMainRestart, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
+		idSetDirsAdd, idSetDirsRemove, idSetSave, idSetDiscard} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
+		if id == idMainLock {
+			// Its label changes; it is as wide as its longer, so the header
+			// does not shift.
+			for _, locked := range []bool{false, true} {
+				content = max(content, textWidth(w.hwnd, strings.ReplaceAll(HeaderLock{Locked: locked}.label(), "&", "")))
+			}
+		}
 		if hasGlyph(id) {
 			content += iconW
 		}
@@ -813,6 +1019,9 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	}
 	// A check box's box and the gap after it are about as wide as an icon.
 	out[idMainStartup] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainStartup))) + iconW + scale(8, w.ui.dpi)
+	for _, id := range []uint16{idAutoLockSession, idAutoLockSleep} {
+		out[id] = textWidth(w.hwnd, windowText(control(w.hwnd, int(id)))) + iconW + scale(8, w.ui.dpi)
+	}
 	out[idMainThemeLabel] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainThemeLabel)))
 	out[idMainVersion] = textWidth(w.hwnd, windowText(control(w.hwnd, idMainVersion))) + scale(4, w.ui.dpi)
 	return out
@@ -931,11 +1140,11 @@ func (w *mainWindow) startOrStop() {
 	switch {
 	case a.Start:
 		w.run("Starting the agent…", func() opResult {
-			if err := StartAgent(t.env.SocketPath); err != nil {
+			if err := StartAgent(t.environment().SocketPath); err != nil {
 				return opResult{err: fmt.Errorf("could not start the agent: %w", err)}
 			}
 			// As 'sshush start' does, ask for the passphrase straight away.
-			if s := Probe(t.env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+			if s := Probe(t.environment().SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
 				if err := t.promptUnlock(); err != nil && !errors.Is(err, errCancelled) {
 					return opResult{err: err}
 				}
@@ -966,19 +1175,21 @@ func (w *mainWindow) lockOrUnlock() {
 		})
 	case a.Lock:
 		w.run("Locking…", func() opResult {
-			return done("Locked the vault. Its keys have left the agent.", vaultops.Lock(t.env))
+			return done("Locked the vault. Its keys have left the agent.", vaultops.Lock(t.environment()))
 		})
 	}
 }
 
 // createVault asks for a passphrase, twice, creates the vault with a
-// recovery phrase, shows the phrase once, and starts the agent on the new
-// vault, unlocked.
+// recovery phrase and shows the phrase once. When the agent is to serve the
+// vault it starts on it, unlocked; when it serves key files, config is made
+// to name the new vault, and the user is asked whether to switch to it now.
 func (w *mainWindow) createVault() {
-	if !w.actions().CreateVault {
+	if !w.vaultActionsNow().CreateVault {
 		return
 	}
 	hwnd, t := w.hwnd, w.t
+	aside := w.state.VaultAside
 	w.run("Creating the vault…", func() opResult {
 		pass, err := askNewPassphrase(hwnd)
 		if errors.Is(err, errCancelled) {
@@ -988,20 +1199,24 @@ func (w *mainWindow) createVault() {
 			return opResult{err: err}
 		}
 		defer clear(pass)
-		res, err := vaultops.Init(t.env, pass, vaultops.InitOptions{Recovery: true})
+		env := vaultEnv(t.environment())
+		res, err := vaultops.Init(env, pass, vaultops.InitOptions{Recovery: true})
 		if err != nil {
 			return opResult{err: err}
 		}
 		showRecoveryPhrase(hwnd, recoveryMessage(res.RecoveryFile), res.Mnemonic)
+		if aside {
+			return w.afterCreateAside(env, res.VaultPath, pass)
+		}
 		// The agent was waiting for this vault: start it, and unlock the
 		// vault with the passphrase just chosen rather than ask again.
-		if Probe(t.env.SocketPath).Err != nil && !t.env.AgentUnmanaged {
-			if err := StartAgent(t.env.SocketPath); err != nil {
+		if Probe(env.SocketPath).Err != nil && !env.AgentUnmanaged {
+			if err := StartAgent(env.SocketPath); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not start the agent: %w", err)}
 			}
 		}
-		if s := Probe(t.env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
-			if err := vaultops.UnlockPassphrase(t.env, pass); err != nil {
+		if s := Probe(env.SocketPath); s.Err == nil && s.Backend.Mode == "vault" && s.Backend.VaultLocked {
+			if err := vaultops.UnlockPassphrase(t.environment(), pass); err != nil {
 				return opResult{err: fmt.Errorf("created the vault, but could not unlock it: %w", err)}
 			}
 		}
@@ -1009,11 +1224,57 @@ func (w *mainWindow) createVault() {
 	})
 }
 
+// restart stops the agent and starts it again with the settings as config
+// has them now.
+func (w *mainWindow) restart() {
+	if !canRestart(w.state) || w.busy {
+		return
+	}
+	t := w.t
+	w.run("Restarting the agent…", func() opResult {
+		aligned, err := restartAgent(t)
+		if err != nil {
+			return opResult{err: err}
+		}
+		return opResult{status: "Restarted the agent with the current settings." + alignedNote(aligned)}
+	})
+	w.restartPending = false
+}
+
+// afterCreateAside follows creating a vault the agent does not serve: config
+// is made to name it, so the CLI finds it too, and the user may switch the
+// agent to it at once, unlocked with pass.
+func (w *mainWindow) afterCreateAside(env vaultops.Env, vaultFile string, pass []byte) opResult {
+	t := w.t
+	cfgPath := runtime.ConfigPathDefault()
+	if env.VaultPath != t.environment().VaultPath { // config named none
+		s, err := config.ReadCoreSettings(cfgPath)
+		if err == nil {
+			s.VaultPath = homePath(vaultFile)
+			err = config.WriteCoreSettingsToPath(cfgPath, s)
+		}
+		if err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not name it in config: %w", err)}
+		}
+		if err := t.reloadEnv(); err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not read the config back: %w", err)}
+		}
+	}
+	if !t.environment().AgentUnmanaged &&
+		messageBoxOwned(w.hwnd, switchQuestion(true, true)+"\n\nSwitch now? You can do it later on the Settings tab.", mbYesNo|windows.MB_ICONQUESTION) == idYes {
+		if err := switchAgent(t, true, pass); err != nil {
+			return opResult{err: fmt.Errorf("created the vault, but could not switch to it: %w", err)}
+		}
+		return opResult{status: "Created the vault, and the agent now serves it. Add keys to it to use them."}
+	}
+	return opResult{status: "Created the vault. The agent still serves key files; switch on the Vault tab when you are ready."}
+}
+
 func (w *mainWindow) add() {
 	if !w.actions().Add {
 		return
 	}
-	socketPath, into := w.t.env.SocketPath, "the agent"
+	socketPath, into := w.t.environment().SocketPath, "the agent"
 	if w.state.isVault() {
 		into = "the vault"
 	}
@@ -1039,7 +1300,7 @@ func (w *mainWindow) createKey() {
 	if w.busy {
 		return
 	}
-	hwnd, socketPath, canAdd := w.hwnd, w.t.env.SocketPath, w.actions().Add
+	hwnd, socketPath, canAdd := w.hwnd, w.t.environment().SocketPath, w.actions().Add
 	addLabel := "&Add it to the agent"
 	if w.state.isVault() {
 		addLabel = "&Add it to the vault"
@@ -1078,7 +1339,7 @@ func (w *mainWindow) remove() {
 	if messageBoxOwned(w.hwnd, text, mbYesNo|mbIconWarning|mbDefButton2) != idYes {
 		return
 	}
-	env := w.t.env
+	env := w.t.environment()
 	w.run("Removing "+identityName(id)+"…", func() opResult {
 		_, err := vaultops.Remove(env, []string{id.Fingerprint})
 		return done("Removed "+identityName(id)+" from the vault.", err)
@@ -1093,7 +1354,7 @@ func (w *mainWindow) toggleLoaded() {
 	if sel == nil || !(a.Load || a.Unload) {
 		return
 	}
-	id, env, inVault := *sel, w.t.env, w.state.isVault()
+	id, env, inVault := *sel, w.t.environment(), w.state.isVault()
 	if a.Load {
 		w.run("Loading "+identityName(id)+"…", func() opResult {
 			_, err := vaultops.SessionLoad(env, []string{id.Fingerprint})
@@ -1116,7 +1377,7 @@ func (w *mainWindow) toggleAutoload() {
 	if sel == nil || !a.Autoload {
 		return
 	}
-	id, env, on := *sel, w.t.env, a.AutoloadOn
+	id, env, on := *sel, w.t.environment(), a.AutoloadOn
 	w.run("Saving…", func() opResult {
 		status := identityName(id) + " will stay unloaded until you load it."
 		if on {
@@ -1133,7 +1394,7 @@ func (w *mainWindow) rename() {
 	if sel == nil || !w.actions().Rename {
 		return
 	}
-	id, env, hwnd, keyPaths := *sel, w.t.env, w.hwnd, w.t.keyPaths
+	id, env, hwnd, keyPaths := *sel, w.t.environment(), w.hwnd, w.t.keyPaths
 	w.run("Renaming…", func() opResult {
 		spec := inputSpec{
 			title:   "Rename key",
@@ -1181,9 +1442,68 @@ func (w *mainWindow) copied(text, what string) {
 	w.setStatus("Copied the "+what+" of "+w.detail.Title+".", false)
 }
 
+// showVaultInExplorer opens the vault's folder with the file selected, or
+// with no file yet the nearest folder there is.
+func (w *mainWindow) showVaultInExplorer() {
+	w.revealInExplorer(w.vault.Path, "", "The vault's folder does not exist yet.")
+}
+
+// showKeyFileInExplorer opens the folder the selected key was added from,
+// with its file selected.
+func (w *mainWindow) showKeyFileInExplorer() {
+	w.revealInExplorer(w.detail.FromReveal,
+		"The key file is no longer there; opened the nearest folder that is.",
+		"The folder the key was added from is no longer there.")
+}
+
+// revealInExplorer opens Explorer with path selected or, when path is gone,
+// at the nearest folder above it that exists, saying moved. With no folder
+// left at all it says gone.
+func (w *mainWindow) revealInExplorer(path, moved, gone string) {
+	if path == "" {
+		return
+	}
+	args := `/select,"` + path + `"`
+	if _, err := os.Stat(path); err != nil {
+		dir := filepath.Dir(path)
+		for {
+			if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				w.setStatus(gone, false)
+				return
+			}
+			dir = parent
+		}
+		args = `"` + dir + `"`
+		if moved != "" {
+			w.setStatus(moved, false)
+		}
+	}
+	verb, _ := windows.UTF16PtrFromString("open")
+	exe, _ := windows.UTF16PtrFromString("explorer.exe")
+	params, _ := windows.UTF16PtrFromString(args)
+	if err := windows.ShellExecute(windows.Handle(w.hwnd), verb, exe, params, nil, windows.SW_SHOWNORMAL); err != nil {
+		w.setStatus("Could not open Explorer: "+err.Error(), true)
+	}
+}
+
+func (w *mainWindow) copyVaultPath() {
+	if w.vault.Path == "" {
+		return
+	}
+	if err := clipboard.Copy(w.vault.Path); err != nil {
+		w.setStatus("Could not copy the vault's path: "+err.Error(), true)
+		return
+	}
+	w.setStatus("Copied the vault's path.", false)
+}
+
 // selftest runs the same checks as 'sshush selftest' and shows the report.
 func (w *mainWindow) selftest() {
-	socketPath := w.t.env.SocketPath
+	socketPath := w.t.environment().SocketPath
 	w.run("Running the selftest…", func() opResult {
 		// The tray's own SSH_AUTH_SOCK is whatever it inherited; what matters
 		// is the value new terminals, and so ssh, will get.

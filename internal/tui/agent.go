@@ -10,8 +10,10 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/ollykeran/sshush/internal/agent"
+	"github.com/ollykeran/sshush/internal/config"
 	"github.com/ollykeran/sshush/internal/runtime"
 	"github.com/ollykeran/sshush/internal/sshushd"
 	"github.com/ollykeran/sshush/internal/utils"
@@ -35,8 +37,31 @@ type agentDaemonStateMsg struct {
 	running bool
 }
 
+// daemonStartedForAddMsg reports the outcome of starting sshushd so a key the user
+// picked while the agent was stopped can be added to it. err is nil when the daemon
+// is up (including when it turned out to be running already).
+type daemonStartedForAddMsg struct {
+	path string
+	err  error
+}
+
+// Seams over the daemon and agent calls the add-key flow makes; tests replace them.
+var (
+	startDaemon          = sshushd.StartDaemon
+	daemonAlreadyRunning = sshushd.CheckAlreadyRunning
+	addKeyToAgent        = addKeyToAgentCmd
+)
+
+// foundKeysMsg carries the result of a key search (see discoverKeysCmd).
 type foundKeysMsg struct {
 	paths []utils.KeyPath
+	// rescan is true when the search was asked for (KeyRescan or a click), so
+	// its result is reported in the status line; the search at startup is quiet.
+	rescan bool
+	// skipped lists configured [agent].search_dirs that could not be read.
+	skipped []string
+	// searched lists every directory the search looked in, in search order.
+	searched []string
 }
 
 type agentLockResultMsg struct {
@@ -94,6 +119,19 @@ type AgentScreen struct {
 	foundKeys     []utils.KeyPath
 	foundSelected int
 	loadedFPs     map[string]bool
+
+	// Scroll state, kept by syncScroll on each render: the first row drawn and
+	// how many rows fit, for the Loaded Keys table and the Found Keys list.
+	loadedOffset int
+	loadedShown  int
+	foundOffset  int
+	foundShown   int
+
+	// searchedDirs and skippedDirs are the directories the last key search
+	// looked in and the configured ones it could not read, for the hint
+	// beside the Found Keys title.
+	searchedDirs []string
+	skippedDirs  []string
 
 	fileSelector *FileSelector
 
@@ -157,14 +195,14 @@ func (s *AgentScreen) Init() tea.Cmd {
 		fetchAgentKeysCmd(s.socketPath, false),
 		checkDaemonCmd(s.socketPath),
 		checkVaultStateCmd(s.socketPath),
-		discoverKeysCmd(),
+		discoverKeysCmd(s.configPath, false),
 	)
 }
 
 func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.fileSelector.Visible() {
 		switch msg.(type) {
-		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg:
+		case tea.WindowSizeMsg, FileSelectedMsg, FilePickerCancelledMsg, agentKeysMsg, agentStatusMsg, agentDaemonStateMsg, agentLockResultMsg, agentUnlockResultMsg, vaultStatusMsg, vaultPollMsg, foundKeysMsg, ButtonFlashDoneMsg, daemonStartedForAddMsg:
 			// Handle these below
 		default:
 			return s, s.fileSelector.Update(msg)
@@ -186,7 +224,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FileSelectedMsg:
 		s.fileSelector.Hide()
 		s.focus = agentFocusTable
-		return s, addKeyToAgentCmd(s.socketPath, msg.Path)
+		return s, s.addKeyCmd(msg.Path)
 
 	case FilePickerCancelledMsg:
 		s.fileSelector.Hide()
@@ -217,6 +255,20 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ButtonFlashDoneMsg:
 		s.buttons.ClearPress()
 		return s, nil
+
+	case daemonStartedForAddMsg:
+		if msg.err != nil {
+			s.status = "start failed: " + msg.err.Error()
+			s.statusErr = true
+			return s, tea.Batch(checkDaemonCmd(s.socketPath), checkVaultStateCmd(s.socketPath))
+		}
+		s.status = "started, adding key..."
+		s.statusErr = false
+		// Record the daemon as running exactly as a daemon state check would (footer
+		// widget, fresh vault poll chain). The add's own status message then refreshes
+		// keys, daemon state and vault state as after any add.
+		_, stateCmd := s.Update(agentDaemonStateMsg{running: true})
+		return s, tea.Batch(stateCmd, checkVaultStateCmd(s.socketPath), addKeyToAgent(s.socketPath, msg.path))
 
 	case agentKeysMsg:
 		if msg.err != nil {
@@ -249,15 +301,7 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			s.status = fmt.Sprintf("%d key(s) loaded", len(rows))
 		}
-		if s.focus == agentFocusFound {
-			visible := s.visibleFoundKeys()
-			if len(visible) == 0 {
-				s.focusFirstLoadedKey()
-				s.foundSelected = 0
-			} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
-				s.foundSelected = s.foundKeysMaxIndex(visible)
-			}
-		}
+		s.clampFoundFocus()
 		return s, nil
 
 	case agentStatusMsg:
@@ -277,6 +321,13 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case foundKeysMsg:
 		s.foundKeys = msg.paths
+		s.searchedDirs = msg.searched
+		s.skippedDirs = msg.skipped
+		s.clampFoundFocus()
+		if msg.rescan {
+			s.status = rescanStatus(len(s.visibleFoundKeys()), msg.skipped)
+			s.statusErr = false
+		}
 		return s, nil
 
 	case agentLockResultMsg:
@@ -341,13 +392,13 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
-		return s.handleMouse(msg.X, msg.Y)
+		return s.handleMouse(msg.X, msg.Y, false)
 
 	case tea.MouseReleaseMsg:
 		if msg.Button != tea.MouseLeft || s.fileSelector.Visible() || s.showPass || s.commentOverlay.active {
 			return s, nil
 		}
-		return s.handleMouse(msg.X, msg.Y)
+		return s.handleMouse(msg.X, msg.Y, true)
 
 	case commentOverlaySavedMsg:
 		s.commentOverlay.Hide()
@@ -382,6 +433,9 @@ func (s *AgentScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *AgentScreen) handleKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if KeyMatches(msg, KeyRescan) {
+		return s, s.rescanKeys()
+	}
 	switch msg.String() {
 	case "q", "esc":
 		return s, tea.Quit
@@ -495,9 +549,19 @@ func (s *AgentScreen) handlePassInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	return s, cmd
 }
 
-func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
+// handleMouse handles a left click (release false) or its release (release
+// true); both arrive for one click. The re-scan control acts on the release
+// only, so one click searches once.
+func (s *AgentScreen) handleMouse(x, y int, release bool) (tea.Model, tea.Cmd) {
+	if inZoneBounds(s.rescanZoneID(), x, y) {
+		if !release {
+			return s, nil
+		}
+		return s, s.rescanKeys()
+	}
+	// Only rows on screen are clickable; zones of rows scrolled away are stale.
 	rows := s.keyTable.Table.Rows()
-	for i := range rows {
+	for i := s.loadedOffset; i < min(s.loadedOffset+s.loadedShown, len(rows)); i++ {
 		if inZoneBounds(fmt.Sprintf("%skey-%d", s.zonePrefix, i), x, y) {
 			s.focus = agentFocusTable
 			s.keyTable.Table.SetCursor(i)
@@ -505,14 +569,8 @@ func (s *AgentScreen) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 			return s, nil
 		}
 	}
-	if row := s.keyTable.HandleMouse(x, y); row >= 0 {
-		s.focus = agentFocusTable
-		s.keyTable.Table.SetCursor(row)
-		s.syncTableSelection()
-		return s, nil
-	}
 	visible := s.visibleFoundKeys()
-	for i := range visible {
+	for i := s.foundOffset; i < min(s.foundOffset+s.foundShown, len(visible)); i++ {
 		if inZoneBounds(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), x, y) {
 			s.focus = agentFocusFound
 			s.foundSelected = i
@@ -608,7 +666,68 @@ func (s *AgentScreen) addFoundKey() (tea.Model, tea.Cmd) {
 		return s, nil
 	}
 	kp := visible[s.foundSelected]
-	return s, addKeyToAgentCmd(s.socketPath, kp.Path)
+	return s, s.addKeyCmd(kp.Path)
+}
+
+// addKeyCmd adds the key file at path to the agent. When the daemon is not running
+// it is started first (the same start as the Start control), then the key is added
+// once daemonStartedForAddMsg reports it up.
+func (s *AgentScreen) addKeyCmd(path string) tea.Cmd {
+	if s.daemonRunning {
+		return addKeyToAgent(s.socketPath, path)
+	}
+	s.status = "starting agent..."
+	s.statusErr = false
+	return startDaemonThenAddCmd(s.configPath, s.socketPath, path)
+}
+
+// rescanKeys searches ~/.ssh, the current directory and the configured
+// [agent].search_dirs again for keys to offer under Found Keys. The config is
+// read afresh, so search_dirs edited while the TUI runs take effect.
+func (s *AgentScreen) rescanKeys() tea.Cmd {
+	s.status = "searching for keys..."
+	s.statusErr = false
+	return discoverKeysCmd(s.configPath, true)
+}
+
+// rescanZoneID is the bubblezone id of the clickable re-scan control.
+func (s *AgentScreen) rescanZoneID() string { return s.zonePrefix + "rescan" }
+
+// clampFoundFocus keeps the Found Keys selection inside the visible list, and
+// moves focus back to the loaded keys when that list has emptied.
+func (s *AgentScreen) clampFoundFocus() {
+	if s.focus != agentFocusFound {
+		return
+	}
+	visible := s.visibleFoundKeys()
+	if len(visible) == 0 {
+		s.focusFirstLoadedKey()
+		s.foundSelected = 0
+	} else if s.foundSelected > s.foundKeysMaxIndex(visible) {
+		s.foundSelected = s.foundKeysMaxIndex(visible)
+	}
+}
+
+// rescanStatus is the status line after a re-scan: how many keys not already
+// in the agent were found, and which configured directories were skipped.
+func rescanStatus(found int, skipped []string) string {
+	var text string
+	switch found {
+	case 0:
+		text = "no new keys found"
+	case 1:
+		text = "found 1 new key"
+	default:
+		text = fmt.Sprintf("found %d new keys", found)
+	}
+	if len(skipped) > 0 {
+		display := make([]string, len(skipped))
+		for i, d := range skipped {
+			display[i] = utils.DisplayPath(d)
+		}
+		text += " (skipped unreadable: " + strings.Join(display, ", ") + ")"
+	}
+	return text
 }
 
 func (s *AgentScreen) focusFirstLoadedKey() {
@@ -649,15 +768,49 @@ func (s *AgentScreen) loadedKeysTableHeight() int {
 	return h
 }
 
+// foundKeysMaxIndex is the last selectable Found Keys row. Every found key can
+// be selected; rows past the bottom of the list scroll into view.
 func (s *AgentScreen) foundKeysMaxIndex(visible []utils.KeyPath) int {
-	if len(visible) == 0 {
-		return 0
+	return max(len(visible)-1, 0)
+}
+
+// loadedKeysRows is how many key rows the Loaded Keys table shows at once: its
+// height less the header row and rule.
+func (s *AgentScreen) loadedKeysRows() int {
+	return max(s.loadedKeysTableHeight()-2, 1)
+}
+
+// foundKeysRows is how many Found Keys rows to draw for total found keys: all
+// of them if they fit under Loaded Keys, otherwise what fits (keeping a line
+// for the scroll hint), and never fewer than foundKeysMinVisible.
+func (s *AgentScreen) foundKeysRows(total int) int {
+	h := s.height
+	if h < 1 {
+		h = defaultViewHeight
 	}
-	maxIdx := len(visible) - 1
-	if maxIdx >= foundKeysMaxVisible {
-		maxIdx = foundKeysMaxVisible - 1
+	// Loaded Keys: title, border top and bottom, table; plus its scroll hint.
+	used := 1 + 2 + s.loadedKeysTableHeight()
+	if len(s.keyTable.Table.Rows()) > s.loadedKeysRows() {
+		used++
 	}
-	return maxIdx
+	// The blank line between sections, then the Found Keys title and border.
+	avail := h - used - 1 - 3
+	if total <= max(avail, foundKeysMinVisible) {
+		return total
+	}
+	return min(max(avail-1, foundKeysMinVisible), total)
+}
+
+// syncScroll keeps the selected row of each list inside its scroll window. It
+// runs on every render, after keys, focus or the window size have changed.
+func (s *AgentScreen) syncScroll() {
+	rows := len(s.keyTable.Table.Rows())
+	s.loadedShown = min(s.loadedKeysRows(), rows)
+	s.loadedOffset = scrollOffset(s.loadedOffset, s.keyTable.Table.Cursor(), rows, s.loadedShown)
+
+	total := len(s.visibleFoundKeys())
+	s.foundShown = s.foundKeysRows(total)
+	s.foundOffset = scrollOffset(s.foundOffset, s.foundSelected, total, s.foundShown)
 }
 
 func sectionBoxWidth(width int) int {
@@ -720,14 +873,19 @@ func (s *AgentScreen) View() tea.View {
 		w = defaultViewWidth
 	}
 
+	s.syncScroll()
+
 	var sections []string
 	sections = append(sections, s.renderLoadedKeys(w, active))
 
 	visible := s.visibleFoundKeys()
+	sections = append(sections, "")
 	if len(visible) > 0 {
-		sections = append(sections, "")
 		foundContent := s.renderFoundKeys(visible, w, active)
 		sections = append(sections, foundContent)
+	} else {
+		sections = append(sections, lipgloss.Place(w, 0, lipgloss.Center, lipgloss.Top,
+			s.foundTitleLine(s.sk.Styles().DimStyle.Render("No other keys found"), "in", w)))
 	}
 
 	content := strings.Join(sections, "\n")
@@ -791,19 +949,20 @@ func (s *AgentScreen) renderLoadedKeys(width int, active bool) string {
 		border = st.FocusedBorderStyle
 	}
 
-	content := border.Render(s.keyTable.AgentViewMarked(s.zonePrefix, focused, st))
+	table := s.keyTable.AgentViewWindow(s.zonePrefix, focused, st, s.loadedOffset, s.loadedShown)
+	if rows := len(s.keyTable.Table.Rows()); rows > s.loadedShown {
+		table += "\n" + st.DimStyle.Render(" "+scrollHint(s.loadedOffset, s.loadedShown, rows))
+	}
+	content := border.Render(table)
 	return lipgloss.Place(width, 0, lipgloss.Center, lipgloss.Top, title+"\n"+content)
 }
 
 func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active bool) string {
 	st := s.sk.Styles()
-	title := st.SectionTitleStyle.Render(" Found Keys")
+	title := s.foundTitleLine(st.SectionTitleStyle.Render(" Found Keys"), "from", sectionBoxWidth(width))
 	var lines []string
-	maxShow := foundKeysMaxVisible
-	if len(visible) < maxShow {
-		maxShow = len(visible)
-	}
-	for i := 0; i < maxShow; i++ {
+	end := min(s.foundOffset+s.foundShown, len(visible))
+	for i := s.foundOffset; i < end; i++ {
 		linePrefix := "  "
 		selected := active && s.focus == agentFocusFound && i == s.foundSelected
 		if selected {
@@ -828,8 +987,8 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 		rendered := zone.Mark(fmt.Sprintf("%sfound-%d", s.zonePrefix, i), line)
 		lines = append(lines, rendered)
 	}
-	if len(visible) > maxShow {
-		lines = append(lines, st.DimStyle.Render(fmt.Sprintf("  ... and %d more", len(visible)-maxShow)))
+	if len(visible) > s.foundShown {
+		lines = append(lines, st.DimStyle.Render(" "+scrollHint(s.foundOffset, s.foundShown, len(visible))))
 	}
 	content := strings.Join(lines, "\n")
 	boxW := sectionBoxWidth(width)
@@ -841,11 +1000,60 @@ func (s *AgentScreen) renderFoundKeys(visible []utils.KeyPath, width int, active
 		title+"\n"+border.Width(boxW-4).Render(content))
 }
 
+// renderRescanControl renders the clickable "[f] search again" control shown
+// beside Found Keys (or in its place when nothing was found).
+// foundTitleLine is the line above Found Keys: label, then the directories the
+// last search looked in (introduced by prep, e.g. "from"), then the re-scan
+// control. The directory list is shortened with "…" so the line fits within
+// maxW columns; the label and control always show in full.
+func (s *AgentScreen) foundTitleLine(label, prep string, maxW int) string {
+	control := s.renderRescanControl()
+	dirs := searchedDirsText(s.searchedDirs, s.skippedDirs)
+	if dirs == "" {
+		return label + " " + control
+	}
+	room := maxW - lipgloss.Width(label) - lipgloss.Width(control) - 2
+	if room < len(prep)+3 { // not even "from x…" fits
+		return label + " " + control
+	}
+	text := ansi.Truncate(prep+" "+dirs, room, "…")
+	return label + " " + s.sk.Styles().DimStyle.Render(text) + " " + control
+}
+
+// searchedDirsText lists the searched directories as they display (~ for home),
+// once each, marking the configured ones that could not be read.
+func searchedDirsText(searched, skipped []string) string {
+	unreadable := make(map[string]bool, len(skipped))
+	for _, d := range skipped {
+		unreadable[d] = true
+	}
+	seen := make(map[string]bool, len(searched))
+	var parts []string
+	for _, d := range searched {
+		shown := utils.DisplayPath(d)
+		if seen[shown] {
+			continue
+		}
+		seen[shown] = true
+		if unreadable[d] {
+			shown += " (unreadable)"
+		}
+		parts = append(parts, shown)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (s *AgentScreen) renderRescanControl() string {
+	label := "[" + KeyRescan[0] + "] search again"
+	return zone.Mark(s.rescanZoneID(), s.sk.Styles().AccentStyle.Render(label))
+}
+
 func (s *AgentScreen) HelpEntries() []string {
 	st := s.sk.Styles()
 	return []string{
 		st.HelpRow("Agent controls", ""),
 		st.HelpRow("a", "Add key"),
+		st.HelpRow(KeyRescan[0], "Search again for keys"),
 		st.HelpRow("e", "Edit comment"),
 		st.HelpRow("d / bksp", "Remove key"),
 		st.HelpRow("L", "Lock vault"),
@@ -889,6 +1097,18 @@ func startDaemonCmd(configPath, socketPath string) tea.Cmd {
 			return agentStatusMsg{text: err.Error(), isErr: true}
 		}
 		return agentStatusMsg{text: "started"}
+	}
+}
+
+// startDaemonThenAddCmd starts sshushd and reports back with daemonStartedForAddMsg so
+// the key at path can be added. A daemon that is already up (the cached state was
+// stale) counts as started.
+func startDaemonThenAddCmd(configPath, socketPath, path string) tea.Cmd {
+	return func() tea.Msg {
+		if daemonAlreadyRunning(socketPath) {
+			return daemonStartedForAddMsg{path: path}
+		}
+		return daemonStartedForAddMsg{path: path, err: startDaemon(configPath, socketPath)}
 	}
 }
 
@@ -1038,8 +1258,31 @@ func pollVaultStateCmd(socketPath string, gen int) tea.Cmd {
 	})
 }
 
-func discoverKeysCmd() tea.Cmd {
+// discoverKeysCmd searches ~/.ssh, the current directory and the
+// [agent].search_dirs of the config at configPath for private keys. A config
+// that is missing or does not load adds no directories; configured directories
+// that cannot be read are skipped and reported in foundKeysMsg.skipped.
+func discoverKeysCmd(configPath string, rescan bool) tea.Cmd {
 	return func() tea.Msg {
-		return foundKeysMsg{paths: utils.DiscoverKeyPaths([]string{}, true, true, false)}
+		dirs := configuredSearchDirs(configPath)
+		return foundKeysMsg{
+			paths:    utils.DiscoverKeyPaths(dirs, true, true, false),
+			rescan:   rescan,
+			skipped:  utils.UnreadableDirs(dirs),
+			searched: utils.KeySearchDirs(dirs, true, true),
+		}
 	}
+}
+
+// configuredSearchDirs returns [agent].search_dirs from the config at
+// configPath, or nil when there is no config or it does not load.
+func configuredSearchDirs(configPath string) []string {
+	if configPath == "" {
+		return nil
+	}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		return nil
+	}
+	return cfg.SearchDirs
 }

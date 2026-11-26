@@ -120,7 +120,7 @@ func (a *VaultAgent) listing() (Listing, error) {
 	if err != nil {
 		return Listing{}, fmt.Errorf("vault: list identities: %w", err)
 	}
-	return Listing{VaultPath: a.store.Path(), Identities: identities}, nil
+	return Listing{VaultPath: a.store.Path(), Identities: identities, Info: Describe(a.store), HasInfo: true}, nil
 }
 
 // Add encrypts the private key and adds it to the store with autoload=false,

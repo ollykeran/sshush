@@ -5,7 +5,7 @@ deps:
 
 # Set up development environment (tools + dependencies)
 setup:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
     echo "Installing Go tools..."
@@ -31,7 +31,7 @@ update:
 
 # Bump only modules with known vulns (govulncheck). Unlike `update`, does not upgrade unrelated deps.
 update-security:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     export PATH="$(go env GOPATH)/bin:$PATH"
     bin="$(command -v govulncheck || true)"
@@ -86,7 +86,7 @@ run:
 
 # Run with live reload (installs air if missing)
 dev:
-    #!/usr/bin/env bash
+    #!/bin/bash
     set -euo pipefail
     if ! command -v air >/dev/null 2>&1; then
         echo "Installing air..."
@@ -96,7 +96,7 @@ dev:
 
 # Kill any running sshush/sshushd processes
 kill:
-    #!/usr/bin/env bash
+    #!/bin/bash
     pkill -f 'sshushd' || true
     pkill -f 'sshush' --older 2 || true
     ps -w | grep sshush | grep -v grep || true

@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestMainTemplateLayout(t *testing.T) {
 	}
 	// Each keyboard mnemonic reaches one control.
 	keys := map[rune]string{}
-	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), "Unlo&ck…", "&Start agent", "&Unload") {
+	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), HeaderLock{Locked: true}.label(), "&Start agent", "&Unload") {
 		i := strings.IndexRune(text, '&')
 		if i < 0 || i+1 >= len(text) {
 			continue
@@ -83,7 +84,7 @@ func alternates(a, b string) bool {
 
 func vaultUp() MainState {
 	return MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "vault", SpeaksOps: true},
-		Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"}}
+		Listing: true, Listed: vaultops.ListResult{Initialized: true, VaultPath: "/v/vault.json"}, ConfigIsVault: true}
 }
 
 func TestMainActions(t *testing.T) {
@@ -249,6 +250,31 @@ func TestDetailOf(t *testing.T) {
 		t.Errorf("from: got %q", d.From)
 	}
 
+	wsl := id
+	wsl.Filepath = `\\wsl.localhost\Debian\home\olly\.ssh\id_rsa`
+	if d := detailOf(v, &wsl); d.From != "WSL (Debian) · ~/.ssh/id_rsa" || d.FromReveal != wsl.Filepath {
+		t.Errorf("key from WSL: got %q, reveal %q", d.From, d.FromReveal)
+	}
+	win := id
+	win.Filepath = `D:\keys\id_rsa`
+	if d := detailOf(v, &win); d.From != `Windows · D:\keys\id_rsa` || d.FromReveal != win.Filepath {
+		t.Errorf("key from Windows: got %q, reveal %q", d.From, d.FromReveal)
+	}
+	legacy := id
+	legacy.Filepath = "/home/olly/.ssh/id_rsa"
+	if d := detailOf(v, &legacy); runtime.GOOS == "windows" {
+		if d.From != "WSL · ~/.ssh/id_rsa" || d.FromReveal != "" || d.FromLinux != legacy.Filepath {
+			t.Errorf("key from WSL, distro not recorded: got %+v", d)
+		}
+		d = d.withDistro("Ubuntu")
+		if d.From != "WSL (Ubuntu) · ~/.ssh/id_rsa" || d.FromReveal != `\\wsl.localhost\Ubuntu\home\olly\.ssh\id_rsa` || d.FromLinux != "" {
+			t.Errorf("after finding the distro: got %+v", d)
+		}
+	}
+	if d := detailOf(v, &vaultops.IdentityView{Fingerprint: "SHA256:y", PublicKey: k.Blob}); d.FromReveal != "" {
+		t.Errorf("no recorded path should have nothing to show: got %+v", d)
+	}
+
 	if d := detailOf(v, nil); !d.Empty || d.Sub == "" {
 		t.Errorf("nothing selected among keys: got %+v", d)
 	}
@@ -319,5 +345,35 @@ func TestHeaderOf(t *testing.T) {
 		if tone, icon := headerOf(tc.state); tone != tc.tone || icon != tc.icon {
 			t.Errorf("%s: got tone %d icon %d, want %d %d", tc.name, tone, icon, tc.tone, tc.icon)
 		}
+	}
+}
+
+func TestRestartReason(t *testing.T) {
+	keys := MainState{Managed: true, Reachable: true, Backend: agent.Backend{Mode: "keys"}}
+	if r := restartReason(keys, false); r != "" {
+		t.Errorf("nothing changed: %q", r)
+	}
+	if r := restartReason(keys, true); !strings.Contains(r, "Restart") {
+		t.Errorf("settings saved: %q", r)
+	}
+	toVault := keys
+	toVault.ConfigIsVault = true
+	if r := restartReason(toVault, false); !strings.Contains(r, "vault") {
+		t.Errorf("config now serves the vault: %q", r)
+	}
+	toKeys := vaultUp()
+	toKeys.ConfigIsVault = false
+	if r := restartReason(toKeys, false); !strings.Contains(r, "key files") {
+		t.Errorf("config now serves key files: %q", r)
+	}
+	stopped := keys
+	stopped.Reachable = false
+	if r := restartReason(stopped, true); r != "" || canRestart(stopped) {
+		t.Errorf("a stopped agent starts with the settings as they are: %q", r)
+	}
+	unmanaged := keys
+	unmanaged.Managed = false
+	if canRestart(unmanaged) || restartReason(unmanaged, true) != "" {
+		t.Error("an agent sshush does not run is not restarted from here")
 	}
 }

@@ -27,16 +27,20 @@ var defaultConfigTemplate = template.Must(
 
 // defaultConfigTemplateData is input for default_config.toml.tmpl.
 type defaultConfigTemplateData struct {
-	SocketPath    string
-	KeyPathsTOML  string
-	Shell         string
-	ServerHostKey string // where the server keeps its host key when [server].host_key is unset
-	ServerLogFile string // where the server logs when [server].log_file is unset
-	ThemeText     string
-	ThemeFocus    string
-	ThemeAccent   string
-	ThemeError    string
-	ThemeWarning  string
+	SocketPath string
+	// WindowsAgentPipe is set when SocketPath is Windows' own agent's pipe: the
+	// config then says so, and offers AltSocketPath, sshush's own pipe, instead.
+	WindowsAgentPipe bool
+	AltSocketPath    string
+	KeyPathsTOML     string
+	Shell            string
+	ServerHostKey    string // where the server keeps its host key when [server].host_key is unset
+	ServerLogFile    string // where the server logs when [server].log_file is unset
+	ThemeText        string
+	ThemeFocus       string
+	ThemeAccent      string
+	ThemeError       string
+	ThemeWarning     string
 }
 
 func findDefaultKeys() []string {
@@ -106,16 +110,18 @@ func keyPathsToTOMLArray(keyPaths []string) string {
 // renderDefaultConfigBytes renders the embedded default config template. Exposed for tests.
 func renderDefaultConfigBytes(socketPath string, keyPaths []string, shell string, def theme.Theme) ([]byte, error) {
 	data := defaultConfigTemplateData{
-		SocketPath:    socketPath,
-		KeyPathsTOML:  keyPathsToTOMLArray(keyPaths),
-		Shell:         shell,
-		ServerHostKey: utils.ContractHomeDirectory(platform.ServerHostKeyPath("")),
-		ServerLogFile: utils.ContractHomeDirectory(platform.ServerLogPath("")),
-		ThemeText:     def.Text,
-		ThemeFocus:    def.Focus,
-		ThemeAccent:   def.Accent,
-		ThemeError:    def.Error,
-		ThemeWarning:  def.Warning,
+		SocketPath:       socketPath,
+		WindowsAgentPipe: platform.IsOpenSSHAgentPipe(socketPath),
+		AltSocketPath:    platform.SSHushPipeName,
+		KeyPathsTOML:     keyPathsToTOMLArray(keyPaths),
+		Shell:            shell,
+		ServerHostKey:    utils.ContractHomeDirectory(platform.ServerHostKeyPath("")),
+		ServerLogFile:    utils.ContractHomeDirectory(platform.ServerLogPath("")),
+		ThemeText:        def.Text,
+		ThemeFocus:       def.Focus,
+		ThemeAccent:      def.Accent,
+		ThemeError:       def.Error,
+		ThemeWarning:     def.Warning,
 	}
 	var buf bytes.Buffer
 	if err := defaultConfigTemplate.Execute(&buf, data); err != nil {
@@ -296,10 +302,6 @@ func setupPowerShellProfile(setup platform.ShellSetup, firstRun bool, hint io.Wr
 	_, _ = f.Write(encodeText(addition, enc))
 }
 
-// opensshAgentService is the service name of Windows' own agent, shown in the
-// Services list as "OpenSSH Authentication Agent".
-const opensshAgentService = "ssh-agent"
-
 // otherSSHAgent is what was seen on this machine that suggests ssh already
 // talks to an agent other than sshush. It is gathered by the caller and passed
 // to setupSSHIdentityAgent, which keeps that function free of Windows calls.
@@ -319,7 +321,7 @@ type otherSSHAgent struct {
 var detectOtherSSHAgent = func() otherSSHAgent {
 	persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
 	return otherSSHAgent{
-		ServiceRunning:    platform.WindowsServiceRunning(opensshAgentService),
+		ServiceRunning:    platform.WindowsServiceRunning(platform.OpenSSHAgentService),
 		EnvAuthSock:       os.Getenv("SSH_AUTH_SOCK"),
 		PersistedAuthSock: persisted,
 	}
@@ -363,7 +365,21 @@ func samePipe(a, b string) bool {
 // would quietly take ssh away from an agent that is working. When other shows
 // either sign, the config is left alone and the block is printed for the user
 // to add if sshush is the agent they want.
+//
+// Windows' own agent's pipe, sshush's default there, needs no IdentityAgent:
+// ssh.exe already uses it. The config is left alone, and if Windows' agent
+// service is running, which holds that pipe, the note says how to free it.
 func setupSSHIdentityAgent(sshDir, pipe string, other otherSSHAgent, note io.Writer) {
+	if platform.IsOpenSSHAgentPipe(pipe) {
+		if other.ServiceRunning {
+			fmt.Fprintln(note, `The Windows "OpenSSH Authentication Agent" service is running and holds `+platform.OpenSSHAgentPipeName+", the pipe sshush uses by default.")
+			fmt.Fprintln(note, "Stop and disable it from an administrator PowerShell before starting sshush:")
+			fmt.Fprintln(note, "  Stop-Service ssh-agent; Set-Service ssh-agent -StartupType Disabled")
+			fmt.Fprintln(note, "Or keep it, and give sshush a pipe of its own in "+utils.DisplayPath(platform.DefaultConfigPath())+":")
+			fmt.Fprintln(note, "  socket_path = '"+platform.SSHushPipeName+"'")
+		}
+		return
+	}
 	if st, err := os.Stat(sshDir); err != nil || !st.IsDir() {
 		return
 	}

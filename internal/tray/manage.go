@@ -4,11 +4,14 @@ import (
 	"cmp"
 	"crypto/rsa"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ollykeran/sshush/internal/agent"
 	"github.com/ollykeran/sshush/internal/utils"
+	"github.com/ollykeran/sshush/internal/vault"
 	"github.com/ollykeran/sshush/internal/vaultops"
 	ssh "golang.org/x/crypto/ssh"
 	sshagent "golang.org/x/crypto/ssh/agent"
@@ -39,7 +42,6 @@ const (
 	idMainTheme
 	idMainRefresh
 	idMainStateIcon
-	idMainCreateVault
 	idMainDetailTitle
 	idMainDetailSub
 	idMainFpLabel
@@ -54,7 +56,48 @@ const (
 	idMainStartup
 	idMainVersion
 	idMainCreateKey
+	idMainTabKeys
+	idMainTabVault
+	idMainTabSettings
+	idMainTabLine
+	idMainCreateVault
+	idVaultTitle
+	idVaultSub
+	idVaultOpenFolder
+	idVaultCopyPath
+	idVaultBackup
+	idVaultImport
+	idVaultPasswd
+	idVaultRecovery
+	idMainRestart
+	idAutoLockTitle
+	idAutoLockSession
+	idAutoLockSleep
+	idAutoLockIdleLabel
+	idAutoLockIdle
+	idAutoLockCaption
+	// The Vault page's cards: a section header, then each card's title and
+	// secondary line; the cards' buttons are above.
+	idVaultSecHeader
+	idVaultPasswdTitle
+	idVaultPasswdCaption
+	idVaultRecoveryTitle
+	idVaultRecoveryCaption
+	idVaultFileHeader
+	idVaultFileTitle
+	idVaultFileCaption
+	idMainOpenFrom
+	// The Vault page's facts take two IDs each, from here on; see
+	// vaultRowLabel. Nothing may follow this in the list.
+	idVaultRows
 )
+
+// vaultRowCount is how many facts the Vault page has room for.
+const vaultRowCount = 8
+
+// vaultRowLabel and vaultRowValue are the IDs of the Vault page's i-th fact.
+func vaultRowLabel(i int) uint16 { return idVaultRows + uint16(2*i) }
+func vaultRowValue(i int) uint16 { return idVaultRows + uint16(2*i+1) }
 
 // Styles the main window adds to those in dialog_template.go.
 const (
@@ -79,7 +122,12 @@ const (
 	esReadOnly      = 0x0800
 	bsAutoCheckbox  = 0x0003
 	classListView   = "SysListView32"
+	wsGroup         = 0x00020000
+	bsOwnerDraw     = 0x000B
 	classComboBox   = 0x85
+	classListBox    = 0x83
+	lbsNotify       = 0x0001
+	lbsNoIntegral   = 0x0100
 )
 
 // mainColumns heads the key list; keyRow fills it in this order. The
@@ -89,10 +137,9 @@ var mainColumns = []string{"Name", "Type", "Status"}
 // buttonGlyphs gives each button its icon: a code point in Windows' icon font,
 // Segoe Fluent Icons or, before Windows 11, Segoe MDL2 Assets, which share
 // these. The lock, agent and load buttons change icon with what they do; see
-// lockGlyph, agentGlyph and loadGlyph.
+// HeaderLock.glyph, agentGlyph and loadGlyph.
 var buttonGlyphs = map[uint16]rune{
 	idMainAdd:         0xE710, // Add
-	idMainCreateVault: 0xE8F4, // NewFolder
 	idMainCreateKey:   0xE8D7, // Permissions: a key
 	idMainRemove:      0xE74D, // Delete
 	idMainAutoload:    0xE945, // LightningBolt
@@ -101,20 +148,21 @@ var buttonGlyphs = map[uint16]rune{
 	idMainCopyPub:     0xE8C8, // Copy
 	idMainSelftest:    0xE9D9, // Diagnostic
 	idMainRefresh:     0xE72C, // Refresh
+	idVaultOpenFolder: 0xE838, // FolderOpen
+	idMainOpenFrom:    0xE838, // FolderOpen
+	idVaultCopyPath:   0xE8C8, // Copy
+	idVaultBackup:     0xE74E, // Save
+	idVaultImport:     0xE8B5, // Import
+	idMainRestart:     0xE777, // UpdateRestore
+	idMainCreateVault: 0xE8F4, // NewFolder
+	idVaultPasswd:     0xE8D7, // Permissions: a key
+	idVaultRecovery:   0xE895, // Sync
 }
 
 // hasGlyph reports whether the button id shows an icon.
 func hasGlyph(id uint16) bool {
 	_, ok := buttonGlyphs[id]
 	return ok || id == idMainLock || id == idMainAgentToggle || id == idMainLoad
-}
-
-// lockGlyph is the lock button's icon: what pressing it does.
-func lockGlyph(a MainActions) rune {
-	if a.Unlock {
-		return 0xE785 // Unlock
-	}
-	return 0xE72E // Lock
 }
 
 // agentGlyph is the start/stop button's icon.
@@ -135,8 +183,9 @@ func loadGlyph(a MainActions) rune {
 
 // mainTemplate creates the main window's controls. Where they go is
 // mainLayout's business, so every item is placed at the origin; the order
-// is the tab order, which follows the reading order: header, command bar,
-// list, details, footer.
+// is the tab order, which follows the reading order: header,
+// tabs, the Keys page's command bar, list and details, the Vault page,
+// footer.
 func mainTemplate() []uint16 {
 	const stop = wsChild | wsVisible | wsTabStop
 	btn := func(id uint16, text string) dlgItem {
@@ -153,12 +202,19 @@ func mainTemplate() []uint16 {
 		label(idMainStateIcon, ssIcon|ssCenterImage, ""),
 		label(idMainAgent, ssEndEllipsis, ""),
 		label(idMainSource, ssPathEllipsis, ""),
-		btn(idMainLock, "&Lock"),
+		btn(idMainLock, "&Lock vault"),
+		btn(idMainRestart, "Restart agent"),
 		btn(idMainAgentToggle, "S&top agent"),
-		// Command bar.
-		btn(idMainAdd, "&Add keys…"),
-		btn(idMainCreateVault, "Create &vault…"),
-		btn(idMainCreateKey, "Create &key…"),
+		// The page tabs: owner-drawn buttons, drawn as Windows 11's top
+		// navigation is, which take the window's theme, dark included, as a
+		// tab control does not. A line runs under them.
+		{style: stop | wsGroup | bsOwnerDraw, id: idMainTabKeys, class: classButton, text: "&Keys"},
+		{style: stop | bsOwnerDraw, id: idMainTabVault, class: classButton, text: "&Vault"},
+		{style: stop | bsOwnerDraw, id: idMainTabSettings, class: classButton, text: "Settin&gs"},
+		label(idMainTabLine, 0, ""),
+		// The Keys page's command bar. Add ends the tabs' group.
+		{style: stop | wsGroup, id: idMainAdd, class: classButton, text: "&Add keys…"},
+		btn(idMainCreateKey, "Create ke&y…"),
 		btn(idMainRefresh, "Refresh"),
 		// The list.
 		{style: stop | wsBorder | lvsReport | lvsSingleSel | lvsShowSelAlway | lvsNoSortHeader, id: idMainList, className: classListView},
@@ -173,22 +229,106 @@ func mainTemplate() []uint16 {
 		btn(idMainCopyPub, "Co&py"),
 		label(idMainFromLabel, 0, "Added from"),
 		label(idMainFrom, ssPathEllipsis, ""),
+		btn(idMainOpenFrom, "Show in E&xplorer"),
 		btn(idMainLoad, "L&oad"),
 		btn(idMainAutoload, autoloadLabel(false)),
 		btn(idMainRename, "Rena&me…"),
 		btn(idMainRemove, "&Remove…"),
+	}
+	// The Vault page, hidden until its tab is chosen.
+	hiddenBtn := func(id uint16, text string) dlgItem {
+		return dlgItem{style: wsChild | wsTabStop, id: id, class: classButton, text: text}
+	}
+	hiddenLabel := func(id uint16, style uint32, text string) dlgItem {
+		return dlgItem{style: wsChild | ssNoPrefix | style, id: id, class: classStatic, text: text}
+	}
+	items = append(items, hiddenLabel(idVaultTitle, ssEndEllipsis, ""), hiddenLabel(idVaultSub, 0, ""))
+	for i := range vaultRowCount {
+		items = append(items, hiddenLabel(vaultRowLabel(i), ssEndEllipsis, ""), hiddenLabel(vaultRowValue(i), ssPathEllipsis, ""))
+	}
+	// The Vault page's primary button, then its facts' buttons, then its
+	// cards, in reading order.
+	items = append(items,
+		hiddenBtn(idMainCreateVault, "Create vault…"),
+		hiddenBtn(idVaultOpenFolder, "Show in E&xplorer"),
+		hiddenBtn(idVaultCopyPath, "Copy path"),
+		hiddenLabel(idVaultSecHeader, ssEndEllipsis, "Security"),
+		hiddenLabel(idVaultPasswdTitle, ssEndEllipsis, "Passphrase"),
+		hiddenLabel(idVaultPasswdCaption, ssEndEllipsis, ""),
+		hiddenBtn(idVaultPasswd, "Change…"),
+		hiddenLabel(idVaultRecoveryTitle, ssEndEllipsis, "Recovery phrase"),
+		hiddenLabel(idVaultRecoveryCaption, ssEndEllipsis, ""),
+		hiddenBtn(idVaultRecovery, "Ne&w phrase…"),
+		// Auto-lock.
+		hiddenLabel(idAutoLockTitle, ssEndEllipsis, "Auto-lock"),
+		hiddenLabel(idAutoLockCaption, ssEndEllipsis, ""),
+		dlgItem{style: wsChild | wsTabStop | bsAutoCheckbox, id: idAutoLockSession, class: classButton, text: "Lock when Windows locks"},
+		dlgItem{style: wsChild | wsTabStop | bsAutoCheckbox, id: idAutoLockSleep, class: classButton, text: "Lock when the PC sleeps"},
+		hiddenLabel(idAutoLockIdleLabel, ssEndEllipsis, "Lock after no input"),
+		dlgItem{style: wsChild | wsTabStop | wsVScroll | cbsDropDownList, id: idAutoLockIdle, class: classComboBox},
+		hiddenLabel(idVaultFileHeader, ssEndEllipsis, "Backup"),
+		hiddenLabel(idVaultFileTitle, ssEndEllipsis, "Vault file"),
+		hiddenLabel(idVaultFileCaption, ssEndEllipsis, ""),
+		hiddenBtn(idVaultBackup, "&Back up…"),
+		hiddenBtn(idVaultImport, "Import…"),
+	)
+	items = append(items, settingsTemplate(hiddenBtn, hiddenLabel)...)
+	items = append(items, []dlgItem{
 		// Status and footer.
 		label(idMainStatus, ssEndEllipsis, ""),
 		btn(idMainSelftest, "Run s&elftest"),
-		// The label's mnemonic moves the focus to the drop-down after it.
-		{style: wsChild | wsVisible, id: idMainThemeLabel, class: classStatic, text: "T&heme:"},
-		{style: stop | wsVScroll | cbsDropDownList, id: idMainTheme, class: classComboBox},
-		{style: stop | bsAutoCheckbox, id: idMainStartup, class: classButton, text: "Start at sign-&in"},
 		label(idMainVersion, ssEndEllipsis, ""),
-	}
+	}...)
 	style := uint32(wsPopup | wsCaption | wsSysMenu | wsMinimizeBox | wsMaximizeBox | wsThickFrame | wsClipChildren |
 		dsSetFont | dsSetForeground | dsCenter)
 	return buildTemplate(style, 520, 320, "sshush", "Segoe UI", 9, items)
+}
+
+// settingsTemplate is the Settings page's controls, hidden until its tab is
+// chosen, in reading order: the left column, then the right.
+func settingsTemplate(btn func(uint16, string) dlgItem, label func(uint16, uint32, string) dlgItem) []dlgItem {
+	edit := func(id uint16) dlgItem {
+		return dlgItem{style: wsChild | wsTabStop | esAutoHScroll, exStyle: wsExClientEdge, id: id, class: classEdit}
+	}
+	list := func(id uint16) dlgItem {
+		return dlgItem{style: wsChild | wsTabStop | wsVScroll | wsBorder | lbsNotify | lbsNoIntegral, id: id, class: classListBox}
+	}
+	return []dlgItem{
+		label(idSetAgentHeader, ssEndEllipsis, "Agent"),
+		label(idSetTypeTitle, ssEndEllipsis, "The agent serves"),
+		label(idSetTypeCaption, ssEndEllipsis, ""),
+		{style: wsChild | wsTabStop | wsVScroll | cbsDropDownList, id: idSetType, class: classComboBox},
+		label(idSetSocketTitle, ssEndEllipsis, "Agent pipe"),
+		edit(idSetSocket),
+		btn(idSetSocketDefault, "Use default"),
+		label(idSetSocketCaption, ssEndEllipsis, ""),
+		{style: wsChild | wsTabStop | bsAutoCheckbox, id: idSetPageant, class: classButton, text: "Also answer as Pageant"},
+		label(idSetPageantCaption, ssEndEllipsis, ""),
+		{style: wsChild | wsTabStop | bsAutoCheckbox, id: idSetCygwin, class: classButton, text: "Also answer Git Bash (Cygwin socket)"},
+		label(idSetCygwinCaption, ssEndEllipsis, ""),
+		label(idSetVaultHeader, ssEndEllipsis, "Vault"),
+		label(idSetVaultTitle, ssEndEllipsis, "Vault file"),
+		edit(idSetVaultPath),
+		btn(idSetVaultBrowse, "Browse…"),
+		label(idSetVaultCaption, ssEndEllipsis, ""),
+		label(idSetTrayHeader, ssEndEllipsis, "This app"),
+		// The label's mnemonic moves the focus to the drop-down after it.
+		{style: wsChild, id: idMainThemeLabel, class: classStatic, text: "T&heme"},
+		{style: wsChild | wsTabStop | wsVScroll | cbsDropDownList, id: idMainTheme, class: classComboBox},
+		{style: wsChild | wsTabStop | bsAutoCheckbox, id: idMainStartup, class: classButton, text: "Start at sign-&in"},
+		label(idSetKeysHeader, ssEndEllipsis, "Key files"),
+		label(idSetKeysCaption, ssEndEllipsis, ""),
+		list(idSetKeysList),
+		btn(idSetKeysAdd, "Add files…"),
+		btn(idSetKeysRemove, "Remove"),
+		label(idSetDirsHeader, ssEndEllipsis, "Search folders"),
+		label(idSetDirsCaption, ssEndEllipsis, ""),
+		list(idSetDirsList),
+		btn(idSetDirsAdd, "Add folder…"),
+		btn(idSetDirsRemove, "Remove"),
+		btn(idSetDiscard, "Discard changes"),
+		btn(idSetSave, "Save"),
+	}
 }
 
 // Tone colours the agent's state in the header.
@@ -234,6 +374,24 @@ type MainState struct {
 	Listing bool
 	Listed  vaultops.ListResult
 	ListErr error
+	// ConfiguredVault is the vault file config names, resolved; "" for none.
+	ConfiguredVault string
+	// VaultFile is the vault file listed when the agent does not serve it:
+	// ConfiguredVault, or with none where the tray would create one.
+	VaultFile string
+	// ConfigIsVault reports that config has the agent serve a vault, which
+	// is what it does once restarted, whatever the running one does now.
+	ConfigIsVault bool
+	// VaultAside reports that Listed is a vault the agent does not serve:
+	// one read from its file while the agent serves key files, so it can be
+	// created and looked after before the agent is switched to it. The
+	// Keys page then shows the agent's keys, and only the Vault page the vault.
+	VaultAside bool
+	// FileFound reports that the listed vault's file is on this PC, and
+	// FileSize and FileModTime are what it says about itself.
+	FileFound   bool
+	FileSize    int64
+	FileModTime time.Time
 }
 
 // ProbeMain asks the agent what it is and what it holds, and lists the vault
@@ -244,9 +402,28 @@ func ProbeMain(env vaultops.Env) MainState {
 	if snap := Probe(env.SocketPath); snap.Err == nil {
 		s.Reachable, s.Backend, s.Keys = true, snap.Backend, snap.Keys
 	}
-	if s.isVault() || (!s.Reachable && env.VaultPath != "") {
+	if env.VaultPath != "" {
+		s.ConfiguredVault = vault.ResolveToFile(utils.ExpandHomeDirectory(env.VaultPath))
+	}
+	s.ConfigIsVault = env.AgentVaultPath != ""
+	switch {
+	case s.isVault() || (!s.Reachable && s.ConfigIsVault):
 		s.Listing = true
 		s.Listed, s.ListErr = vaultops.List(env)
+	case env.AgentUnmanaged && env.VaultPath == "":
+		// An agent sshush does not run, and no vault to look after.
+	default:
+		// The agent serves key files, or would: the vault is read from
+		// its file, where it is or would be created.
+		s.Listing, s.VaultAside = true, true
+		venv := vaultEnv(env)
+		s.VaultFile = vault.ResolveToFile(utils.ExpandHomeDirectory(venv.VaultPath))
+		s.Listed, s.ListErr = vaultops.List(venv)
+	}
+	if s.hasVault() {
+		if fi, err := os.Stat(s.Listed.VaultPath); err == nil && fi.Mode().IsRegular() {
+			s.FileFound, s.FileSize, s.FileModTime = true, fi.Size(), fi.ModTime()
+		}
 	}
 	return s
 }
@@ -256,7 +433,19 @@ func (s MainState) isVault() bool { return s.Reachable && s.Backend.Mode == "vau
 // needsVault reports that the vault this agent serves, or would, has not
 // been created yet.
 func (s MainState) needsVault() bool {
+	return s.noVaultYet() && !s.VaultAside
+}
+
+// noVaultYet reports that there is no vault at the vault path yet, whether
+// or not the agent serves it.
+func (s MainState) noVaultYet() bool {
 	return s.Listing && s.ListErr == nil && !s.Listed.Initialized
+}
+
+// hasVault reports that there is a vault to show on the Vault page, whether
+// or not the agent serves it.
+func (s MainState) hasVault() bool {
+	return s.Listing && s.ListErr == nil && s.Listed.Initialized
 }
 
 // open reports whether the agent can be asked to change its keys now.
@@ -265,7 +454,16 @@ func (s MainState) open() bool { return s.Reachable && !(s.isVault() && s.Backen
 // showsVault reports whether the list shows a vault's identities, rather
 // than the keys of an agent that is not a vault.
 func (s MainState) showsVault() bool {
-	return s.Listing && s.ListErr == nil && s.Listed.Initialized
+	return s.hasVault() && !s.VaultAside
+}
+
+// agentView is s as the Keys page sees it: without a vault the agent does
+// not serve, whose state is the Vault page's business.
+func (s MainState) agentView() MainState {
+	if s.VaultAside {
+		s.Listing, s.VaultAside, s.Listed, s.ListErr = false, false, vaultops.ListResult{}, nil
+	}
+	return s
 }
 
 // Rows is what the list shows: a vault's identities, or the keys an agent
@@ -324,11 +522,11 @@ type MainActions struct {
 // Remove, Load and Autoload are vault operations; an agent that is not a
 // vault can only take a key out of memory.
 func mainActions(s MainState, sel *vaultops.IdentityView) MainActions {
-	vault := s.isVault()
+	inVault := s.isVault()
 	a := MainActions{
 		Add:         s.open() && !s.needsVault(),
-		Lock:        vault && !s.Backend.VaultLocked && !s.needsVault(),
-		Unlock:      vault && s.Backend.VaultLocked,
+		Lock:        inVault && !s.Backend.VaultLocked && !s.needsVault(),
+		Unlock:      inVault && s.Backend.VaultLocked,
 		CreateVault: s.needsVault(),
 		Start:       s.Managed && !s.Reachable && !s.needsVault(), // a vault agent needs its vault
 		Stop:        s.Managed && s.Reachable,
@@ -339,7 +537,7 @@ func mainActions(s MainState, sel *vaultops.IdentityView) MainActions {
 		return a
 	}
 	a.Unload = sel.Loaded == vaultops.LoadYes
-	if vault {
+	if inVault {
 		a.Remove = true
 		a.Load = sel.Loaded == vaultops.LoadNo
 		a.Autoload = true
@@ -360,6 +558,27 @@ func autoloadLabel(on bool) string {
 	}
 	return "Turn autoload o&ff"
 }
+
+// restartReason says why the agent should restart to do what config says
+// now, or "" when it need not. pending reports that settings were saved
+// since the agent started, which only the window knows; a change of what the
+// agent serves shows in the state itself.
+func restartReason(s MainState, pending bool) string {
+	switch {
+	case !s.Managed || !s.Reachable:
+		return ""
+	case s.ConfigIsVault && !s.isVault():
+		return "The settings now have the agent serve the vault. Restart the agent to switch to it."
+	case !s.ConfigIsVault && s.isVault():
+		return "The settings now have the agent serve key files. Restart the agent to switch to them."
+	case pending:
+		return "The settings changed since the agent started. Restart the agent to apply them."
+	}
+	return ""
+}
+
+// canRestart reports whether the agent can be restarted from here.
+func canRestart(s MainState) bool { return s.Managed && s.Reachable }
 
 // agentToggleLabel names the start/stop button by what pressing it does.
 func agentToggleLabel(a MainActions) string {
@@ -443,9 +662,33 @@ type DetailView struct {
 	// PublicKey is the key as a line of authorized_keys, comment included:
 	// what a server or a forge wants pasted.
 	PublicKey string
-	From      string
+	// From is where the key was added from: its environment, Windows or
+	// which WSL distro, and its path there.
+	From string
+	// FromReveal is a Windows path to that file for Explorer to show, or
+	// empty when there is none.
+	FromReveal string
+	// FromLinux is the Linux path of a key added from WSL by a client too
+	// old to record the distro, which the window looks for in each distro.
+	FromLinux string
 	// Empty reports that nothing is selected, and the fields are hidden.
 	Empty bool
+}
+
+// setSource fills the From fields from src.
+func (d *DetailView) setSource(src utils.Source) {
+	d.From = src.Display
+	if src.Env != "" {
+		d.From = src.Env + " · " + src.Display
+	}
+	d.FromReveal, d.FromLinux = src.Reveal, src.Linux
+}
+
+// withDistro is d for a key FromLinux names, found in WSL distro distro.
+func (d DetailView) withDistro(distro string) DetailView {
+	unc := `\\wsl.localhost\` + distro + strings.ReplaceAll(d.FromLinux, "/", `\`)
+	d.setSource(utils.KeySource(unc))
+	return d
 }
 
 // detailOf describes sel, or with nil the pane's empty state for s.
@@ -476,7 +719,7 @@ func detailOf(s MainState, sel *vaultops.IdentityView) DetailView {
 	d.Sub = strings.Join(parts, " · ")
 	switch {
 	case sel.Filepath != "":
-		d.From = utils.DisplayPath(sel.Filepath)
+		d.setSource(utils.KeySource(sel.Filepath))
 	case inVault:
 		d.From = "Not recorded"
 	default:
@@ -515,12 +758,13 @@ func sourceLine(s MainState) string {
 // mainStatus says what the window shows, or why it shows nothing, and
 // whether that is a problem.
 func mainStatus(s MainState) (text string, isErr bool) {
+	s = s.agentView()
 	locked := s.isVault() && s.Backend.VaultLocked
 	switch {
 	case s.needsVault():
-		return "There is no vault yet. Create one to keep your keys encrypted in a single file.", false
+		return "There is no vault yet. Create one on the Vault tab to keep your keys encrypted in a single file.", false
 	case locked && vaultops.CodeOf(s.ListErr) == vaultops.CodeVaultLocked:
-		return "The vault is locked. Unlock it to see what it holds.", false
+		return "The vault is locked. Unlock it on the Vault tab to see what it holds.", false
 	case s.ListErr != nil:
 		return describeLine(s.ListErr), true
 	case s.Reachable && !s.isVault():
@@ -531,7 +775,7 @@ func mainStatus(s MainState) (text string, isErr bool) {
 		}
 		return "The agent is not reachable. It is not one sshush starts; check the program that provides it.", true
 	case !s.Listed.Initialized:
-		return "There is no vault yet. Create one to keep your keys encrypted in a single file.", false
+		return "There is no vault yet. Create one on the Vault tab to keep your keys encrypted in a single file.", false
 	}
 	n := len(s.Listed.Identities)
 	if n == 1 {
@@ -543,7 +787,7 @@ func mainStatus(s MainState) (text string, isErr bool) {
 	case !s.Reachable:
 		return text + ". Start the agent to use or change them.", false
 	case locked:
-		return text + ". The vault is locked: unlock it to use or change them.", false
+		return text + ". The vault is locked: unlock it on the Vault tab to use or change them.", false
 	}
 	return text + ".", false
 }

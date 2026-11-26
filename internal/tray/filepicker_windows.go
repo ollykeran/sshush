@@ -118,6 +118,29 @@ const saveFlags = 0x00080000 | // OFN_EXPLORER
 // owned by owner and starting at suggested, and returns the chosen path. It
 // returns errCancelled when the user closes the dialog.
 func pickSavePath(owner uintptr, suggested string) (string, error) {
+	return pickSaveFile(owner, suggested, "Save the new key as", "All files (*.*)\x00*.*\x00\x00", "")
+}
+
+// vaultFilter is the Open and Save dialogs' filter for vault files.
+const vaultFilter = "sshush vaults (*.json)\x00*.json\x00All files (*.*)\x00*.*\x00\x00"
+
+// pickVaultBackup shows the Save dialog for a copy of the vault, starting at
+// suggested.
+func pickVaultBackup(owner uintptr, suggested string) (string, error) {
+	return pickSaveFile(owner, suggested, "Back up the vault to", vaultFilter, "json")
+}
+
+// pickSaveFile shows Explorer's Save dialog, owned by owner, with title and
+// filter (pairs of NUL-terminated strings, ended by another NUL), starting at
+// suggested, and returns the chosen path. defExt, without its dot, is added to
+// a name typed without one. It returns errCancelled when the user closes the
+// dialog.
+func pickSaveFile(owner uintptr, suggested, title, filter, defExt string) (string, error) {
+	return pickSaveFileFlags(owner, suggested, title, filter, defExt, saveFlags)
+}
+
+// pickSaveFileFlags is pickSaveFile with the dialog's flags.
+func pickSaveFileFlags(owner uintptr, suggested, title, filter, defExt string, flags uint32) (string, error) {
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
 	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
@@ -125,16 +148,19 @@ func pickSavePath(owner uintptr, suggested string) (string, error) {
 	}
 	buf := make([]uint16, windows.MAX_LONG_PATH)
 	copy(buf, utf16.Encode([]rune(filepath.Base(suggested))))
-	filter := utf16.Encode([]rune("All files (*.*)\x00*.*\x00\x00"))
-	title, _ := windows.UTF16PtrFromString("Save the new key as")
+	filterW := utf16.Encode([]rune(filter))
+	titleW, _ := windows.UTF16PtrFromString(title)
 	ofn := openFileName{
 		owner:       windows.HWND(owner),
-		filter:      &filter[0],
+		filter:      &filterW[0],
 		filterIndex: 1,
 		file:        &buf[0],
 		maxFile:     uint32(len(buf)),
-		title:       title,
-		flags:       saveFlags,
+		title:       titleW,
+		flags:       flags,
+	}
+	if defExt != "" {
+		ofn.defExt, _ = windows.UTF16PtrFromString(defExt)
 	}
 	ofn.structSize = uint32(unsafe.Sizeof(ofn))
 	if dir := filepath.Dir(suggested); isDir(dir) {
@@ -145,6 +171,93 @@ func pickSavePath(owner uintptr, suggested string) (string, error) {
 			return "", fmt.Errorf("tray: file dialog failed (code %#x)", code)
 		}
 		return "", errCancelled
+	}
+	return windows.UTF16ToString(buf), nil
+}
+
+// pickVaultFile shows Explorer's Open dialog for one vault file, owned by
+// owner, and returns its path. It returns errCancelled when the user closes
+// the dialog.
+func pickVaultFile(owner uintptr) (string, error) {
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
+		defer windows.CoUninitialize()
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	filter := utf16.Encode([]rune(vaultFilter))
+	title, _ := windows.UTF16PtrFromString("Import a vault")
+	ofn := openFileName{
+		owner:       windows.HWND(owner),
+		filter:      &filter[0],
+		filterIndex: 1,
+		file:        &buf[0],
+		maxFile:     uint32(len(buf)),
+		title:       title,
+		flags:       ofnFlags &^ 0x00000200, // one file: not OFN_ALLOWMULTISELECT
+	}
+	ofn.structSize = uint32(unsafe.Sizeof(ofn))
+	r, _, _ := procGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
+	if r == 0 {
+		if code, _, _ := procCommDlgExtendedError.Call(); code != 0 {
+			return "", fmt.Errorf("tray: file dialog failed (code %#x)", code)
+		}
+		return "", errCancelled
+	}
+	return windows.UTF16ToString(buf), nil
+}
+
+// pickVaultLocation shows the Save dialog for where the vault file is, or is
+// to be, starting at suggested. Choosing a file that is there is the point,
+// so it does not ask whether to replace it.
+func pickVaultLocation(owner uintptr, suggested string) (string, error) {
+	return pickSaveFileFlags(owner, suggested, "Choose the vault file", vaultFilter, "json", saveFlags&^0x00000002)
+}
+
+var (
+	shell32                  = windows.NewLazySystemDLL("shell32.dll")
+	procSHBrowseForFolderW   = shell32.NewProc("SHBrowseForFolderW")
+	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
+	ole32                    = windows.NewLazySystemDLL("ole32.dll")
+	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
+)
+
+// browseInfo is BROWSEINFOW.
+type browseInfo struct {
+	owner       uintptr
+	root        uintptr
+	displayName *uint16
+	title       *uint16
+	flags       uint32
+	callback    uintptr
+	lParam      uintptr
+	image       int32
+}
+
+// pickFolder shows the shell's folder picker, owned by owner, and returns
+// the folder chosen. It returns errCancelled when the user closes it.
+func pickFolder(owner uintptr, title string) (string, error) {
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err == nil {
+		defer windows.CoUninitialize()
+	}
+	name := make([]uint16, windows.MAX_PATH)
+	titleW, _ := windows.UTF16PtrFromString(title)
+	bi := browseInfo{
+		owner:       owner,
+		displayName: &name[0],
+		title:       titleW,
+		flags:       0x0001 | 0x0040, // BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
+	}
+	pidl, _, _ := procSHBrowseForFolderW.Call(uintptr(unsafe.Pointer(&bi)))
+	if pidl == 0 {
+		return "", errCancelled
+	}
+	defer procCoTaskMemFree.Call(pidl)
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	if r, _, _ := procSHGetPathFromIDListW.Call(pidl, uintptr(unsafe.Pointer(&buf[0]))); r == 0 {
+		return "", fmt.Errorf("tray: that is not a folder on this PC")
 	}
 	return windows.UTF16ToString(buf), nil
 }

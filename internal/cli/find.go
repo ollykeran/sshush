@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,47 +16,62 @@ func newFindCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "find",
 		Short:   "Find Private OpenSSH keys",
-		Long:    "Find Private OpenSSH keys in given paths, including current working directory and ~/.ssh",
+		Long:    "Find Private OpenSSH keys in given paths, including current working directory, ~/.ssh and the config's [agent].search_dirs",
 		Example: "sshush find /some/path",
 		RunE: func(c *cobra.Command, args []string) error {
-			return runFind(noDefaults, recursive, args...)
+			var configDirs []string
+			if cfg := configFrom(c); cfg != nil {
+				configDirs = cfg.SearchDirs
+			}
+			return runFind(noDefaults, recursive, configDirs, args...)
 		},
 	}
-	cmd.Flags().BoolVarP(&noDefaults, "no-defaults", "n", false, "only search given paths (omit cwd and ~/.ssh)")
+	cmd.Flags().BoolVarP(&noDefaults, "no-defaults", "n", false, "only search given paths (omit cwd, ~/.ssh and [agent].search_dirs)")
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "recurse into subdirectories")
 	return cmd
 }
 
-func runFind(noDefaults, recursive bool, findPaths ...string) error {
-	cwd, ssh := true, true
-	if noDefaults {
-		cwd, ssh = false, false
+// findSearchDirs returns the directories 'sshush find' searches besides ~/.ssh
+// and the current directory: the paths given, then (unless noDefaults) the
+// config's [agent].search_dirs.
+func findSearchDirs(noDefaults bool, configDirs, findPaths []string) []string {
+	dirs := append([]string(nil), findPaths...)
+	if !noDefaults {
+		dirs = append(dirs, configDirs...)
 	}
-	paths := utils.DiscoverKeyPaths(findPaths, cwd, ssh, recursive)
+	return dirs
+}
+
+// runFind lists the private keys in findPaths and, unless noDefaults is set,
+// in configDirs ([agent].search_dirs), ~/.ssh and the current directory.
+// Directories that are missing or cannot be read are skipped.
+func runFind(noDefaults, recursive bool, configDirs []string, findPaths ...string) error {
+	cwd, ssh := !noDefaults, !noDefaults
+	searchDirs := findSearchDirs(noDefaults, configDirs, findPaths)
+	paths := utils.DiscoverKeyPaths(searchDirs, cwd, ssh, recursive)
 	out := style.NewOutput()
 
-	if len(paths) == 0 {
-		display := make([]string, len(findPaths))
-		for i, p := range findPaths {
-			display[i] = utils.DisplayPath(p)
-		}
-		out.Error("no keys found in: " + strings.Join(display, ", ")).Print()
-		return nil
-	}
-	out.Success("* Found " + strconv.Itoa(len(paths)) + " keys")
-	searchPathsDisplay := make([]string, 0, len(findPaths)+2)
-	searchPathsDisplay = append(searchPathsDisplay, findPaths...)
+	searchPathsDisplay := append([]string(nil), searchDirs...)
 	if ssh {
-		searchPathsDisplay = append(searchPathsDisplay, "~/.ssh")
+		if home, err := os.UserHomeDir(); err == nil {
+			searchPathsDisplay = append(searchPathsDisplay, filepath.Join(home, ".ssh"))
+		}
 	}
 	if cwd {
-		cwd, _ := os.Getwd()
-		searchPathsDisplay = append(searchPathsDisplay, cwd)
+		if wd, err := os.Getwd(); err == nil {
+			searchPathsDisplay = append(searchPathsDisplay, wd)
+		}
 	}
 	displaySearch := make([]string, len(searchPathsDisplay))
 	for i, p := range searchPathsDisplay {
 		displaySearch[i] = utils.DisplayPath(p)
 	}
+
+	if len(paths) == 0 {
+		out.Error("no keys found in: " + strings.Join(displaySearch, ", ")).Print()
+		return nil
+	}
+	out.Success("* Found " + strconv.Itoa(len(paths)) + " keys")
 	out.Info("search paths: " + strings.Join(displaySearch, " "))
 	out.Spacer()
 	for _, kp := range paths {
