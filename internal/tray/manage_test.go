@@ -57,7 +57,7 @@ func TestMainTemplateLayout(t *testing.T) {
 	}
 	// Each keyboard mnemonic reaches one control.
 	keys := map[rune]string{}
-	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), "Unlo&ck…", "&Start agent", "&Unload") {
+	for _, text := range append(texts, autoloadLabel(true), autoloadLabel(false), HeaderLock{Locked: true}.label(), "&Start agent", "&Unload") {
 		i := strings.IndexRune(text, '&')
 		if i < 0 || i+1 >= len(text) {
 			continue

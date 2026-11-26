@@ -195,8 +195,8 @@ func TestVaultPageInKeysMode(t *testing.T) {
 	if !va.CreateVault || va.ChangePassphrase || va.Backup {
 		t.Errorf("no vault: actions %+v", va)
 	}
-	if p := vaultPrimary(va); p.Kind != PrimaryCreate || !p.Enabled {
-		t.Errorf("no vault: primary %+v", p)
+	if h := headerLock(none); h.Shown {
+		t.Errorf("no vault: the header offers to lock key files: %+v", h)
 	}
 
 	have := keysAside(true)
@@ -208,9 +208,8 @@ func TestVaultPageInKeysMode(t *testing.T) {
 	if va.CreateVault || !va.ChangePassphrase || !va.NewRecovery || !va.Backup || va.Lock || va.Unlock {
 		t.Errorf("vault aside: actions %+v", va)
 	}
-	// Unlocking needs the agent to serve the vault: it shows, greyed.
-	if p := vaultPrimary(va); p.Kind != PrimaryUnlock || p.Enabled {
-		t.Errorf("vault aside: primary %+v", p)
+	if h := headerLock(have); h.Shown || h.Enabled {
+		t.Errorf("vault aside: header lock %+v", h)
 	}
 	if c := v.Captions[idAutoLockCaption]; !strings.Contains(c, "once the agent serves") {
 		t.Errorf("auto-lock caption %q", c)
@@ -236,19 +235,23 @@ func TestKeysPageIgnoresAVaultAside(t *testing.T) {
 	}
 }
 
-func TestVaultPrimary(t *testing.T) {
+func TestHeaderLock(t *testing.T) {
 	locked := vaultUp()
 	locked.Backend.VaultLocked = true
+	stopped := MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true}, ConfigIsVault: true}
 	for name, tc := range map[string]struct {
-		s    MainState
-		want VaultPrimary
+		s     MainState
+		want  HeaderLock
+		label string
 	}{
-		"unlocked": {vaultUp(), VaultPrimary{PrimaryLock, true}},
-		"locked":   {locked, VaultPrimary{PrimaryUnlock, true}},
-		"stopped":  {MainState{Managed: true, Listing: true, Listed: vaultops.ListResult{Initialized: true}, ConfigIsVault: true}, VaultPrimary{PrimaryUnlock, false}},
+		"unlocked": {vaultUp(), HeaderLock{Shown: true, Enabled: true}, "&Lock vault"},
+		"locked":   {locked, HeaderLock{Shown: true, Enabled: true, Locked: true}, "Unlo&ck vault…"},
+		// It starts locked: the button says so, greyed until it runs.
+		"stopped": {stopped, HeaderLock{Shown: true, Locked: true}, "Unlo&ck vault…"},
 	} {
-		if got := vaultPrimary(vaultActions(tc.s)); got != tc.want {
-			t.Errorf("%s: got %+v, want %+v", name, got, tc.want)
+		got := headerLock(tc.s)
+		if got != tc.want || got.label() != tc.label {
+			t.Errorf("%s: got %+v %q, want %+v %q", name, got, got.label(), tc.want, tc.label)
 		}
 	}
 }

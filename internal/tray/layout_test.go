@@ -213,19 +213,35 @@ func TestVaultLayoutClosesUpHiddenRows(t *testing.T) {
 	if few[idVaultOpenFolder].y <= few[vaultRowValue(2)].y {
 		t.Error("the file's buttons are not below the last row shown")
 	}
-	if few[idMainLock] != all[idMainLock] || few[idVaultPasswd] != all[idVaultPasswd] {
-		t.Error("the primary button or the cards moved with the facts")
+	if few[idMainCreateVault] != all[idMainCreateVault] || few[idVaultPasswd] != all[idVaultPasswd] {
+		t.Error("Create vault or the cards moved with the facts")
 	}
 }
 
-func TestVaultPrimaryButtonInTheCorner(t *testing.T) {
+func TestHeaderButtonsRightToLeft(t *testing.T) {
 	boxes := mainLayout(1000, 700, layoutMetrics{dpi: 96})
-	p, title := boxes[idMainLock], boxes[idVaultTitle]
-	if p.y != title.y || p.x <= title.x+title.w-1 {
-		t.Errorf("primary %+v is not at the right of the title %+v", p, title)
+	stop, restart, lock := boxes[idMainAgentToggle], boxes[idMainRestart], boxes[idMainLock]
+	if !(lock.x+lock.w <= restart.x && restart.x+restart.w <= stop.x) || lock.y != stop.y {
+		t.Errorf("want lock, restart, stop from left to right on one row: %+v %+v %+v", lock, restart, stop)
+	}
+	if a := boxes[idMainAgent]; a.x+a.w > lock.x {
+		t.Error("the agent's name runs under the lock button")
+	}
+	// Hidden, it gives its place to the name.
+	hidden := mainLayout(1000, 700, layoutMetrics{dpi: 96, hidden: map[uint16]bool{idMainLock: true}})
+	if hidden[idMainAgent].w <= boxes[idMainAgent].w {
+		t.Error("a hidden lock button keeps its place")
+	}
+}
+
+func TestCreateVaultInTheCorner(t *testing.T) {
+	boxes := mainLayout(1000, 700, layoutMetrics{dpi: 96})
+	p, title := boxes[idMainCreateVault], boxes[idVaultTitle]
+	if p.y != title.y || p.x < title.x+title.w {
+		t.Errorf("create vault %+v is not at the right of the title %+v", p, title)
 	}
 	if p.x+p.w > boxes[idVaultSecHeader].x {
-		t.Error("the primary button runs into the cards")
+		t.Error("create vault runs into the cards")
 	}
 }
 

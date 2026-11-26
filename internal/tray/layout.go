@@ -69,7 +69,7 @@ var autoLockControls = []uint16{idAutoLockTitle, idAutoLockCaption, idAutoLockSe
 
 // vaultPage holds every control on the Vault page.
 var vaultPage = func() map[uint16]bool {
-	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true, idMainLock: true, idVaultOpenFolder: true, idVaultCopyPath: true}
+	m := map[uint16]bool{idVaultTitle: true, idVaultSub: true, idMainCreateVault: true, idVaultOpenFolder: true, idVaultCopyPath: true}
 	for _, id := range autoLockControls {
 		m[id] = true
 	}
@@ -140,7 +140,8 @@ func mainLayout(cw, ch int, m layoutMetrics) map[uint16]box {
 	// at the right the button that starts or stops it.
 	out[idMainStateIcon] = box{margin, margin + s(2), s(lyStateIcon), s(lyStateIcon)}
 	x := right
-	for _, id := range []uint16{idMainAgentToggle, idMainRestart} {
+	// Right to left: what is done to the agent, then to its vault.
+	for _, id := range []uint16{idMainAgentToggle, idMainRestart, idMainLock} {
 		if m.hidden[id] {
 			continue
 		}
@@ -341,8 +342,8 @@ func vaultLayout(out map[uint16]box, body box, m layoutMetrics) {
 	lw := splitWidth(body.w, m.dpi)
 	left := &cardKit{out: out, m: m, x: body.x, w: lw, y: body.y}
 
-	pw := left.widest(idMainLock)
-	out[idMainLock] = box{body.x + lw - pw, body.y, pw, btnH}
+	pw := left.widest(idMainCreateVault)
+	out[idMainCreateVault] = box{body.x + lw - pw, body.y, pw, btnH}
 	out[idVaultTitle] = box{body.x, body.y, max(lw-pw-gap, 0), s(lyDetailH)}
 	// The explanation starts below the button, and may wrap twice.
 	out[idVaultSub] = box{body.x, body.y + btnH + s(4), lw, 3 * s(lyLabelH)}

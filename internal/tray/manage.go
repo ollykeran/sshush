@@ -60,6 +60,7 @@ const (
 	idMainTabVault
 	idMainTabSettings
 	idMainTabLine
+	idMainCreateVault
 	idVaultTitle
 	idVaultSub
 	idVaultOpenFolder
@@ -151,6 +152,7 @@ var buttonGlyphs = map[uint16]rune{
 	idVaultBackup:     0xE74E, // Save
 	idVaultImport:     0xE8B5, // Import
 	idMainRestart:     0xE777, // UpdateRestore
+	idMainCreateVault: 0xE8F4, // NewFolder
 	idVaultPasswd:     0xE8D7, // Permissions: a key
 	idVaultRecovery:   0xE895, // Sync
 }
@@ -206,6 +208,7 @@ func mainTemplate() []uint16 {
 		label(idMainStateIcon, ssIcon|ssCenterImage, ""),
 		label(idMainAgent, ssEndEllipsis, ""),
 		label(idMainSource, ssPathEllipsis, ""),
+		btn(idMainLock, "&Lock vault"),
 		btn(idMainRestart, "Restart agent"),
 		btn(idMainAgentToggle, "S&top agent"),
 		// The page tabs: owner-drawn buttons, drawn as Windows 11's top
@@ -251,7 +254,7 @@ func mainTemplate() []uint16 {
 	// The Vault page's primary button, then its facts' buttons, then its
 	// cards, in reading order.
 	items = append(items,
-		hiddenBtn(idMainLock, "Unlo&ck…"),
+		hiddenBtn(idMainCreateVault, "Create vault…"),
 		hiddenBtn(idVaultOpenFolder, "Show in E&xplorer"),
 		hiddenBtn(idVaultCopyPath, "Copy path"),
 		hiddenLabel(idVaultSecHeader, ssEndEllipsis, "Security"),

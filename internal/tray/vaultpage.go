@@ -148,56 +148,40 @@ func vaultActions(s MainState) VaultActions {
 	}
 }
 
-// PrimaryKind is what the Vault page's primary button does.
-type PrimaryKind int
-
-// The primary button's actions.
-const (
-	PrimaryCreate PrimaryKind = iota
-	PrimaryUnlock
-	PrimaryLock
-)
-
-// VaultPrimary is the Vault page's one primary button: always in the same
-// place, named for what it does now, and greyed when it cannot.
-type VaultPrimary struct {
-	Kind    PrimaryKind
-	Enabled bool
+// HeaderLock is the header's lock button, beside Start and Stop.
+type HeaderLock struct {
+	// Shown while the agent serves a vault, or is set to: locking means
+	// nothing to key files.
+	Shown, Enabled bool
+	// Locked names the button Unlock: the vault is locked, or will be when
+	// the stopped agent starts.
+	Locked bool
 }
 
-// vaultPrimary works out the primary button for a's state.
-func vaultPrimary(a VaultActions) VaultPrimary {
-	switch {
-	case a.CreateVault:
-		return VaultPrimary{PrimaryCreate, true}
-	case a.Lock:
-		return VaultPrimary{PrimaryLock, true}
+// headerLock works out the header's lock button for s.
+func headerLock(s MainState) HeaderLock {
+	a := mainActions(s, nil)
+	return HeaderLock{
+		Shown:   s.isVault() || s.ConfigIsVault,
+		Enabled: a.Lock || a.Unlock,
+		Locked:  !(s.isVault() && !s.Backend.VaultLocked),
 	}
-	// Unlocking needs the agent to serve the vault; until it does, the
-	// button says what it would do, greyed.
-	return VaultPrimary{PrimaryUnlock, a.Unlock}
 }
 
-// label names the primary button.
-func (p VaultPrimary) label() string {
-	switch p.Kind {
-	case PrimaryCreate:
-		return "&Create vault…"
-	case PrimaryLock:
-		return "&Lock"
+// label names the lock button by what pressing it does.
+func (h HeaderLock) label() string {
+	if h.Locked {
+		return "Unlo&ck vault…"
 	}
-	return "Unlo&ck…"
+	return "&Lock vault"
 }
 
-// glyph is the primary button's icon.
-func (p VaultPrimary) glyph() rune {
-	switch p.Kind {
-	case PrimaryCreate:
-		return 0xE8F4 // NewFolder
-	case PrimaryLock:
-		return 0xE72E // Lock
+// glyph is the lock button's icon.
+func (h HeaderLock) glyph() rune {
+	if h.Locked {
+		return 0xE785 // Unlock
 	}
-	return 0xE785 // Unlock
+	return 0xE72E // Lock
 }
 
 // keysLabel counts a vault's keys and, when the agent says, how many it is

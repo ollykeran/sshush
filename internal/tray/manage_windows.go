@@ -218,8 +218,6 @@ type mainWindow struct {
 	// restartPending is set when settings the agent reads at start were
 	// saved while it ran, until it next starts.
 	restartPending bool
-	// lastAgentGlyph keeps the start/stop button's icon while it is disabled.
-	lastAgentGlyph rune
 	ui             *uiCache
 	// frame is how much bigger the window is than its client area.
 	frame [2]int32
@@ -473,11 +471,9 @@ func (w *mainWindow) command(id uint16) bool {
 	case idMainAgentToggle:
 		w.startOrStop()
 	case idMainLock:
-		if vaultPrimary(w.vaultActionsNow()).Kind == PrimaryCreate {
-			w.createVault()
-		} else {
-			w.lockOrUnlock()
-		}
+		w.lockOrUnlock()
+	case idMainCreateVault:
+		w.createVault()
 	case idMainAdd:
 		w.add()
 	case idMainCreateKey:
@@ -810,15 +806,21 @@ func (w *mainWindow) updateButtons() {
 	}
 	enable(idMainLoad, a.Load || a.Unload)
 	w.setButtonIcon(idMainLoad, loadGlyph(a), a.Load || a.Unload)
-	if a.Start || a.Stop {
-		setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(a))
-	}
+	// Named by the agent's state, not by what is enabled, so a stopped agent
+	// that cannot start yet (a vault agent with no vault) reads Start, greyed.
+	toggle := MainActions{Start: !w.state.Reachable, Stop: w.state.Reachable}
+	setText(control(w.hwnd, idMainAgentToggle), agentToggleLabel(toggle))
 	enable(idMainAgentToggle, a.Start || a.Stop)
-	if a.Start || a.Stop {
-		w.lastAgentGlyph = agentGlyph(a)
-	}
-	w.setButtonIcon(idMainAgentToggle, w.lastAgentGlyph, a.Start || a.Stop)
+	w.setButtonIcon(idMainAgentToggle, agentGlyph(toggle), a.Start || a.Stop)
 	w.show(idMainAgentToggle, w.state.Managed)
+	// Locking, in the header with the agent's buttons, since it is about
+	// what the agent holds, whatever page is shown. Its name goes by the
+	// state, not by what is enabled, so it keeps it while the window is busy.
+	lock := headerLock(w.state)
+	setText(control(w.hwnd, idMainLock), lock.label())
+	enable(idMainLock, lock.Enabled && !w.busy)
+	w.setButtonIcon(idMainLock, lock.glyph(), lock.Enabled && !w.busy)
+	w.show(idMainLock, lock.Shown)
 	// Restarting is how saved settings reach the agent: always there for an
 	// agent sshush runs, enabled while it runs.
 	w.show(idMainRestart, w.state.Managed)
@@ -865,15 +867,9 @@ func (w *mainWindow) updateButtons() {
 	for id, text := range w.vault.Captions {
 		setText(control(w.hwnd, int(id)), text)
 	}
-	primary := vaultPrimary(va)
-	if w.busy {
-		// Keep the label it had, greyed.
-		primary = vaultPrimary(vaultActions(w.state))
-		primary.Enabled = false
-	}
-	setText(control(w.hwnd, idMainLock), primary.label())
-	enable(idMainLock, primary.Enabled)
-	w.setButtonIcon(idMainLock, primary.glyph(), primary.Enabled)
+	// Creating the vault is for until there is one; after that it never applies.
+	enable(idMainCreateVault, va.CreateVault)
+	onVault(idMainCreateVault, vaultActions(w.state).CreateVault)
 	enable(idVaultOpenFolder, va.OpenFolder)
 	enable(idVaultCopyPath, va.CopyPath)
 	enable(idVaultPasswd, va.ChangePassphrase)
@@ -987,15 +983,16 @@ func (w *mainWindow) naturalWidths() map[uint16]int {
 	pad, iconW, minW := scale(buttonPad, w.ui.dpi), scale(glyphPixels+glyphGap, w.ui.dpi), scale(buttonMinWidth, w.ui.dpi)
 	out := map[uint16]int{}
 	for _, id := range []uint16{idMainLock, idMainAgentToggle, idMainAdd, idMainCreateKey, idMainRefresh,
-		idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
+		idMainCreateVault, idMainCopyFp, idMainCopyPub, idMainLoad, idMainAutoload, idMainRename, idMainRemove, idMainSelftest,
 		idMainTabKeys, idMainTabVault, idMainTabSettings, idVaultOpenFolder, idVaultCopyPath, idVaultBackup, idVaultImport,
 		idMainRestart, idVaultPasswd, idVaultRecovery, idSetSocketDefault, idSetVaultBrowse, idSetKeysAdd, idSetKeysRemove,
 		idSetDirsAdd, idSetDirsRemove, idSetSave, idSetDiscard} {
 		content := textWidth(w.hwnd, windowText(control(w.hwnd, int(id))))
 		if id == idMainLock {
-			// The primary button's label changes; it is as wide as its longest.
-			for _, k := range []PrimaryKind{PrimaryCreate, PrimaryUnlock, PrimaryLock} {
-				content = max(content, textWidth(w.hwnd, strings.ReplaceAll(VaultPrimary{Kind: k}.label(), "&", "")))
+			// Its label changes; it is as wide as its longer, so the header
+			// does not shift.
+			for _, locked := range []bool{false, true} {
+				content = max(content, textWidth(w.hwnd, strings.ReplaceAll(HeaderLock{Locked: locked}.label(), "&", "")))
 			}
 		}
 		if hasGlyph(id) {
