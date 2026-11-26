@@ -113,7 +113,7 @@ Some limits:
 
 Git for Windows comes with its own `ssh`, built for MSYS2. Git Bash runs it, and so does `git` itself unless told otherwise. That includes `git` run from VS Code, JetBrains IDEs and other tools. Cygwin's and MSYS2's `ssh` work the same way. None of them can use a named pipe or Pageant. They expect `SSH_AUTH_SOCK` to name a Unix socket, which Cygwin imitates with a small file pointing at a local network port.
 
-The agent writes such a file and answers on it, with the same keys. By default it is `cygwin-agent.sock` beside `config.toml` (`~\.config\sshush\cygwin-agent.sock`). `[agent].cygwin_socket` puts it somewhere else, and `cygwin_socket = ""` turns it off. The file only exists while the agent runs.
+The agent writes such a file and answers on it, with the same keys. By default it is `cygwin-agent.sock` beside `config.toml` (`~\.config\sshush\cygwin-agent.sock`). `[agent].cygwin_socket` puts it somewhere else, and `cygwin_socket = ""` turns it off. The tray's Settings page has the switch as **Also answer Git Bash (Cygwin socket)**, with the `SSH_AUTH_SOCK` line under it; a path of your own is set in the file. Either takes effect when the agent restarts. The file only exists while the agent runs.
 
 In Git Bash, `sshush start --shell bash` prints the line that points `SSH_AUTH_SOCK` at that file. `--shell bash` matters when the config says `shell = "powershell"`, as it does if sshush first ran in PowerShell. To set it in every Git Bash window, add this to `~/.bashrc`:
 
@@ -188,7 +188,7 @@ Auto-lock is the tray's: it locks the vault only while the tray is running, and 
 
 **Switching modes.** **Use a vault** sets `[agent].type = "vault"` in `config.toml`, and sets `[vault].vault_path` to the default path beside it if none is configured. **Use key files instead** sets it back to `"keys"`. Either way the agent restarts. The tray edits only those lines, so the file's comments and other settings stay as they were.
 
-**Settings** edits what the agent serves and where: the agent type, its pipe, whether it also answers as Pageant, the vault file, the key files and the folders searched for keys. Changes to what the agent does take effect when you press **Restart agent**.
+**Settings** edits what the agent serves and where: the agent type, its pipe, whether it also answers as Pageant and on a Cygwin socket for Git Bash, the vault file, the key files and the folders searched for keys. Changes to what the agent does take effect when you press **Restart agent**.
 
 The footer runs `sshush selftest`.
 

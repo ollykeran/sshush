@@ -24,6 +24,13 @@ type CoreSettings struct {
 	// PageantEmulation is [agent].pageant_emulation, true when the file leaves
 	// it out.
 	PageantEmulation bool
+	// CygwinSocket is whether [agent].cygwin_socket is on: true unless the
+	// file says cygwin_socket = "".
+	CygwinSocket bool
+	// CygwinSocketPath is the path [agent].cygwin_socket names, as the file
+	// writes it, or "" for the default. Only read: a path is set in the
+	// file, and WriteCoreSettingsToPath leaves it as it is.
+	CygwinSocketPath string
 }
 
 // ReadCoreSettings reads the CoreSettings in the config file at path, as the
@@ -54,13 +61,23 @@ func coreOf(doc configDocument) CoreSettings {
 		VaultPath:  doc.Vault.VaultPath,
 
 		PageantEmulation: doc.Agent.pageantEmulation(),
+		CygwinSocket:     doc.Agent.CygwinSocket == nil || strings.TrimSpace(*doc.Agent.CygwinSocket) != "",
+		CygwinSocketPath: cygwinSocketPath(doc.Agent.CygwinSocket),
 	}
 }
 
-// Equal reports whether s and o say the same thing.
+func cygwinSocketPath(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v)
+}
+
+// Equal reports whether s and o say the same thing. CygwinSocketPath is
+// not compared: it is never written.
 func (s CoreSettings) Equal(o CoreSettings) bool {
 	return s.AgentType == o.AgentType && s.SocketPath == o.SocketPath && s.VaultPath == o.VaultPath &&
-		s.PageantEmulation == o.PageantEmulation &&
+		s.PageantEmulation == o.PageantEmulation && s.CygwinSocket == o.CygwinSocket &&
 		slices.Equal(s.KeyPaths, o.KeyPaths) && slices.Equal(s.SearchDirs, o.SearchDirs)
 }
 
@@ -92,6 +109,15 @@ func WriteCoreSettingsToPath(path string, s CoreSettings) error {
 		}
 		if s.PageantEmulation != old.PageantEmulation {
 			text = setKey(text, "agent", "pageant_emulation", fmt.Sprintf("pageant_emulation = %t", s.PageantEmulation))
+		}
+		if s.CygwinSocket != old.CygwinSocket {
+			// Off is written as "". On again takes that line out, which means
+			// the default path: a path of one's own is only ever on.
+			line := `cygwin_socket = ""`
+			if s.CygwinSocket {
+				line = ""
+			}
+			text = setKey(text, "agent", "cygwin_socket", line)
 		}
 		if s.VaultPath != old.VaultPath {
 			if old.VaultPath == "" && s.VaultPath != "" && !hasKey(text, "vault", "vault_path") {

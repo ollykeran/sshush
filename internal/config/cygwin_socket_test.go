@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ollykeran/sshush/internal/platform"
@@ -59,5 +60,49 @@ func TestMarshalConfig_cygwinSocket(t *testing.T) {
 		if back.CygwinSocket != path {
 			t.Errorf("wrote %q, read back %q:\n%s", path, back.CygwinSocket, data)
 		}
+	}
+}
+
+// The tray's switch: off writes cygwin_socket = "", on takes it out again,
+// and a path of one's own is left alone while it stays on.
+func TestWriteCoreSettings_cygwinSocket(t *testing.T) {
+	path := writeConfig(t, coreSample)
+	s, err := ReadCoreSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CygwinSocket || s.CygwinSocketPath != "" {
+		t.Fatalf("a file without cygwin_socket: %+v", s)
+	}
+	s.CygwinSocket = false
+	if err := WriteCoreSettingsToPath(path, s); err != nil {
+		t.Fatal(err)
+	}
+	text, cfg := readConfig(t, path)
+	if !strings.Contains(text, `cygwin_socket = ""`) || cfg.CygwinSocket != "" {
+		t.Fatalf("off:\n%s", text)
+	}
+	s.CygwinSocket = true
+	if err := WriteCoreSettingsToPath(path, s); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := readConfig(t, path); strings.Contains(text, "cygwin_socket") {
+		t.Fatalf("on again should leave the default:\n%s", text)
+	}
+
+	own := writeConfig(t, strings.Replace(coreSample, `type = "keys"`, "type = \"keys\"\ncygwin_socket = '~/my.sock'", 1))
+	s, err = ReadCoreSettings(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CygwinSocket || s.CygwinSocketPath != "~/my.sock" {
+		t.Fatalf("own path: %+v", s)
+	}
+	s.PageantEmulation = false // another change, so something is written
+	if err := WriteCoreSettingsToPath(own, s); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := readConfig(t, own); !strings.Contains(text, "cygwin_socket = '~/my.sock'") {
+		t.Fatalf("own path lost:\n%s", text)
 	}
 }

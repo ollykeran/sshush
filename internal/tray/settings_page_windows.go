@@ -90,6 +90,7 @@ func (w *mainWindow) fillSettings() {
 	}
 	setText(control(w.hwnd, idSetSocket), f.edit.SocketPath)
 	procSendMessageW.Call(control(w.hwnd, idSetPageant), bmSetCheck, boolArg(f.edit.PageantEmulation), 0)
+	procSendMessageW.Call(control(w.hwnd, idSetCygwin), bmSetCheck, boolArg(f.edit.CygwinSocket), 0)
 	setText(control(w.hwnd, idSetVaultPath), f.edit.VaultPath)
 	fillList(control(w.hwnd, idSetKeysList), f.edit.KeyPaths)
 	fillList(control(w.hwnd, idSetDirsList), f.edit.SearchDirs)
@@ -109,14 +110,14 @@ func fillList(list uintptr, items []string) {
 func (w *mainWindow) updateSettings() {
 	f := &w.settings
 	f.problems = settingsProblems(f.edit)
-	for _, id := range []uint16{idSetTypeCaption, idSetSocketCaption, idSetPageantCaption, idSetVaultCaption, idSetKeysCaption, idSetDirsCaption} {
-		text, _ := settingsCaption(id, f.problems)
+	for _, id := range []uint16{idSetTypeCaption, idSetSocketCaption, idSetPageantCaption, idSetCygwinCaption, idSetVaultCaption, idSetKeysCaption, idSetDirsCaption} {
+		text := settingsCaptionFor(id, f.edit, f.problems)
 		h := control(w.hwnd, int(id))
 		setText(h, text)
 		procRedrawWindow.Call(h, 0, 0, rdwInvalidate|rdwErase) // its colour may change
 	}
 	on := f.loaded && !w.busy
-	for _, id := range []uint16{idSetType, idSetSocket, idSetSocketDefault, idSetPageant, idSetVaultPath, idSetVaultBrowse, idSetKeysList, idSetKeysAdd, idSetDirsList, idSetDirsAdd} {
+	for _, id := range []uint16{idSetType, idSetSocket, idSetSocketDefault, idSetPageant, idSetCygwin, idSetVaultPath, idSetVaultBrowse, idSetKeysList, idSetKeysAdd, idSetDirsList, idSetDirsAdd} {
 		procEnableWindow.Call(control(w.hwnd, int(id)), boolArg(on))
 	}
 	procEnableWindow.Call(control(w.hwnd, idSetSocketDefault), boolArg(on && f.edit.SocketPath != platform.DefaultSocketPath()))
@@ -172,6 +173,9 @@ func (w *mainWindow) settingsCommand(id, code uint16) bool {
 	case id == idSetPageant:
 		r, _, _ := procSendMessageW.Call(control(w.hwnd, idSetPageant), bmGetCheck, 0, 0)
 		f.edit.PageantEmulation = r == 1
+	case id == idSetCygwin:
+		r, _, _ := procSendMessageW.Call(control(w.hwnd, idSetCygwin), bmGetCheck, 0, 0)
+		f.edit.CygwinSocket = r == 1
 	case id == idSetVaultBrowse:
 		w.browseVaultPath()
 	case id == idSetKeysAdd:
