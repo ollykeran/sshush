@@ -243,6 +243,9 @@ type opResult struct {
 	// report, when set, is shown in a message box with reportFlags.
 	report      string
 	reportFlags uint32
+	// onYes, when set, makes the report a question: the box gets Yes and No
+	// buttons, and Yes calls onYes on the window's thread.
+	onYes func()
 	// background marks a refresh nobody asked for, after the agent changed:
 	// it leaves the last action's message unless the agent's state moved on.
 	background bool
@@ -700,7 +703,12 @@ func (w *mainWindow) finish() {
 	}
 	w.setStatus(text, isErr)
 	w.updateButtons()
-	if res.report != "" {
+	switch {
+	case res.report != "" && res.onYes != nil:
+		if messageBoxOwned(w.hwnd, res.report, res.reportFlags|mbYesNo) == idYes {
+			res.onYes()
+		}
+	case res.report != "":
 		messageBoxOwned(w.hwnd, res.report, res.reportFlags)
 	}
 }
@@ -1509,6 +1517,23 @@ func (w *mainWindow) selftest() {
 		// is the value new terminals, and so ssh, will get.
 		persisted, _ := platform.PersistedEnv("SSH_AUTH_SOCK")
 		report := selftest.Run(socketPath, persisted, persisted)
+		res := opResult{report: selftestText(report), reportFlags: selftestIcon(report.Worst())}
+		if last := report.Checks[len(report.Checks)-1]; last.Name == "sign" && last.Status == selftest.OK {
+			res.report += "\n\n" + extendedQuestion
+			res.onYes = func() { w.selftestExtended(socketPath, report) }
+		}
+		return res
+	})
+}
+
+// extendedQuestion offers the extended selftest under a passing report.
+const extendedQuestion = "Run the extended test? It logs in over SSH to a temporary sshush server on this PC, using the agent's first key. Nothing leaves this PC."
+
+// selftestExtended adds the SSH login check to report, which passed as far as
+// signing, and shows the whole report again.
+func (w *mainWindow) selftestExtended(socketPath string, report selftest.Report) {
+	w.run("Running the extended selftest…", func() opResult {
+		report.Checks = append(report.Checks, selftest.Extended(socketPath))
 		return opResult{report: selftestText(report), reportFlags: selftestIcon(report.Worst())}
 	})
 }

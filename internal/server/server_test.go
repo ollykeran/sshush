@@ -172,3 +172,31 @@ func TestServer_HostKeyFromFile(t *testing.T) {
 	}
 	conn.Close()
 }
+
+func TestServer_AddrReportsBoundPort(t *testing.T) {
+	ready := make(chan struct{})
+	srv := &Server{
+		ListenAddr: "127.0.0.1:0",
+		AuthKeys:   &AgentAuth{Agent: sshagent.NewKeyring()},
+		Ready:      func() { close(ready) },
+	}
+	if srv.Addr() != nil {
+		t.Fatal("Addr should be nil before the server listens")
+	}
+	go func() { _ = srv.ListenAndServe() }()
+	t.Cleanup(func() { _ = srv.Close() })
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never became ready")
+	}
+	addr, ok := srv.Addr().(*net.TCPAddr)
+	if !ok || addr.Port == 0 {
+		t.Fatalf("Addr = %v, want a TCP address with the port that was bound", srv.Addr())
+	}
+	conn, err := net.Dial("tcp", addr.String())
+	if err != nil {
+		t.Fatalf("dial Addr: %v", err)
+	}
+	conn.Close()
+}

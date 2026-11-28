@@ -159,6 +159,17 @@ func (s *Server) Close() error {
 	return err
 }
 
+// Addr is the address the server is accepting on, which tells a caller that
+// listened on port 0 which port it got. It is nil until the server is listening.
+func (s *Server) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		return nil
+	}
+	return s.ln.Addr()
+}
+
 // waitForSessions gives the sessions Close hung up on up to limit to finish.
 // ListenAndServe returning is what lets the daemon exit, and a session still
 // tearing down then would leave its shell without the SIGKILL that follows an

@@ -23,6 +23,8 @@ sshush makes no network requests unless you run one of these commands:
 | `sshush version --check` | `api.github.com` | to see whether a newer release exists |
 | `sshush selftest` | `github.com`, or `sum.golang.org` for a build from `go install` | to check the program you are running matches the published release |
 
+`sshush selftest --extended`, and the tray's extended test, also make an SSH connection, but only to a temporary server on 127.0.0.1 that sshush starts and stops itself; nothing leaves your computer.
+
 These requests send nothing about you or your keys. Like any web request they reveal your IP address to GitHub (Microsoft) or Google, whose own privacy policies apply.
 
 **`sshush server`** is an optional SSH server that runs only if you start it. It listens on the address you configure and logs connections to a file on your computer. That log stays on your machine.

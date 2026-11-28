@@ -190,7 +190,7 @@ Auto-lock is the tray's: it locks the vault only while the tray is running, and 
 
 **Settings** edits what the agent serves and where: the agent type, its pipe, whether it also answers as Pageant and on a Cygwin socket for Git Bash, the vault file, the key files and the folders searched for keys. Changes to what the agent does take effect when you press **Restart agent**.
 
-The footer runs `sshush selftest`.
+The footer runs `sshush selftest`. When it passes, the report offers the extended test (`sshush selftest --extended`): Yes starts a temporary sshush SSH server on 127.0.0.1, logs in to it with the agent's first key, and shuts it down again.
 
 The window follows Windows' light or dark mode. "Start at sign-in" starts the tray, without opening the window, when you sign in. Starting the tray again replaces the one already running rather than adding a second icon.
 

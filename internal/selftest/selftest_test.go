@@ -2,22 +2,23 @@ package selftest
 
 import (
 	"crypto/ed25519"
-	"net"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/ollykeran/sshush/internal/transport"
 	sshagent "golang.org/x/crypto/ssh/agent"
 )
 
-// serve runs kr on a Unix socket and returns its path.
+// serve runs kr on a Unix socket, or a named pipe on Windows, and returns its path.
 func serve(t *testing.T, kr sshagent.Agent) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("serves on a Unix socket")
-	}
 	path := filepath.Join(t.TempDir(), "agent.sock")
-	l, err := net.Listen("unix", path)
+	if runtime.GOOS == "windows" {
+		path = `\\.\pipe\sshush-selftest-` + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
+	}
+	l, err := transport.Listen(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,5 +101,34 @@ func TestAuthSockEnvLine(t *testing.T) {
 				t.Fatalf("got %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestExtendedLogsIn(t *testing.T) {
+	kr := sshagent.NewKeyring()
+	_, priv, _ := ed25519.GenerateKey(nil)
+	if err := kr.Add(sshagent.AddedKey{PrivateKey: priv, Comment: "extended-key"}); err != nil {
+		t.Fatal(err)
+	}
+	c := Extended(serve(t, kr))
+	if c.Name != "ssh" || c.Status != OK {
+		t.Fatalf("want an OK ssh check, got %+v", c)
+	}
+	if !strings.Contains(c.Detail, "extended-key") || !strings.Contains(c.Detail, "127.0.0.1:") {
+		t.Errorf("detail should name the address and key: %q", c.Detail)
+	}
+}
+
+func TestExtendedNoKeysFails(t *testing.T) {
+	c := Extended(serve(t, sshagent.NewKeyring()))
+	if c.Status != Fail || c.Hint == "" {
+		t.Errorf("want a failed check with a hint, got %+v", c)
+	}
+}
+
+func TestExtendedNoAgentFails(t *testing.T) {
+	c := Extended(filepath.Join(t.TempDir(), "nothing.sock"))
+	if c.Status != Fail {
+		t.Errorf("want a failed check, got %+v", c)
 	}
 }
